@@ -26,14 +26,7 @@ func stub(name string) http.HandlerFunc {
 }
 
 // ── Send workflow ─────────────────────────────────────────────────────────────
-
-func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("SendPage")
-}
-
-func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("SendCreate")
-}
+// Implemented in send.go
 
 // ── Download workflow ─────────────────────────────────────────────────────────
 // Implemented in download.go
