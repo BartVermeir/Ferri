@@ -18,6 +18,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -61,10 +62,12 @@ func DownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		// Password check
+		// Password check — render password form directly rather than redirecting.
+		// Redirecting to ?auth=1 and then checking the query param creates a loop:
+		// DownloadPage → redirect → DownloadPage → redirect → ...
 		if transfer.PasswordHash.Valid {
 			if !downloadPasswordValid(r, transfer.PasswordHash.String) {
-				http.Redirect(w, r, "/dl/"+tok+"?auth=1", http.StatusSeeOther)
+				renderPasswordPage(w, tok, settings, "")
 				return
 			}
 		}
@@ -149,10 +152,10 @@ func DownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		// Password check
+		// Password check — redirect to download page which will render the password form.
 		if transfer.PasswordHash.Valid {
 			if !downloadPasswordValid(r, transfer.PasswordHash.String) {
-				http.Redirect(w, r, "/dl/"+tok+"?auth=1", http.StatusSeeOther)
+				http.Redirect(w, r, "/dl/"+tok, http.StatusSeeOther)
 				return
 			}
 		}
@@ -188,7 +191,12 @@ func DownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// disconnects mid-download.
 		ip := r.Header.Get("X-Real-IP")
 		if ip == "" {
-			ip = r.RemoteAddr
+			// r.RemoteAddr is "host:port" — strip the port before storing.
+			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				ip = host
+			} else {
+				ip = r.RemoteAddr
+			}
 		}
 		ua := r.Header.Get("User-Agent")
 
@@ -341,8 +349,9 @@ func renderPasswordPage(w http.ResponseWriter, tok string, settings *store.Setti
 }
 
 func renderNotFound(w http.ResponseWriter, settings *store.Settings) {
-	w.WriteHeader(http.StatusNotFound)
+	// Headers MUST be set before WriteHeader — after WriteHeader they are ignored.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html><head><title>Not found</title></head>
 <body><h1>Transfer not found or expired.</h1></body></html>`)
