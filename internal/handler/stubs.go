@@ -32,26 +32,7 @@ func stub(name string) http.HandlerFunc {
 // Implemented in download.go
 
 // ── Upload request workflow ───────────────────────────────────────────────────
-
-func RequestPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("RequestPage")
-}
-
-func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("RequestCreate")
-}
-
-func UploadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("UploadPage")
-}
-
-func UploadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("UploadPassword")
-}
-
-func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("UploadComplete")
-}
+// Implemented in upload.go (external side) and request.go (internal side)
 
 // ── Admin UI ──────────────────────────────────────────────────────────────────
 

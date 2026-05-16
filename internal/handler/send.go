@@ -51,7 +51,11 @@ func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 // Validates input, creates the transfer in the DB, returns JSON {transfer_id}.
 func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseMultipartForm(1 << 20); err != nil { // 1 MB limit for form data
+		// ParseForm handles both application/x-www-form-urlencoded (standard form submit)
+		// and multipart/form-data. The send form does NOT upload actual file data —
+		// files go via TUS — so the browser submits as URL-encoded by default.
+		// ParseMultipartForm would reject URL-encoded forms with an error.
+		if err := r.ParseForm(); err != nil {
 			jsonError(w, "Invalid form data", http.StatusBadRequest)
 			return
 		}
@@ -134,23 +138,11 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 				return
 			}
 
-			// storage_path is set here as a placeholder; the TUS handler writes
-			// to transfers/<transfer_id>/<file_id> — the exact path is determined
-			// by the file ID which is generated in store.TransferStore.Create.
-			// We pass an empty storage path now; the TUS PreUploadCreateCallback
-			// sets the real path when it creates the file row.
-			// Wait — actually TransferStore.Create creates the file rows with the
-			// storage path. But we don't know the transfer_id or file_id yet.
-			// Solution: pass a placeholder storage path here; TUS CreateFileRow
-			// sets the real path and the file row created here is replaced.
-			// Actually: we should NOT pre-create file rows here. The TUS handler
-			// creates file rows in PreUploadCreateCallback with the correct path.
-			// POST /send only creates the transfer row and recipient rows.
-			// File rows are created by the TUS handler when uploads start.
-			// So: we validate file metadata here but don't create file rows.
+			// Collect file metadata for validation and logging.
+			// File rows are NOT created here — the TUS PreUploadCreateCallback
+			// creates them with the correct storage path when each upload starts.
 			files = append(files, store.CreateFileInput{
 				OriginalName: name,
-				StoragePath:  "", // set by TUS handler
 				SizeBytes:    size,
 			})
 		}
