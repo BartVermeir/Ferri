@@ -451,6 +451,66 @@ func (s *TransferStore) ValidateForTUS(transferID string) (bool, error) {
 	return count > 0, err
 }
 
+
+// CreateFileRow inserts a new file row for a transfer, called from the TUS
+// PreUploadCreateCallback before any bytes are written.
+func (s *TransferStore) CreateFileRow(fileID, transferID, originalName, storagePath string, sizeBytes int64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO files (id, transfer_id, original_name, storage_path, size_bytes, status)
+		VALUES (?, ?, ?, ?, ?, 'uploading')`,
+		fileID, transferID, originalName, storagePath, sizeBytes,
+	)
+	return err
+}
+
+// SetTUSUploadID records the tusd-generated upload ID on the file row.
+// Called from the handleCreated hook after tusd creates the upload resource.
+func (s *TransferStore) SetTUSUploadID(fileID, tusUploadID string) error {
+	_, err := s.db.Exec(
+		`UPDATE files SET tus_upload_id = ? WHERE id = ?`, tusUploadID, fileID,
+	)
+	return err
+}
+
+// GetFileIDByTUSID looks up the Ferri file ID by the tusd upload ID.
+// Used in the post-PATCH hook to update tus_last_activity_at.
+// Returns empty string if not found.
+func (s *TransferStore) GetFileIDByTUSID(tusUploadID string) (string, error) {
+	var fileID string
+	err := s.db.QueryRow(
+		`SELECT id FROM files WHERE tus_upload_id = ?`, tusUploadID,
+	).Scan(&fileID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return fileID, err
+}
+
+// GetByID returns a transfer by its ID.
+// Used by the TUS completion handler to get sender info for mail enqueue.
+func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
+	var t Transfer
+	var expiresAt, createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, title, message, sender_name, sender_email,
+		       password_hash, status, expires_at, activated_at, expired_at, created_at
+		FROM transfers WHERE id = ?`, transferID,
+	).Scan(
+		&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
+		&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
+		&t.ExpiredAt, &createdAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t.ExpiresAt = time.Unix(expiresAt, 0)
+	t.CreatedAt = time.Unix(createdAt, 0)
+	return &t, nil
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func (s *TransferStore) filesByTransferID(transferID string) ([]File, error) {
