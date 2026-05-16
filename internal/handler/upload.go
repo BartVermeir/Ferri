@@ -127,6 +127,20 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			}
 		}
 
+		// Verify at least one file was uploaded before marking complete.
+		// Without this, a user who bypasses the JS can mark a request complete
+		// with zero files, causing a misleading "files received" notification.
+		files, err := stores.Requests.GetFiles(req.ID)
+		if err != nil {
+			slog.Error("upload complete: get files", "request_id", req.ID, "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if len(files) == 0 {
+			renderUploadPage(w, tok, req, settings)
+			return
+		}
+
 		if err := stores.Requests.Complete(req.ID); err != nil {
 			slog.Error("upload complete: mark completed", "request_id", req.ID, "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)

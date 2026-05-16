@@ -33,7 +33,7 @@ import (
 func RequestPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
-		renderRequestPage(w, cfg, settings, "", "")
+		renderRequestPage(w, cfg, settings, "")
 	}
 }
 
@@ -46,7 +46,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		settings := appMiddleware.GetSettings(r)
 
 		if err := r.ParseForm(); err != nil {
-			renderRequestPage(w, cfg, settings, "", "Invalid form data.")
+			renderRequestPage(w, cfg, settings, "Invalid form data.")
 			return
 		}
 
@@ -60,17 +60,17 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		expiryStr := r.FormValue("expiry_hours")
 
 		if requesterName == "" {
-			renderRequestPage(w, cfg, settings, "", "Your name is required.")
+			renderRequestPage(w, cfg, settings, "Your name is required.")
 			return
 		}
 		if !isValidEmail(requesterEmail) {
-			renderRequestPage(w, cfg, settings, "", "Valid email address is required.")
+			renderRequestPage(w, cfg, settings, "Valid email address is required.")
 			return
 		}
 
 		expiryHours, err := strconv.Atoi(expiryStr)
 		if err != nil || !isValidExpiryOption(expiryHours, cfg.ExpiryOptions) {
-			renderRequestPage(w, cfg, settings, "", "Invalid expiry option.")
+			renderRequestPage(w, cfg, settings, "Invalid expiry option.")
 			return
 		}
 
@@ -81,7 +81,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 			if err != nil {
 				slog.Error("request: bcrypt hash", "error", err)
-				renderRequestPage(w, cfg, settings, "", "Internal server error.")
+				renderRequestPage(w, cfg, settings, "Internal server error.")
 				return
 			}
 			passwordHash = string(hash)
@@ -103,7 +103,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		_, uploadToken, err := stores.Requests.Create(input)
 		if err != nil {
 			slog.Error("request: create", "error", err)
-			renderRequestPage(w, cfg, settings, "", "Internal server error.")
+			renderRequestPage(w, cfg, settings, "Internal server error.")
 			return
 		}
 
@@ -122,7 +122,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 // ── Template rendering placeholders ──────────────────────────────────────────
 
-func renderRequestPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, successURL, errMsg string) {
+func renderRequestPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	var opts strings.Builder
