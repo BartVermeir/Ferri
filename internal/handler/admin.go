@@ -23,6 +23,7 @@ package handler
 import (
 	"crypto/subtle"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -224,6 +225,17 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 		}
 
 		// Allowlist of settable keys — prevents arbitrary key injection.
+		// Checkbox fields (notify_on_download, expiry_summary) must be handled
+		// explicitly: an unchecked checkbox sends NO form value, so r.FormValue
+		// returns "". The settings cache evaluates '' != "false" as true, meaning
+		// unchecked boxes would be permanently stuck on. We normalise to "true"/"false".
+		checkboxVal := func(key string) string {
+			if r.FormValue(key) == "true" {
+				return "true"
+			}
+			return "false"
+		}
+
 		allowed := map[string]string{
 			"branding.company_name":   r.FormValue("branding.company_name"),
 			"branding.logo_url":       r.FormValue("branding.logo_url"),
@@ -235,15 +247,18 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 			"ui.download_page_title":  r.FormValue("ui.download_page_title"),
 			"mail.from_name":          r.FormValue("mail.from_name"),
 			"mail.from_address":       r.FormValue("mail.from_address"),
-			"mail.notify_on_download": r.FormValue("mail.notify_on_download"),
-			"mail.expiry_summary":     r.FormValue("mail.expiry_summary"),
+			"mail.notify_on_download": checkboxVal("mail.notify_on_download"),
+			"mail.expiry_summary":     checkboxVal("mail.expiry_summary"),
 		}
 
+		// Settings are saved individually. If one fails, earlier saves are not
+		// rolled back — a partial update is possible. For independent key-value
+		// branding/UI settings this is acceptable; a retry saves all 12 again.
 		var saveErr string
 		for key, value := range allowed {
 			if err := stores.Settings.Save(key, strings.TrimSpace(value)); err != nil {
 				slog.Error("admin settings: save", "key", key, "error", err)
-				saveErr = fmt.Sprintf("Failed to save setting: %s", key)
+				saveErr = fmt.Sprintf("Failed to save setting '%s'. Other settings may have been saved.", key)
 				break
 			}
 		}
@@ -425,16 +440,16 @@ func renderAdminSettings(w http.ResponseWriter, settings *store.Settings, errMsg
 </body>
 </html>`,
 		errHTML,
-		settings.CompanyName,
-		settings.LogoURL,
-		settings.PrimaryColor,
-		settings.AccentColor,
-		settings.BgColor,
-		settings.WelcomeMessage,
-		settings.SendPageTitle,
-		settings.DownloadPageTitle,
-		settings.MailFromName,
-		settings.MailFromAddress,
+		html.EscapeString(settings.CompanyName),
+		html.EscapeString(settings.LogoURL),
+		html.EscapeString(settings.PrimaryColor),
+		html.EscapeString(settings.AccentColor),
+		html.EscapeString(settings.BgColor),
+		html.EscapeString(settings.WelcomeMessage),
+		html.EscapeString(settings.SendPageTitle),
+		html.EscapeString(settings.DownloadPageTitle),
+		html.EscapeString(settings.MailFromName),
+		html.EscapeString(settings.MailFromAddress),
 		checkedIf(settings.NotifyOnDownload),
 		checkedIf(settings.ExpirySummary),
 	)
