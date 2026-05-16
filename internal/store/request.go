@@ -247,6 +247,58 @@ func (s *RequestStore) TryComplete(requestID string) (bool, error) {
 	return n == 1, nil
 }
 
+
+// CreateFileRow inserts a new upload_request_files row from the TUS callback.
+func (s *RequestStore) CreateFileRow(fileID, requestID, originalName, storagePath string, sizeBytes int64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO upload_request_files
+		  (id, upload_request_id, original_name, storage_path, size_bytes, status)
+		VALUES (?, ?, ?, ?, ?, 'uploading')`,
+		fileID, requestID, originalName, storagePath, sizeBytes,
+	)
+	return err
+}
+
+// SetTUSUploadID records the tusd-generated upload ID on the request file row.
+func (s *RequestStore) SetTUSUploadID(fileID, tusUploadID string) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_request_files SET tus_upload_id = ? WHERE id = ?`, tusUploadID, fileID,
+	)
+	return err
+}
+
+// GetFileIDByTUSID looks up the Ferri file ID by the tusd upload ID for request files.
+// Returns empty string if not found.
+func (s *RequestStore) GetFileIDByTUSID(tusUploadID string) (string, error) {
+	var fileID string
+	err := s.db.QueryRow(
+		`SELECT id FROM upload_request_files WHERE tus_upload_id = ?`, tusUploadID,
+	).Scan(&fileID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return fileID, err
+}
+
+// SetFileComplete marks an upload_request_files row as complete with final size.
+func (s *RequestStore) SetFileComplete(fileID string, sizeBytes int64) error {
+	_, err := s.db.Exec(`
+		UPDATE upload_request_files
+		SET status = 'complete', size_bytes = ?, tus_upload_id = NULL
+		WHERE id = ?`,
+		sizeBytes, fileID,
+	)
+	return err
+}
+
+// UpdateTUSActivity updates tus_last_activity_at for a request file row.
+func (s *RequestStore) UpdateTUSActivity(fileID string) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_request_files SET tus_last_activity_at = unixepoch() WHERE id = ?`, fileID,
+	)
+	return err
+}
+
 // scanRequests scans rows from upload_requests.
 // expires_at and created_at are INTEGER (Unix epoch) — scan into int64, convert to time.Time.
 func scanRequests(rows *sql.Rows) ([]UploadRequest, error) {
