@@ -1,0 +1,41 @@
+services:
+  app:
+    # Use an explicit version tag in production — never 'latest'.
+    # See update-guide.md for the update procedure.
+    image: ferri:latest
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true                      # Container filesystem is read-only (hardened)
+    stop_grace_period: 300s             # 5 minutes — allows large downloads to complete
+    tmpfs:
+      - /tmp                             # Litestream staging directory
+    ports:
+      - "127.0.0.1:8080:8080"           # Only localhost — reverse proxy connects here
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro          # Deploy-time configuration (read-only)
+      - ./litestream.yml:/etc/litestream.yml:ro       # Litestream replication config
+      - /mnt/nfs/ferri:/data/storage                  # NFS mount for file storage
+      - app_db:/data                                   # SQLite database (named volume)
+    environment:
+      - CONFIG_PATH=/config/config.yaml
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+      # Litestream credentials (omit if not using S3 backup)
+      - LITESTREAM_ACCESS_KEY_ID=${LITESTREAM_ACCESS_KEY_ID:-}
+      - LITESTREAM_SECRET_ACCESS_KEY=${LITESTREAM_SECRET_ACCESS_KEY:-}
+    cap_drop:
+      - ALL                              # Drop all Linux capabilities
+    security_opt:
+      - no-new-privileges:true          # Cannot escalate to root
+    healthcheck:
+      test: ["CMD", "/ferri", "-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  app_db:
+    # Named volume for the SQLite database.
+    # Survives container restarts and docker compose down.
+    # Backed up continuously by Litestream.

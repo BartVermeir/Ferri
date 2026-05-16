@@ -1,0 +1,52 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  base_url: "https://send.example.com"   # Full public URL. Used in mail links. No trailing slash.
+  trusted_proxies:                        # CIDR ranges of reverse proxies (for X-Forwarded-For)
+    - "172.16.0.0/12"
+  shutdown_timeout_seconds: 300          # Must match stop_grace_period in docker-compose.yml
+
+storage:
+  path: "/data/storage"                  # Inside the container. Mount your NFS share here.
+
+db:
+  path: "/data/app.db"                   # SQLite database file inside the container.
+
+ip_allowlist:                            # Only these CIDR ranges can create transfers / requests.
+  - "10.0.0.0/8"                         # Adjust to your internal network ranges.
+  - "192.168.0.0/16"
+
+smtp:
+  host: "mail.smtp2go.com"              # SMTP relay hostname.
+  port: 587                              # 587 = STARTTLS, 465 = TLS, 25 = plain
+  username: "your_smtp2go_username"
+  password: ""                           # Set via SMTP_PASSWORD env var — never put here.
+  tls: "starttls"                        # starttls | tls | none
+  from_address: "transfers@example.com"
+  from_name: "File transfer"
+
+admin:
+  token: ""                              # Set via ADMIN_TOKEN env var. Min 32 characters.
+  session_ttl_hours: 8
+
+expiry_options:
+  - label: "1 day"
+    hours: 24
+  - label: "1 week"
+    hours: 168
+  - label: "2 weeks"
+    hours: 336
+  - label: "4 weeks"
+    hours: 672
+
+limits:
+  max_upload_bytes: 644245094400         # 600 GB per individual file
+  max_files_per_transfer: 50
+
+jobs:
+  expiry_interval_minutes: 60            # How often the expiry job runs
+  cleanup_grace_hours: 24               # Hours after expiry before files are deleted
+  mail_interval_minutes: 2              # How often the mail queue is processed
+  stall_timeout_hours: 48               # Hours of inactivity before upload is considered abandoned
+  cleanup_interval_hours: 6            # How often the cleanup and stalled-upload jobs run
+  mail_retention_days: 90              # Sent mails are pruned after this many days

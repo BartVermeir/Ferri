@@ -1,0 +1,17 @@
+dbs:
+  - path: /data/app.db
+
+    replicas:
+      # ── Option A: S3-compatible storage (recommended for production) ──────────
+      - type: s3
+        bucket: your-backup-bucket
+        path: ferri/db
+        region: eu-west-1
+        # Credentials via environment variables:
+        # LITESTREAM_ACCESS_KEY_ID
+        # LITESTREAM_SECRET_ACCESS_KEY
+
+      # ── Option B: Local file replica (for testing or secondary backup) ────────
+      # Uncomment and mount /backup as a volume pointing to a separate disk.
+      # - type: file
+      #   path: /backup/ferri-db
