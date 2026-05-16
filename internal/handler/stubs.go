@@ -36,18 +36,7 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 }
 
 // ── Download workflow ─────────────────────────────────────────────────────────
-
-func DownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("DownloadPage")
-}
-
-func DownloadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("DownloadPassword")
-}
-
-func DownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return stub("DownloadFile")
-}
+// Implemented in download.go
 
 // ── Upload request workflow ───────────────────────────────────────────────────
 
