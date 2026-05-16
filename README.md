@@ -1,6 +1,6 @@
 # Ferri
 
-Self-hosted file transfer tool for De Mensen NV / productiehuis Zaventem.  
+Self-hosted file transfer tool
 Supports resumable uploads (TUS), 500–600 GB files, NFS/ZFS storage, single administrator.
 
 ---
