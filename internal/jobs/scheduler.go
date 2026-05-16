@@ -1,13 +1,16 @@
 package jobs
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/your-org/ferri/internal/config"
+	"github.com/your-org/ferri/internal/mail"
 	"github.com/your-org/ferri/internal/store"
 )
 
@@ -73,8 +76,11 @@ func (s *Scheduler) runMailJob() {
 		return
 	}
 
+	// Load settings once per batch — provides runtime from_address and from_name.
+	settings := s.stores.Settings.Get()
+
 	for _, item := range items {
-		if err := sendMail(s.cfg, item); err != nil {
+		if err := sendMail(s.cfg, settings, item); err != nil {
 			slog.Warn("mail job: send failed",
 				"id", item.ID, "to", item.ToAddress,
 				"attempt", item.Attempts+1, "error", err)
@@ -269,21 +275,70 @@ func (s *Scheduler) cleanupStalled() {
 	}
 }
 
-// ── Mail helpers (placeholder implementations) ────────────────────────────────
+// ── Mail sending ─────────────────────────────────────────────────────────────
 
-// TODO: replace with proper template rendering from internal/mail/
+// sendMail sends a single mail_queue item via SMTP.
+// Delegates to internal/mail for SMTP connection and MIME construction.
+// The settings cache provides the runtime from_address and from_name.
+func sendMail(cfg *config.Config, settings *store.Settings, item store.MailItem) error {
+	return mail.Send(cfg, settings, item)
+}
 
+// ── Expiry summary builders ───────────────────────────────────────────────────
+
+// buildExpirySummaryHTML renders the expiry summary mail as HTML.
+// Format (architecture.md §8):
+//
+//	Transfer "Rushes week 23" expired on 16 May 2026.
+//
+//	alice@client.com (3 downloads)
+//	  • 11 May 13:14
+//	  • 11 May 14:48
+//
+//	bob@client.com
+//	  Never opened.
 func buildExpirySummaryHTML(title string, history []store.RecipientHistory) string {
-	return "<p>Transfer <strong>" + title + "</strong> has expired.</p>"
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("<p>Transfer <strong>%s</strong> has expired.</p>", title))
+	b.WriteString("<ul>")
+	for _, h := range history {
+		if h.DownloadCount == 0 {
+			b.WriteString(fmt.Sprintf(
+				"<li><strong>%s</strong> — never opened</li>", h.Email,
+			))
+		} else {
+			b.WriteString(fmt.Sprintf(
+				"<li><strong>%s</strong> (%d download(s))<ul>",
+				h.Email, h.DownloadCount,
+			))
+			for _, ev := range h.Events {
+				b.WriteString(fmt.Sprintf(
+					"<li>%s</li>",
+					time.Unix(ev.DownloadedAt, 0).Format("2 Jan 15:04"),
+				))
+			}
+			b.WriteString("</ul></li>")
+		}
+	}
+	b.WriteString("</ul>")
+	return b.String()
 }
 
 func buildExpirySummaryText(title string, history []store.RecipientHistory) string {
-	return "Transfer '" + title + "' has expired."
-}
-
-// sendMail sends a single mail item via SMTP.
-// TODO: implement using internal/mail/mailer.go
-func sendMail(cfg *config.Config, item store.MailItem) error {
-	// Placeholder — full implementation in internal/mail/mailer.go
-	return nil
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Transfer %q has expired.\n\n", title))
+	for _, h := range history {
+		if h.DownloadCount == 0 {
+			b.WriteString(fmt.Sprintf("%s\n  Never opened.\n\n", h.Email))
+		} else {
+			b.WriteString(fmt.Sprintf("%s (%d download(s))\n", h.Email, h.DownloadCount))
+			for _, ev := range h.Events {
+				b.WriteString(fmt.Sprintf("  \u2022 %s\n",
+					time.Unix(ev.DownloadedAt, 0).Format("2 Jan 15:04"),
+				))
+			}
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
