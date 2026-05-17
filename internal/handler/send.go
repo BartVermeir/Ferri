@@ -320,6 +320,7 @@ func renderSendPage(w http.ResponseWriter, cfg *config.Config, settings *store.S
     <label>Password (optional)<br><input type="password" name="password"></label><br><br>
     <button type="submit">Send files</button>
   </form>
+  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
   <script src="/static/upload.js"></script>
 </body>
 </html>`,
