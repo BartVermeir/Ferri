@@ -222,6 +222,7 @@ func renderUploadPage(w http.ResponseWriter, tok string, req *store.UploadReques
   <form id="complete-form" method="POST" action="/ul/%s/complete" style="display:none">
     <button type="submit">I'm done uploading</button>
   </form>
+  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
   <script>
     window.FERRI_UPLOAD_TOKEN = %q;
   </script>

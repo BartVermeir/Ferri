@@ -2,7 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
+
+	"github.com/your-org/ferri/static"
 )
 
 // Health returns a handler for GET /health.
@@ -16,8 +19,13 @@ func Health() http.HandlerFunc {
 	}
 }
 
-// Static returns a handler that serves embedded static files.
+// Static returns a handler that serves embedded static files from web/static/.
+// Files are embedded at compile time via the static package — no runtime
+// filesystem dependency. The binary is fully self-contained.
 func Static() http.Handler {
-	// TODO: return http.FileServer(http.FS(staticFS)) with go:embed
-	return http.NotFoundHandler()
+	sub, err := fs.Sub(static.FS, "files")
+	if err != nil {
+		panic("static: " + err.Error())
+	}
+	return http.FileServer(http.FS(sub))
 }
