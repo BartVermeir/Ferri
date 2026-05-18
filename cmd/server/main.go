@@ -97,7 +97,9 @@ func main() {
 	r.Get("/ul/{token}", handler.UploadPage(cfg, stores))
 	r.Post("/ul/{token}", handler.UploadPassword(cfg, stores))
 	r.Post("/ul/{token}/complete", handler.UploadComplete(cfg, stores))
-	r.Mount("/tus/", tusHandler)
+	// TUS requires all HTTP methods — Mount with wildcard to pass everything through
+	r.Handle("/tus/*", tusHandler)
+	r.Handle("/tus/", tusHandler)
 
 	// IP-restricted routes (internal network only)
 	r.Group(func(r chi.Router) {

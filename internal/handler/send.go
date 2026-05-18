@@ -51,13 +51,14 @@ func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 // Validates input, creates the transfer in the DB, returns JSON {transfer_id}.
 func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ParseForm handles both application/x-www-form-urlencoded (standard form submit)
-		// and multipart/form-data. The send form does NOT upload actual file data —
-		// files go via TUS — so the browser submits as URL-encoded by default.
-		// ParseMultipartForm would reject URL-encoded forms with an error.
-		if err := r.ParseForm(); err != nil {
-			jsonError(w, "Invalid form data", http.StatusBadRequest)
-			return
+		// The JS client sends FormData which the browser encodes as multipart/form-data.
+		// ParseMultipartForm handles this. It also calls ParseForm internally so
+		// URL-encoded fallback submissions work too.
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			if err2 := r.ParseForm(); err2 != nil {
+				jsonError(w, "Invalid form data", http.StatusBadRequest)
+				return
+			}
 		}
 
 		// ── Input validation ──────────────────────────────────────────────────

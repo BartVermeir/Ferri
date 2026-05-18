@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /Users/bartvermeir/Documents/Coding/ferri-test/config.yaml:/config/config.yaml:ro
+      - /Users/bartvermeir/Documents/Coding/ferri-test/litestream.yml:/etc/litestream.yml:ro
+      - /Users/bartvermeir/Documents/Coding/ferri-test/storage:/data/storage
+      - app_db:/data
+    environment:
+      - CONFIG_PATH=/config/config.yaml
+      - ADMIN_TOKEN=test-token-voor-lokaal-gebruik-123456
+      - SMTP_PASSWORD=
+
+volumes:
+  app_db:
