@@ -87,7 +87,7 @@ func NewHandler(cfg *config.Config, stores *store.Stores) (*Handler, error) {
 		StoreComposer:         composer,
 		MaxSize:               cfg.Limits.MaxUploadBytes,
 		DisableDownload:       true,
-		DisableTermination:    false,
+		DisableTermination:    true,  // disable DELETE — not needed, cleanup job handles it
 		NotifyCompleteUploads: true,
 		NotifyCreatedUploads:  true,
 		PreUploadCreateCallback: func(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.FileInfoChanges, error) {
