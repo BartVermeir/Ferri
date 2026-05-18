@@ -242,13 +242,14 @@ func (s *TransferStore) TryActivate(transferID string) (bool, error) {
 	return n == 1, nil
 }
 
-// SetFileComplete marks a file as complete and clears its TUS upload ID.
+// SetFileComplete marks a file as complete and records the final size.
+// tus_upload_id is kept so the download handler can locate the file via
+// tusd's storage layout (<storage_path>/<tus_upload_id>).
 func (s *TransferStore) SetFileComplete(fileID string, sizeBytes int64) error {
 	_, err := s.db.Exec(`
 		UPDATE files
-		SET    status        = 'complete',
-		       size_bytes    = ?,
-		       tus_upload_id = NULL
+		SET    status     = 'complete',
+		       size_bytes = ?
 		WHERE  id = ?`,
 		sizeBytes, fileID,
 	)
