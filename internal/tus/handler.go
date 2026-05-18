@@ -285,6 +285,7 @@ func (h *Handler) onUploadComplete(event tusd.HookEvent) error {
 	meta := event.Upload.MetaData
 	fileID := meta[metaKeyFileID]
 	ctx := meta["context"]
+	tusID := event.Upload.ID
 
 	if fileID == "" {
 		return errors.New("completion event missing ferri_file_id in metadata")
@@ -292,8 +293,19 @@ func (h *Handler) onUploadComplete(event tusd.HookEvent) error {
 
 	size := event.Upload.Size
 
+	// Store the tusd upload ID here as well — the handleCreated hook may have
+	// a timing issue. The completion event is guaranteed to fire after the upload
+	// is fully written, so this is the reliable place to store the tusd upload ID.
 	if ctx == metaContextTransfer {
+		if err := h.stores.Transfers.SetTUSUploadID(fileID, tusID); err != nil {
+			slog.Error("tus: set tus_upload_id on complete", "file_id", fileID, "tus_id", tusID, "error", err)
+		} else {
+			slog.Info("tus: tus_upload_id set on complete", "file_id", fileID, "tus_id", tusID)
+		}
 		return h.completeTransferFile(fileID, meta["transfer_id"], size)
+	}
+	if err := h.stores.Requests.SetTUSUploadID(fileID, tusID); err != nil {
+		slog.Error("tus: set request tus_upload_id on complete", "file_id", fileID, "tus_id", tusID, "error", err)
 	}
 	return h.completeRequestFile(fileID, meta["request_id"], size)
 }
