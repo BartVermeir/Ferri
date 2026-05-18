@@ -250,7 +250,10 @@ func (h *Handler) handleCreated(ch <-chan tusd.HookEvent) {
 		ctx := event.Upload.MetaData["context"]
 		tusID := event.Upload.ID
 
+		slog.Info("tus: handleCreated", "file_id", fileID, "tus_id", tusID, "ctx", ctx)
+
 		if fileID == "" {
+			slog.Warn("tus: handleCreated missing file_id", "tus_id", tusID)
 			continue
 		}
 
@@ -262,6 +265,8 @@ func (h *Handler) handleCreated(ch <-chan tusd.HookEvent) {
 		}
 		if err != nil {
 			slog.Error("tus: set tus_upload_id", "file_id", fileID, "tus_id", tusID, "error", err)
+		} else {
+			slog.Info("tus: tus_upload_id stored", "file_id", fileID, "tus_id", tusID)
 		}
 	}
 }

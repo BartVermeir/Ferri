@@ -173,9 +173,17 @@ func DownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		// Open file from storage
+		// Open file from storage.
+		// Try our own path layout first (transfers/<transfer_id>/<file_id>).
+		// Fall back to tusd's own path layout (<storage_path>/<tus_upload_id>)
+		// for files uploaded before the path layout was correctly wired.
 		absPath := filepath.Join(cfg.Storage.Path, targetFile.StoragePath)
 		f, err := os.Open(absPath)
+		if err != nil && os.IsNotExist(err) && targetFile.TUSUploadID.Valid {
+			// Fallback: tusd stores files as <storage_path>/<tus_upload_id>
+			absPath = filepath.Join(cfg.Storage.Path, targetFile.TUSUploadID.String)
+			f, err = os.Open(absPath)
+		}
 		if err != nil {
 			if os.IsNotExist(err) {
 				http.Error(w, "File not found", http.StatusNotFound)
