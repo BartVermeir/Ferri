@@ -466,10 +466,20 @@ func (s *TransferStore) CreateFileRow(fileID, transferID, originalName, storageP
 // SetTUSUploadID records the tusd-generated upload ID on the file row.
 // Called from the handleCreated hook after tusd creates the upload resource.
 func (s *TransferStore) SetTUSUploadID(fileID, tusUploadID string) error {
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		`UPDATE files SET tus_upload_id = ? WHERE id = ?`, tusUploadID, fileID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("SetTUSUploadID: no rows updated for file_id=%s", fileID)
+	}
+	return nil
 }
 
 // GetFileIDByTUSID looks up the Ferri file ID by the tusd upload ID.
