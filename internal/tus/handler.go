@@ -33,8 +33,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/tus/tusd/v2/pkg/memorylocker"
 	"github.com/tus/tusd/v2/pkg/filestore"
+	"github.com/tus/tusd/v2/pkg/memorylocker"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
 	"github.com/your-org/ferri/internal/config"
@@ -74,6 +74,8 @@ func NewHandler(cfg *config.Config, stores *store.Stores) (*Handler, error) {
 	// tusd filestore: writes upload data and .info sidecar files under StoragePath.
 	// Ferri manages its own path layout (transfers/<id>/<file_id>) separately.
 	fs := filestore.New(cfg.Storage.Path)
+	// memorylocker: in-memory locking, prevents concurrent writes to the same upload.
+	// For production with multiple instances, replace with filelocker or redislocker.
 	locker := memorylocker.New()
 
 	composer := tusd.NewStoreComposer()
@@ -123,6 +125,13 @@ func (h *Handler) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 	meta := hook.Upload.MetaData
 	size := hook.Upload.Size
 
+	// Debug: log all received metadata keys
+	metaKeys := make([]string, 0, len(meta))
+	for k := range meta {
+		metaKeys = append(metaKeys, k)
+	}
+	slog.Info("tus: preUploadCreate", "meta_keys", metaKeys, "size", size)
+
 	if transferID, ok := meta["transfer_id"]; ok {
 		return h.preCreateTransferFile(transferID, meta, size)
 	}
@@ -130,6 +139,7 @@ func (h *Handler) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 		return h.preCreateRequestFile(reqToken, meta, size)
 	}
 
+	slog.Warn("tus: missing transfer_id or upload_request_token", "meta_keys", metaKeys)
 	return rejectWith(http.StatusBadRequest,
 		"missing transfer_id or upload_request_token in TUS metadata")
 }
