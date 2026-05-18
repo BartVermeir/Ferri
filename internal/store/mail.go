@@ -44,12 +44,16 @@ func (s *MailStore) Enqueue(tx *sql.Tx, to, subject, bodyHTML, bodyText string) 
 	return err
 }
 
-// FetchPending atomically sets up to n pending mails to 'sending' and returns them.
-// SQLite's single-writer model serialises this — no two goroutines can run it
-// concurrently. The SELECT after the UPDATE fetches all 'sending' rows, which may
-// include rows stuck from a previous crashed run (recovered by StartupHooks).
+// FetchPending selects up to n pending mails and returns them for sending.
+// Uses a transaction so the UPDATE and SELECT see consistent data.
 func (s *MailStore) FetchPending(n int) ([]MailItem, error) {
-	_, err := s.db.Exec(`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(`
 		UPDATE mail_queue SET status = 'sending'
 		WHERE id IN (
 			SELECT id FROM mail_queue
@@ -62,7 +66,7 @@ func (s *MailStore) FetchPending(n int) ([]MailItem, error) {
 		return nil, err
 	}
 
-	rows, err := s.db.Query(`
+	rows, err := tx.Query(`
 		SELECT id, to_address, subject, body_html, body_text,
 		       status, attempts, max_attempts, last_attempt_at,
 		       next_attempt_at, error_message, created_at
@@ -74,7 +78,11 @@ func (s *MailStore) FetchPending(n int) ([]MailItem, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanMailItems(rows)
+	items, err := scanMailItems(rows)
+	if err != nil {
+		return nil, err
+	}
+	return items, tx.Commit()
 }
 
 // MarkSent marks a mail as successfully sent.
