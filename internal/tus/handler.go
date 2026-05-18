@@ -33,7 +33,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/tus/tusd/v2/pkg/filelocker"
+	"github.com/tus/tusd/v2/pkg/memorylocker"
 	"github.com/tus/tusd/v2/pkg/filestore"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
@@ -74,7 +74,7 @@ func NewHandler(cfg *config.Config, stores *store.Stores) (*Handler, error) {
 	// tusd filestore: writes upload data and .info sidecar files under StoragePath.
 	// Ferri manages its own path layout (transfers/<id>/<file_id>) separately.
 	fs := filestore.New(cfg.Storage.Path)
-	locker := filelocker.New(cfg.Storage.Path)
+	locker := memorylocker.New()
 
 	composer := tusd.NewStoreComposer()
 	fs.UseIn(composer)
