@@ -278,6 +278,29 @@ func (s *RequestStore) TryComplete(requestID string) (bool, error) {
 
 
 // CreateFileRow inserts a new upload_request_files row from the TUS callback.
+
+// GetRequestFileByID returns a single upload request file by its ID, reading fresh from DB.
+func (s *RequestStore) GetRequestFileByID(fileID string) (*UploadRequestFile, error) {
+	var f UploadRequestFile
+	var createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, upload_request_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM upload_request_files WHERE id = ?`, fileID,
+	).Scan(
+		&f.ID, &f.UploadRequestID, &f.OriginalName, &f.StoragePath, &f.SizeBytes,
+		&f.MimeType, &f.TUSUploadID, &f.TUSLastActivity, &f.Status, &createdAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	f.CreatedAt = time.Unix(createdAt, 0)
+	return &f, nil
+}
+
 func (s *RequestStore) CreateFileRow(fileID, requestID, originalName, storagePath string, sizeBytes int64) error {
 	_, err := s.db.Exec(`
 		INSERT INTO upload_request_files
