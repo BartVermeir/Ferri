@@ -246,7 +246,7 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 		tok := chi.URLParam(r, "token")
 		settings := appMiddleware.GetSettings(r)
 
-		req, err := stores.Requests.GetByUploadToken(tok)
+		req, err := stores.Requests.GetByUploadTokenAny(tok)
 		if err != nil || req == nil {
 			renderUploadNotFound(w, settings)
 			return
@@ -278,7 +278,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerF
 		tok := chi.URLParam(r, "token")
 		fileID := chi.URLParam(r, "fileID")
 
-		req, err := stores.Requests.GetByUploadToken(tok)
+		req, err := stores.Requests.GetByUploadTokenAny(tok)
 		if err != nil || req == nil {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return
@@ -324,7 +324,7 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFu
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
 
-		req, err := stores.Requests.GetByUploadToken(tok)
+		req, err := stores.Requests.GetByUploadTokenAny(tok)
 		if err != nil || req == nil {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return

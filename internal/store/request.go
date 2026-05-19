@@ -122,6 +122,35 @@ func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
 	return &r, nil
 }
 
+
+// GetByUploadTokenAny looks up an upload request by token regardless of status.
+// Used for download pages where completed requests should still be accessible.
+func (s *RequestStore) GetByUploadTokenAny(tok string) (*UploadRequest, error) {
+	var r UploadRequest
+	var expiresAt, createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at
+		FROM upload_requests
+		WHERE upload_token = ?`,
+		tok,
+	).Scan(
+		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
+		&r.UploadToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.ExpiresAt = time.Unix(expiresAt, 0)
+	r.CreatedAt = time.Unix(createdAt, 0)
+	return &r, nil
+}
+
 // Complete marks an upload request as completed.
 func (s *RequestStore) Complete(requestID string) error {
 	_, err := s.db.Exec(`
