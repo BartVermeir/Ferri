@@ -5,6 +5,7 @@
       --accent: {{if .Settings.AccentColor}}{{.Settings.AccentColor}}{{else}}{{.Settings.PrimaryColor}}{{end}};
       --bg: {{if .Settings.BgColor}}{{.Settings.BgColor}}{{else}}#f8f8f6{{end}};
       --font: {{if .Settings.FontFamily}}{{.Settings.FontFamily}}{{else}}'Inter', system-ui, sans-serif{{end}};
+      --primary-text: #fff;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -78,7 +79,7 @@
     }
     .btn:hover { opacity: 0.85; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary { background: var(--primary); color: var(--primary-text, #fff); }
     .btn-secondary { background: #f0f0ec; color: #333; }
     .btn-danger { background: #fee2e2; color: #991b1b; }
     .file-drop {
