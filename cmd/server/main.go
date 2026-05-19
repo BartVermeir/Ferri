@@ -96,6 +96,7 @@ func main() {
 	r.Get("/dl/{token}", handler.DownloadPage(cfg, stores))
 	r.Post("/dl/{token}", handler.DownloadPassword(cfg, stores))
 	r.Get("/dl/{token}/file/{fileID}", handler.DownloadFile(cfg, stores))
+	r.Get("/dl/{token}/zip", handler.DownloadZIP(cfg, stores))
 	r.Get("/ul/{token}", handler.UploadPage(cfg, stores))
 	r.Post("/ul/{token}", handler.UploadPassword(cfg, stores))
 	r.Post("/ul/{token}/complete", handler.UploadComplete(cfg, stores))
