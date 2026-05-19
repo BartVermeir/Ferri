@@ -32,21 +32,9 @@ func init() {
 	}
 
 	var err error
-	templates, err = template.New("").Funcs(funcMap).ParseFS(
-		web.Templates,
-		"templates/base.html",
-		"templates/send.html",
-		"templates/download.html",
-		"templates/password.html",
-		"templates/upload.html",
-		"templates/request.html",
-		"templates/request_created.html",
-		"templates/upload_complete.html",
-		"templates/admin/base.html",
-		"templates/admin/dashboard.html",
-		"templates/admin/transfers.html",
-		"templates/admin/mail.html",
-		"templates/admin/settings.html",
+	templates, err = template.New("").Funcs(funcMap).ParseFS(web.Templates,
+		"templates/*.html",
+		"templates/admin/*.html",
 	)
 	if err != nil {
 		panic("failed to parse templates: " + err.Error())
