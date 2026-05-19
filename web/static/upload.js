@@ -223,6 +223,7 @@
           endpoint: '/tus/',
           retryDelays: [0, 3000, 5000, 10000, 20000],
           chunkSize: 50 * 1024 * 1024,
+          storeFingerprintForResuming: false,
           metadata: Object.assign({ filename: file.name }, extraMeta),
 
           onProgress: function (bytesUploaded, bytesTotal) {

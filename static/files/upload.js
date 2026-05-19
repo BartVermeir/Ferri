@@ -1,9 +1,22 @@
 /**
  * upload.js — Ferri TUS upload client
+ *
+ * Handles two contexts:
+ *   1. Send page (GET /) — POST /send first, then TUS uploads with transfer_id
+ *   2. Upload request page (GET /ul/:token) — TUS uploads directly with upload_request_token
+ *
+ * Requires tus-js-client loaded separately (via CDN or bundled).
+ * window.FERRI_UPLOAD_TOKEN is set by the upload request page template.
+ *
+ * TUS metadata sent per upload:
+ *   Send context:    { transfer_id, filename }
+ *   Request context: { upload_request_token, filename }
  */
 
 (function () {
   'use strict';
+
+  // ── Detect context ───────────────────────────────────────────────────────────
 
   const isUploadRequest = typeof window.FERRI_UPLOAD_TOKEN === 'string';
 
@@ -13,236 +26,154 @@
     initSendPage();
   }
 
-  // ── File management ──────────────────────────────────────────────────────────
-
-  // Maintains a cumulative list of files across multiple selections
-  function FileCollection() {
-    this.files = [];
-  }
-
-  FileCollection.prototype.add = function (newFiles) {
-    var existing = this.files.map(function (f) { return f.name + f.size; });
-    Array.from(newFiles).forEach(function (f) {
-      if (existing.indexOf(f.name + f.size) === -1) {
-        this.files.push(f);
-      }
-    }, this);
-  };
-
-  FileCollection.prototype.remove = function (index) {
-    this.files.splice(index, 1);
-  };
-
-  FileCollection.prototype.clear = function () {
-    this.files = [];
-  };
-
-  FileCollection.prototype.count = function () {
-    return this.files.length;
-  };
-
-  // ── File drop zone ───────────────────────────────────────────────────────────
-
-  function initFileDrop(dropEl, inputEl, collection, listEl) {
-    if (!dropEl || !inputEl) return;
-
-    inputEl.addEventListener('change', function () {
-      collection.add(inputEl.files);
-      renderFileList(collection, listEl);
-      inputEl.value = ''; // reset so same file can be added again
-    });
-
-    dropEl.addEventListener('dragover', function (e) {
-      e.preventDefault();
-      dropEl.classList.add('dragover');
-    });
-    dropEl.addEventListener('dragleave', function () {
-      dropEl.classList.remove('dragover');
-    });
-    dropEl.addEventListener('drop', function (e) {
-      e.preventDefault();
-      dropEl.classList.remove('dragover');
-      if (e.dataTransfer && e.dataTransfer.files.length > 0) {
-        collection.add(e.dataTransfer.files);
-        renderFileList(collection, listEl);
-      }
-    });
-  }
-
-  function renderFileList(collection, listEl) {
-    if (!listEl) return;
-    listEl.innerHTML = '';
-    collection.files.forEach(function (f, i) {
-      var li = document.createElement('li');
-      li.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f8f8f6;border-radius:6px;margin-top:6px;font-size:13px;';
-      li.innerHTML =
-        '<span>📄</span>' +
-        '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(f.name) + '</span>' +
-        '<span style="color:#888;flex-shrink:0">' + formatSize(f.size) + '</span>' +
-        '<button type="button" style="background:none;border:none;cursor:pointer;color:#aaa;font-size:16px;padding:0 4px;flex-shrink:0" data-idx="' + i + '" title="Remove">×</button>';
-      li.querySelector('button').addEventListener('click', function () {
-        collection.remove(parseInt(this.dataset.idx));
-        renderFileList(collection, listEl);
-      });
-      listEl.appendChild(li);
-    });
-  }
-
   // ── Send page ────────────────────────────────────────────────────────────────
 
   function initSendPage() {
-    var form = document.getElementById('send-form');
+    const form = document.getElementById('send-form');
     if (!form) return;
-
-    var dropEl   = document.getElementById('file-drop');
-    var inputEl  = document.getElementById('file-input');
-    var listEl   = document.getElementById('file-list');
-    var progWrap = document.getElementById('progress-wrap');
-    var progFill = document.getElementById('progress-fill');
-    var progLbl  = document.getElementById('progress-label');
-    var resultEl = document.getElementById('result-msg');
-    var collection = new FileCollection();
-
-    initFileDrop(dropEl, inputEl, collection, listEl);
 
     form.addEventListener('submit', async function (e) {
       e.preventDefault();
 
-      if (collection.count() === 0) {
-        showResult(resultEl, 'error', 'Please select at least one file.');
+      const fileInput = form.querySelector('input[type="file"]');
+      const files = Array.from(fileInput.files);
+
+      if (files.length === 0) {
+        showError('Please select at least one file.');
         return;
       }
 
       setSubmitState(form, true);
-      if (progWrap) progWrap.style.display = '';
-      updateProgress(progFill, progLbl, 0, 'Creating transfer…');
+      showProgress('Creating transfer...');
 
-      var data = new FormData(form);
-      collection.files.forEach(function (f) {
+      // Build form data for POST /send
+      // Sends filenames[] and sizes[] — actual file data goes via TUS
+      const data = new FormData(form);
+      files.forEach(f => {
         data.append('filenames[]', f.name);
         data.append('sizes[]', f.size.toString());
       });
+      // Remove the actual file objects — we don't want to POST the file data here
       data.delete('files');
 
-      var transferId;
+      let transferId;
       try {
-        var resp = await fetch('/send', { method: 'POST', body: data });
-        var json = await resp.json();
+        const resp = await fetch('/send', { method: 'POST', body: data });
+        const json = await resp.json();
         if (!resp.ok) {
-          showResult(resultEl, 'error', json.error || 'Failed to create transfer.');
+          showError(json.error || 'Failed to create transfer.');
           setSubmitState(form, false);
-          if (progWrap) progWrap.style.display = 'none';
           return;
         }
         transferId = json.transfer_id;
       } catch (err) {
-        showResult(resultEl, 'error', 'Network error. Please try again.');
+        showError('Network error. Please try again.');
         setSubmitState(form, false);
-        if (progWrap) progWrap.style.display = 'none';
         return;
       }
 
+      // Start TUS uploads
+      showProgress(`Uploading ${files.length} file(s)...`);
       try {
-        await uploadFiles(collection.files, { transfer_id: transferId },
-          function (pct, label) { updateProgress(progFill, progLbl, pct, label); });
+        await uploadFiles(files, { transfer_id: transferId });
       } catch (err) {
-        showResult(resultEl, 'error', 'Upload failed: ' + err.message);
+        showError('Upload failed: ' + err.message);
         setSubmitState(form, false);
-        if (progWrap) progWrap.style.display = 'none';
         return;
       }
 
-      if (progWrap) progWrap.style.display = 'none';
-      showResult(resultEl, 'success',
-        collection.count() + ' file(s) uploaded successfully. Recipients will receive a download link by email.');
-      form.reset();
-      collection.clear();
-      renderFileList(collection, listEl);
-      setSubmitState(form, false);
+      showSuccess(`${files.length} file(s) uploaded successfully. Recipients will receive a download link by email.`);
     });
   }
 
   // ── Upload request page ──────────────────────────────────────────────────────
 
   function initUploadRequestPage() {
-    var dropEl   = document.getElementById('file-drop');
-    var inputEl  = document.getElementById('file-input');
-    var listEl   = document.getElementById('file-list');
-    var startBtn = document.getElementById('start-btn');
-    var progWrap = document.getElementById('progress-wrap');
-    var progFill = document.getElementById('progress-fill');
-    var progLbl  = document.getElementById('progress-label');
-    var doneArea = document.getElementById('done-area');
-    var resultEl = document.getElementById('result-msg');
-    var collection = new FileCollection();
+    const fileInput = document.getElementById('file-input');
+    const uploadBtn = document.getElementById('upload-btn');
+    const completeForm = document.getElementById('complete-form');
+    if (!fileInput || !uploadBtn) return;
 
-    if (!startBtn) return;
-
-    initFileDrop(dropEl, inputEl, collection, listEl);
-
-    startBtn.addEventListener('click', async function () {
-      if (collection.count() === 0) {
-        showResult(resultEl, 'error', 'Please select at least one file.');
+    uploadBtn.addEventListener('click', async function () {
+      const files = Array.from(fileInput.files);
+      if (files.length === 0) {
+        showError('Please select at least one file.');
         return;
       }
 
-      startBtn.disabled = true;
-      if (progWrap) progWrap.style.display = '';
-      updateProgress(progFill, progLbl, 0, 'Starting upload…');
+      uploadBtn.disabled = true;
+      showProgress(`Uploading ${files.length} file(s)...`);
 
       try {
-        await uploadFiles(collection.files,
-          { upload_request_token: window.FERRI_UPLOAD_TOKEN },
-          function (pct, label) { updateProgress(progFill, progLbl, pct, label); });
+        await uploadFiles(files, { upload_request_token: window.FERRI_UPLOAD_TOKEN });
       } catch (err) {
-        showResult(resultEl, 'error', 'Upload failed: ' + err.message);
-        startBtn.disabled = false;
-        if (progWrap) progWrap.style.display = 'none';
+        showError('Upload failed: ' + err.message);
+        uploadBtn.disabled = false;
         return;
       }
 
-      if (progWrap) progWrap.style.display = 'none';
-      if (doneArea) doneArea.style.display = '';
+      showProgress('All files uploaded.');
+
+      // Show the "I\'m done" button
+      if (completeForm) {
+        completeForm.style.display = '';
+      }
     });
   }
 
   // ── TUS upload engine ────────────────────────────────────────────────────────
 
-  function uploadFiles(files, extraMeta, onProgress) {
+  /**
+   * Upload all files sequentially via TUS.
+   * Returns a promise that resolves when all uploads complete,
+   * or rejects on the first failure.
+   *
+   * @param {File[]} files
+   * @param {Object} extraMeta - added to TUS metadata (transfer_id or upload_request_token)
+   */
+  function uploadFiles(files, extraMeta) {
     return new Promise(function (resolve, reject) {
-      var index = 0;
+      let index = 0;
 
       function uploadNext() {
-        if (index >= files.length) { resolve(); return; }
+        if (index >= files.length) {
+          resolve();
+          return;
+        }
 
-        var file = files[index];
-        var fileNum = index + 1;
+        const file = files[index];
         index++;
 
-        var upload = new tus.Upload(file, {
+        showProgress(`Uploading ${file.name} (${index}/${files.length})...`);
+
+        const upload = new tus.Upload(file, {
           endpoint: '/tus/',
           retryDelays: [0, 3000, 5000, 10000, 20000],
           chunkSize: 50 * 1024 * 1024,
+          storeFingerprintForResuming: false,
           metadata: Object.assign({ filename: file.name }, extraMeta),
 
           onProgress: function (bytesUploaded, bytesTotal) {
-            var pct = bytesTotal > 0
-              ? Math.round(((fileNum - 1 + bytesUploaded / bytesTotal) / files.length) * 100)
+            const pct = bytesTotal > 0
+              ? Math.round((bytesUploaded / bytesTotal) * 100)
               : 0;
-            if (onProgress) onProgress(pct,
-              'Uploading ' + file.name + ': ' +
-              Math.round(bytesUploaded / bytesTotal * 100) + '% (' + fileNum + '/' + files.length + ')');
+            showProgress(`Uploading ${file.name}: ${pct}% (${index}/${files.length})`);
           },
 
-          onSuccess: function () { uploadNext(); },
+          onSuccess: function () {
+            uploadNext();
+          },
 
           onError: function (error) {
-            reject(new Error(file.name + ': ' + (error.message || error)));
+            reject(new Error(`${file.name}: ${error.message || error}`));
           },
         });
 
-        upload.findPreviousUploads().then(function (prev) {
-          if (prev.length > 0) upload.resumeFromPreviousUpload(prev[0]);
+        // Check for a resumable upload before starting
+        upload.findPreviousUploads().then(function (previousUploads) {
+          if (previousUploads.length > 0) {
+            upload.resumeFromPreviousUpload(previousUploads[0]);
+          }
           upload.start();
         });
       }
@@ -253,32 +184,44 @@
 
   // ── UI helpers ───────────────────────────────────────────────────────────────
 
-  function updateProgress(fillEl, labelEl, pct, label) {
-    if (fillEl) fillEl.style.width = pct + '%';
-    if (labelEl) labelEl.textContent = label;
+  function getOrCreateStatus() {
+    let el = document.getElementById('ferri-status');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'ferri-status';
+      el.style.cssText = 'margin: 1rem 0; padding: 0.75rem; border-radius: 4px;';
+      const form = document.getElementById('send-form') ||
+                   document.getElementById('upload-area') ||
+                   document.body;
+      form.parentNode.insertBefore(el, form.nextSibling);
+    }
+    return el;
   }
 
-  function showResult(el, type, msg) {
-    if (!el) return;
-    el.className = 'alert alert-' + (type === 'error' ? 'error' : 'success') + ' mt-16';
+  function showProgress(msg) {
+    const el = getOrCreateStatus();
+    el.style.background = '#f0f0f0';
+    el.style.color = '#333';
     el.textContent = msg;
-    el.style.display = '';
+  }
+
+  function showError(msg) {
+    const el = getOrCreateStatus();
+    el.style.background = '#fee';
+    el.style.color = '#c00';
+    el.textContent = msg;
+  }
+
+  function showSuccess(msg) {
+    const el = getOrCreateStatus();
+    el.style.background = '#efe';
+    el.style.color = '#060';
+    el.textContent = msg;
   }
 
   function setSubmitState(form, disabled) {
-    var btn = form.querySelector('button[type="submit"]');
+    const btn = form.querySelector('button[type="submit"]');
     if (btn) btn.disabled = disabled;
-  }
-
-  function formatSize(bytes) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
-    return (bytes / 1073741824).toFixed(1) + ' GB';
-  }
-
-  function escHtml(str) {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
 })();
