@@ -181,8 +181,8 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// Enqueue notification mail to requester
 		if settings.MailFromAddress != "" {
 			subject := fmt.Sprintf("Files received: %s", req.Title)
-			bodyHTML := buildUploadCompleteHTML(req, cfg.Server.BaseURL)
-			bodyText := buildUploadCompleteText(req, cfg.Server.BaseURL)
+			bodyHTML := buildUploadCompleteHTML(req, cfg.BaseURL)
+			bodyText := buildUploadCompleteText(req, cfg.BaseURL)
 			if err := stores.Mail.Enqueue(nil, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("upload complete: enqueue mail", "to", req.RequesterEmail, "error", err)
 			}
@@ -219,7 +219,7 @@ func bcryptHashEqual(a, b string) bool {
 // ── Mail body builders ────────────────────────────────────────────────────────
 
 func buildUploadCompleteHTML(req *store.UploadRequest, baseURL string) string {
-	viewURL := baseURL + "/ul/" + req.UploadToken
+	viewURL := baseURL + "/ul/" + req.UploadToken + "/files"
 	msgPart := ""
 	if req.Message != "" {
 		msgPart = fmt.Sprintf(`<p style="margin:0 0 16px;font-size:14px;color:#555;">%s</p>`, html.EscapeString(req.Message))
