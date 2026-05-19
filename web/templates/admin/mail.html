@@ -1,36 +1,37 @@
-{{define "admin/mail.html"}}
-{{template "admin/base.html" .}}
-{{define "content"}}
-<div class="page-header">
-  <h1>Mail queue</h1>
+{{define "admin/mail.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>Mail queue</h1></div>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>To</th><th>Subject</th><th>Status</th><th>Attempts</th><th>Error</th></tr>
+        </thead>
+        <tbody>
+          {{range .Mails}}
+          <tr>
+            <td>{{.ToAddress}}</td>
+            <td>{{.Subject}}</td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td>{{.Attempts}}</td>
+            <td style="color:#888; font-size:12px;">{{.ErrorMessage.String}}</td>
+          </tr>
+          {{else}}
+          <tr><td colspan="5" style="color:#aaa; text-align:center; padding:24px;">Mail queue is empty</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </main>
 </div>
-
-<div class="card">
-  <table>
-    <thead>
-      <tr>
-        <th>To</th>
-        <th>Subject</th>
-        <th>Status</th>
-        <th>Attempts</th>
-        <th>Error</th>
-      </tr>
-    </thead>
-    <tbody>
-      {{range .Mails}}
-      <tr>
-        <td>{{.ToAddress}}</td>
-        <td>{{.Subject}}</td>
-        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
-        <td>{{.Attempts}}</td>
-        <td style="color:#888; font-size:12px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{.ErrorMessage.String}}</td>
-      </tr>
-      {{else}}
-      <tr><td colspan="5" style="color:#aaa; text-align:center; padding:24px;">Mail queue is empty</td></tr>
-      {{end}}
-    </tbody>
-  </table>
-</div>
-{{end}}
-
-{{end}}
+</body>
+</html>{{end}}

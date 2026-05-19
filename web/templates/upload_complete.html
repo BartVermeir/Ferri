@@ -1,13 +1,21 @@
-{{define "upload_complete.html"}}
-{{template "base.html" .}}
-{{define "content"}}
-<div class="page-wrap">
-  <div class="card" style="text-align:center; padding:48px 32px;">
-    <div style="font-size:48px; margin-bottom:16px;">✓</div>
-    <h1>Thank you</h1>
-    <p class="text-muted mt-8">Your files have been received. You can close this window.</p>
-  </div>
-</div>
-{{end}}
-
-{{end}}
+{{define "upload_complete.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+</head>
+<body>
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card" style="text-align:center; padding:48px 32px;">
+        <div style="font-size:48px; margin-bottom:16px;">✓</div>
+        <h1>Thank you</h1>
+        <p class="text-muted mt-8">Your files have been received. You can close this window.</p>
+      </div>
+    </div>
+  </main>
+</body>
+</html>{{end}}

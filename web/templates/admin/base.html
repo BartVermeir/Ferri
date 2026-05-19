@@ -1,11 +1,5 @@
-{{define "admin/base.html"}}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.PageTitle}} — Admin</title>
-  <style>
+{{define "admin-css"}}
+<style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --primary: {{.Settings.PrimaryColor}};
@@ -111,29 +105,22 @@
     .alert-error { background: #fee2e2; color: #991b1b; }
     .nav-logout { margin-top: auto; padding: 16px 20px 0; border-top: 1px solid #e8e8e4; margin-top: 16px; }
   </style>
-</head>
-<body>
-<div class="admin-layout">
-  <aside class="sidebar">
-    <div class="logo">{{.Settings.CompanyName}}</div>
-    <nav>
-      <div class="nav-section">Overview</div>
-      <a href="/admin" class="{{if eq .ActiveNav "dashboard"}}active{{end}}">Dashboard</a>
-      <div class="nav-section">Manage</div>
-      <a href="/admin/transfers" class="{{if eq .ActiveNav "transfers"}}active{{end}}">Transfers</a>
-      <a href="/admin/mail" class="{{if eq .ActiveNav "mail"}}active{{end}}">Mail queue</a>
-      <div class="nav-section">Configure</div>
-      <a href="/admin/settings" class="{{if eq .ActiveNav "settings"}}active{{end}}">Settings</a>
-    </nav>
-    <div class="nav-logout">
-      <a href="/admin/logout" style="color:#888; font-size:13px;">Logout</a>
-    </div>
-  </aside>
-  <main class="main-content">
-    {{block "content" .}}{{end}}
-  </main>
-</div>
-</body>
-</html>
+{{end}}
 
+{{define "admin-nav"}}
+<aside class="sidebar">
+  <div class="logo">{{.Settings.CompanyName}}</div>
+  <nav>
+    <div class="nav-section">Overview</div>
+    <a href="/admin" class="{{if eq .ActiveNav "dashboard"}}active{{end}}">Dashboard</a>
+    <div class="nav-section">Manage</div>
+    <a href="/admin/transfers" class="{{if eq .ActiveNav "transfers"}}active{{end}}">Transfers</a>
+    <a href="/admin/mail" class="{{if eq .ActiveNav "mail"}}active{{end}}">Mail queue</a>
+    <div class="nav-section">Configure</div>
+    <a href="/admin/settings" class="{{if eq .ActiveNav "settings"}}active{{end}}">Settings</a>
+  </nav>
+  <div class="nav-logout">
+    <a href="/admin/logout" style="color:#888; font-size:13px;">Logout</a>
+  </div>
+</aside>
 {{end}}

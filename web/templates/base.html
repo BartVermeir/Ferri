@@ -1,11 +1,5 @@
-{{define "base.html"}}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
-  <style>
+{{define "base-css"}}
+<style>
     :root {
       --primary: {{.Settings.PrimaryColor}};
       --accent: {{if .Settings.AccentColor}}{{.Settings.AccentColor}}{{else}}{{.Settings.PrimaryColor}}{{end}};
@@ -163,20 +157,14 @@
       .card { padding: 20px; border-radius: 8px; }
     }
   </style>
-  {{block "head" .}}{{end}}
-</head>
-<body>
-  <header class="site-header">
-    {{if .Settings.LogoURL}}
-    <img src="{{.Settings.LogoURL}}" alt="{{.Settings.CompanyName}}">
-    {{else}}
-    <span class="company-name">{{.Settings.CompanyName}}</span>
-    {{end}}
-  </header>
-  <main>
-    {{block "content" .}}{{end}}
-  </main>
-</body>
-</html>
+{{end}}
 
+{{define "base-header"}}
+<header class="site-header">
+  {{if .Settings.LogoURL}}
+  <img src="{{.Settings.LogoURL}}" alt="{{.Settings.CompanyName}}">
+  {{else}}
+  <span class="company-name">{{.Settings.CompanyName}}</span>
+  {{end}}
+</header>
 {{end}}
