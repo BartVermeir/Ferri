@@ -1,94 +1,87 @@
-{{define "admin/settings.html"}}
-{{template "admin/base.html" .}}
-{{define "content"}}
-<div class="page-header">
-  <h1>Settings</h1>
+{{define "admin/settings.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>Settings</h1></div>
+    {{if .Saved}}<div class="alert alert-success">Settings saved.</div>{{end}}
+    {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+    <form method="POST" action="/admin/settings">
+      <div class="card">
+        <div class="card-header">Branding</div>
+        <div class="card-body">
+          <label>Company name</label>
+          <input type="text" name="branding.company_name" value="{{.Settings.CompanyName}}">
+          <label>Logo URL</label>
+          <input type="url" name="branding.logo_url" value="{{.Settings.LogoURL}}" placeholder="https://example.com/logo.png">
+          <div class="form-row">
+            <div>
+              <label>Primary colour</label>
+              <input type="color" name="branding.primary_color" value="{{.Settings.PrimaryColor}}">
+            </div>
+            <div>
+              <label>Accent colour</label>
+              <input type="color" name="branding.accent_color" value="{{.Settings.AccentColor}}">
+            </div>
+          </div>
+          <label>Background colour</label>
+          <input type="color" name="branding.bg_color" value="{{if .Settings.BgColor}}{{.Settings.BgColor}}{{else}}#f8f8f6{{end}}">
+          <label>Font family</label>
+          <select name="branding.font_family">
+            <option value="">System default (Inter)</option>
+            <option value="'Georgia', serif" {{if eq .Settings.FontFamily "'Georgia', serif"}}selected{{end}}>Georgia</option>
+            <option value="'Helvetica Neue', Arial, sans-serif" {{if eq .Settings.FontFamily "'Helvetica Neue', Arial, sans-serif"}}selected{{end}}>Helvetica Neue</option>
+          </select>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">Pages</div>
+        <div class="card-body">
+          <label>Welcome message</label>
+          <textarea name="branding.welcome_message" rows="2">{{.Settings.WelcomeMessage}}</textarea>
+          <label>Send page title</label>
+          <input type="text" name="branding.send_page_title" value="{{.Settings.SendPageTitle}}" placeholder="Send files">
+          <label>Download page title</label>
+          <input type="text" name="branding.download_page_title" value="{{.Settings.DownloadPageTitle}}" placeholder="Download files">
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">Email</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div>
+              <label>From name</label>
+              <input type="text" name="mail.from_name" value="{{.Settings.MailFromName}}" placeholder="File transfer">
+            </div>
+            <div>
+              <label>From address</label>
+              <input type="email" name="mail.from_address" value="{{.Settings.MailFromAddress}}">
+            </div>
+          </div>
+          <div style="margin-top:16px; display:flex; flex-direction:column; gap:12px;">
+            <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+              <input type="checkbox" name="notify.on_download" value="1" {{if .Settings.NotifyOnDownload}}checked{{end}}>
+              Notify sender when files are downloaded
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+              <input type="checkbox" name="notify.expiry_summary" value="1" {{if .Settings.ExpirySummary}}checked{{end}}>
+              Send expiry summary emails
+            </label>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:8px;">
+        <button type="submit" class="btn btn-primary">Save settings</button>
+      </div>
+    </form>
+  </main>
 </div>
-
-{{if .Saved}}<div class="alert alert-success">Settings saved.</div>{{end}}
-
-<form method="POST" action="/admin/settings">
-  <div class="card">
-    <div class="card-header">Branding</div>
-    <div class="card-body">
-      <label>Company name</label>
-      <input type="text" name="branding.company_name" value="{{.Settings.CompanyName}}">
-
-      <label>Logo URL <span style="color:#aaa; font-weight:400;">(https://...)</span></label>
-      <input type="url" name="branding.logo_url" value="{{.Settings.LogoURL}}" placeholder="https://example.com/logo.png">
-
-      <div class="form-row">
-        <div>
-          <label>Primary colour</label>
-          <input type="color" name="branding.primary_color" value="{{.Settings.PrimaryColor}}">
-        </div>
-        <div>
-          <label>Accent colour</label>
-          <input type="color" name="branding.accent_color" value="{{.Settings.AccentColor}}">
-        </div>
-      </div>
-
-      <label>Background colour</label>
-      <input type="color" name="branding.bg_color" value="{{if .Settings.BgColor}}{{.Settings.BgColor}}{{else}}#f8f8f6{{end}}">
-
-      <label>Font family</label>
-      <select name="branding.font_family">
-        <option value="" {{if eq .Settings.FontFamily ""}}selected{{end}}>System default (Inter)</option>
-        <option value="'Georgia', serif" {{if eq .Settings.FontFamily "'Georgia', serif"}}selected{{end}}>Georgia (serif)</option>
-        <option value="'Helvetica Neue', Arial, sans-serif" {{if eq .Settings.FontFamily "'Helvetica Neue', Arial, sans-serif"}}selected{{end}}>Helvetica Neue</option>
-        <option value="'Courier New', monospace" {{if eq .Settings.FontFamily "'Courier New', monospace"}}selected{{end}}>Courier New (mono)</option>
-      </select>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header">Pages</div>
-    <div class="card-body">
-      <label>Welcome message <span style="color:#aaa; font-weight:400;">(shown on send page)</span></label>
-      <textarea name="branding.welcome_message" rows="2">{{.Settings.WelcomeMessage}}</textarea>
-
-      <label>Send page title</label>
-      <input type="text" name="branding.send_page_title" value="{{.Settings.SendPageTitle}}" placeholder="Send files">
-
-      <label>Download page title</label>
-      <input type="text" name="branding.download_page_title" value="{{.Settings.DownloadPageTitle}}" placeholder="Download files">
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header">Email</div>
-    <div class="card-body">
-      <div class="form-row">
-        <div>
-          <label>From name</label>
-          <input type="text" name="mail.from_name" value="{{.Settings.MailFromName}}" placeholder="File transfer">
-        </div>
-        <div>
-          <label>From address</label>
-          <input type="email" name="mail.from_address" value="{{.Settings.MailFromAddress}}">
-        </div>
-      </div>
-
-      <div style="margin-top:16px; display:flex; gap:16px;">
-        <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
-          <input type="checkbox" name="notify.on_download" value="1" {{if .Settings.NotifyOnDownload}}checked{{end}}>
-          <span>Notify sender when files are downloaded</span>
-        </label>
-      </div>
-
-      <div style="margin-top:12px;">
-        <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
-          <input type="checkbox" name="notify.expiry_summary" value="1" {{if .Settings.ExpirySummary}}checked{{end}}>
-          <span>Send expiry summary emails</span>
-        </label>
-      </div>
-    </div>
-  </div>
-
-  <div style="margin-top:8px;">
-    <button type="submit" class="btn btn-primary">Save settings</button>
-  </div>
-</form>
-{{end}}
-
-{{end}}
+</body>
+</html>{{end}}

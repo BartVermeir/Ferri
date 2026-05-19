@@ -1,39 +1,41 @@
-{{define "request.html"}}
-{{template "base.html" .}}
-{{define "content"}}
-<div class="page-wrap">
-  <div class="card">
-    <h1>Request files</h1>
-    {{if .Error}}<div class="alert alert-error mt-16">{{.Error}}</div>{{end}}
-    <form method="POST" action="/request">
-      <label>Your name</label>
-      <input type="text" name="requester_name" autocomplete="name" required>
-
-      <label>Your email</label>
-      <input type="email" name="requester_email" autocomplete="email" required>
-
-      <label>Title</label>
-      <input type="text" name="title" required>
-
-      <label>Message <span class="text-muted">(instructions for uploader)</span></label>
-      <textarea name="message" rows="3"></textarea>
-
-      <label>Link expires after</label>
-      <select name="expiry_hours">
-        {{range .ExpiryOptions}}
-        <option value="{{.Hours}}">{{.Label}}</option>
-        {{end}}
-      </select>
-
-      <label>Password <span class="text-muted">(optional)</span></label>
-      <input type="password" name="password" autocomplete="new-password">
-
-      <div class="mt-24">
-        <button type="submit" class="btn btn-primary">Create upload link</button>
+{{define "request.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+</head>
+<body>
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card">
+        <h1>Request files</h1>
+        {{if .Error}}<div class="alert alert-error mt-16">{{.Error}}</div>{{end}}
+        <form method="POST" action="/request">
+          <label>Your name</label>
+          <input type="text" name="requester_name" autocomplete="name" required>
+          <label>Your email</label>
+          <input type="email" name="requester_email" autocomplete="email" required>
+          <label>Title</label>
+          <input type="text" name="title" required>
+          <label>Message <span class="text-muted">(instructions for uploader)</span></label>
+          <textarea name="message" rows="3"></textarea>
+          <label>Link expires after</label>
+          <select name="expiry_hours">
+            {{range .ExpiryOptions}}
+            <option value="{{.Hours}}">{{.Label}}</option>
+            {{end}}
+          </select>
+          <label>Password <span class="text-muted">(optional)</span></label>
+          <input type="password" name="password" autocomplete="new-password">
+          <div class="mt-24">
+            <button type="submit" class="btn btn-primary">Create upload link</button>
+          </div>
+        </form>
       </div>
-    </form>
-  </div>
-</div>
-{{end}}
-
-{{end}}
+    </div>
+  </main>
+</body>
+</html>{{end}}
