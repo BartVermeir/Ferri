@@ -39,6 +39,7 @@ const uploadPasswordCookie = "ferri_ul_auth"
 // ── Upload page ───────────────────────────────────────────────────────────────
 
 // UploadPage handles GET /ul/:token.
+// If the request is completed, shows the uploaded files instead of the upload form.
 func UploadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
@@ -59,6 +60,27 @@ func UploadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 				renderUploadPasswordPage(w, tok, settings, "")
 				return
 			}
+		}
+
+		// If already completed, show the uploaded files
+		if req.Status == "completed" {
+			files, err := stores.Requests.GetFiles(req.ID)
+			if err != nil {
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			renderPage(w, "request_download.html", struct {
+				baseData
+				Request      *store.UploadRequest
+				Files        []store.UploadRequestFile
+				DownloadBase string
+			}{
+				baseData:     baseData{PageTitle: req.Title, Settings: settings},
+				Request:      req,
+				Files:        files,
+				DownloadBase: "/ul/" + tok,
+			})
+			return
 		}
 
 		renderUploadPage(w, tok, req, settings)
@@ -159,8 +181,8 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// Enqueue notification mail to requester
 		if settings.MailFromAddress != "" {
 			subject := fmt.Sprintf("Files received: %s", req.Title)
-			bodyHTML := buildUploadCompleteHTML(req, cfg.Server.BaseURL)
-			bodyText := buildUploadCompleteText(req, cfg.Server.BaseURL)
+			bodyHTML := buildUploadCompleteHTML(req, cfg.BaseURL)
+			bodyText := buildUploadCompleteText(req, cfg.BaseURL)
 			if err := stores.Mail.Enqueue(nil, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("upload complete: enqueue mail", "to", req.RequesterEmail, "error", err)
 			}
@@ -197,7 +219,7 @@ func bcryptHashEqual(a, b string) bool {
 // ── Mail body builders ────────────────────────────────────────────────────────
 
 func buildUploadCompleteHTML(req *store.UploadRequest, baseURL string) string {
-	viewURL := baseURL + "/ul/" + req.UploadToken + "/files"
+	viewURL := baseURL + "/ul/" + req.UploadToken
 	msgPart := ""
 	if req.Message != "" {
 		msgPart = fmt.Sprintf(`<p style="margin:0 0 16px;font-size:14px;color:#555;">%s</p>`, html.EscapeString(req.Message))
