@@ -76,6 +76,7 @@ func (s *Scheduler) runMailJob() {
 		slog.Error("mail job: fetch pending", "error", err)
 		return
 	}
+	slog.Info("mail job: fetched", "count", len(items))
 
 	// Load settings once per batch — provides runtime from_address and from_name.
 	settings := s.stores.Settings.Get()
