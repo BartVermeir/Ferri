@@ -16,6 +16,12 @@ package handler
 
 import (
 	"fmt"
+	"net/url"
+	"time"
+	"path/filepath"
+	"os"
+	"io"
+	"archive/zip"
 	"html"
 	"log/slog"
 	"net/http"
@@ -153,8 +159,8 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// Enqueue notification mail to requester
 		if settings.MailFromAddress != "" {
 			subject := fmt.Sprintf("Files received: %s", req.Title)
-			bodyHTML := buildUploadCompleteHTML(req, cfg.Server.BaseURL)
-			bodyText := buildUploadCompleteText(req, cfg.Server.BaseURL)
+			bodyHTML := buildUploadCompleteHTML(req, cfg.BaseURL)
+			bodyText := buildUploadCompleteText(req, cfg.BaseURL)
 			if err := stores.Mail.Enqueue(nil, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("upload complete: enqueue mail", "to", req.RequesterEmail, "error", err)
 			}
@@ -191,25 +197,149 @@ func bcryptHashEqual(a, b string) bool {
 // ── Mail body builders ────────────────────────────────────────────────────────
 
 func buildUploadCompleteHTML(req *store.UploadRequest, baseURL string) string {
-	viewURL := baseURL + "/admin/transfers"
+	viewURL := baseURL + "/ul/" + req.UploadToken + "/files"
 	msgPart := ""
 	if req.Message != "" {
 		msgPart = fmt.Sprintf(`<p style="margin:0 0 16px;font-size:14px;color:#555;">%s</p>`, html.EscapeString(req.Message))
 	}
 	return fmt.Sprintf(
-		`<p style="margin:0 0 16px;font-size:15px;color:#333;">An external party has uploaded files for your request <strong>%s</strong>.</p>%s<p><a href="%s" style="color:#1a1a1a;">View in admin panel</a></p>`,
+		`<p style="margin:0 0 16px;font-size:15px;color:#333;">Files have been uploaded for your request <strong>%s</strong>.</p>%s<table width="100%%" cellpadding="0" cellspacing="0" style="margin:24px 0;"><tr><td><a href="%s" style="display:inline-block;padding:12px 24px;background:#000;color:#fff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:500;">View uploaded files</a></td></tr></table>`,
 		html.EscapeString(req.Title), msgPart, viewURL,
 	)
 }
 
 func buildUploadCompleteText(req *store.UploadRequest, baseURL string) string {
 	return fmt.Sprintf(
-		"Files received for your request '%s'.\n\n%s\n\nView in admin: %s/admin/transfers",
-		req.Title, req.Message, baseURL,
+		"Files received for your request '%s'.\n\n%s\n\nView files: %s/ul/%s/files",
+		req.Title, req.Message, baseURL, req.UploadToken,
 	)
 }
 
 // ── Template rendering placeholders ──────────────────────────────────────────
+
+
+// RequestDownloadPage handles GET /ul/:token/files — shows uploaded files for requester.
+func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok := chi.URLParam(r, "token")
+		settings := appMiddleware.GetSettings(r)
+
+		req, err := stores.Requests.GetByUploadToken(tok)
+		if err != nil || req == nil {
+			renderUploadNotFound(w, settings)
+			return
+		}
+
+		files, err := stores.Requests.GetFiles(req.ID)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		renderPage(w, "request_download.html", struct {
+			baseData
+			Request      *store.UploadRequest
+			Files        []store.UploadRequestFile
+			DownloadBase string
+		}{
+			baseData:     baseData{PageTitle: req.Title, Settings: settings},
+			Request:      req,
+			Files:        files,
+			DownloadBase: "/ul/" + tok,
+		})
+	}
+}
+
+// RequestDownloadFile handles GET /ul/:token/file/:fileID — stream uploaded file.
+func RequestDownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok := chi.URLParam(r, "token")
+		fileID := chi.URLParam(r, "fileID")
+
+		req, err := stores.Requests.GetByUploadToken(tok)
+		if err != nil || req == nil {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+
+		files, err := stores.Requests.GetFiles(req.ID)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		var target *store.UploadRequestFile
+		for i := range files {
+			if files[i].ID == fileID {
+				target = &files[i]
+				break
+			}
+		}
+		if target == nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+
+		absPath := filepath.Join(cfg.Storage.Path, target.StoragePath)
+		f, err := os.Open(absPath)
+		if err != nil && os.IsNotExist(err) && target.TUSUploadID.Valid {
+			absPath = filepath.Join(cfg.Storage.Path, target.TUSUploadID.String)
+			f, err = os.Open(absPath)
+		}
+		if err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		defer f.Close()
+
+		w.Header().Set("Content-Disposition", "attachment; filename=" + url.QueryEscape(target.OriginalName))
+		http.ServeContent(w, r, target.OriginalName, time.Time{}, f)
+	}
+}
+
+// RequestDownloadZIP handles GET /ul/:token/zip — stream all uploaded files as ZIP.
+func RequestDownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok := chi.URLParam(r, "token")
+
+		req, err := stores.Requests.GetByUploadToken(tok)
+		if err != nil || req == nil {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+
+		files, err := stores.Requests.GetFiles(req.ID)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename=" + url.QueryEscape(req.Title) + ".zip")
+
+		zw := zip.NewWriter(w)
+		defer zw.Close()
+
+		for _, f := range files {
+			absPath := filepath.Join(cfg.Storage.Path, f.StoragePath)
+			src, err := os.Open(absPath)
+			if err != nil && os.IsNotExist(err) && f.TUSUploadID.Valid {
+				absPath = filepath.Join(cfg.Storage.Path, f.TUSUploadID.String)
+				src, err = os.Open(absPath)
+			}
+			if err != nil {
+				continue
+			}
+			entry, err := zw.Create(f.OriginalName)
+			if err != nil {
+				src.Close()
+				continue
+			}
+			io.Copy(entry, src)
+			src.Close()
+		}
+	}
+}
 
 func renderUploadPage(w http.ResponseWriter, tok string, req *store.UploadRequest, settings *store.Settings) {
 	renderPage(w, "upload.html", struct {
