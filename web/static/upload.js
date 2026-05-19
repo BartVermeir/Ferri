@@ -24,11 +24,7 @@
   function initFileDrop(dropEl, inputEl, onFilesChanged) {
     if (!dropEl || !inputEl) return;
 
-    // Click to open file picker
-    dropEl.addEventListener('click', function (e) {
-      if (e.target === inputEl) return;
-      inputEl.click();
-    });
+    // File input covers the entire drop zone — no manual click handler needed
 
     // File input change
     inputEl.addEventListener('change', function () {

@@ -94,7 +94,8 @@
     .file-drop:hover, .file-drop.dragover { border-color: var(--primary); background: #f8f9ff; }
     .file-drop-icon { font-size: 32px; margin-bottom: 8px; color: #aaa; }
     .file-drop-text { color: #666; font-size: 14px; }
-    .file-drop input[type=file] { display: none; }
+    .file-drop { position: relative; }
+    .file-drop input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
     .file-list { margin-top: 12px; list-style: none; }
     .file-list li {
       display: flex;
