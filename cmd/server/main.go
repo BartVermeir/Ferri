@@ -100,6 +100,9 @@ func main() {
 	r.Get("/ul/{token}", handler.UploadPage(cfg, stores))
 	r.Post("/ul/{token}", handler.UploadPassword(cfg, stores))
 	r.Post("/ul/{token}/complete", handler.UploadComplete(cfg, stores))
+	r.Get("/ul/{token}/files", handler.RequestDownloadPage(cfg, stores))
+	r.Get("/ul/{token}/file/{fileID}", handler.RequestDownloadFile(cfg, stores))
+	r.Get("/ul/{token}/zip", handler.RequestDownloadZIP(cfg, stores))
 	// TUS: use http.StripPrefix so tusd sees the path without /tus prefix
 	r.Mount("/tus", http.StripPrefix("/tus", tusHandler))
 

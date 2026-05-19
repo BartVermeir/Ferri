@@ -1,0 +1,38 @@
+{{define "request_download.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+</head>
+<body>
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card">
+        <h1>{{.Request.Title}}</h1>
+        {{if .Request.Message}}<p class="text-muted mt-8">{{.Request.Message}}</p>{{end}}
+        <hr class="divider">
+        <div style="margin-bottom:16px;">
+          {{range .Files}}
+          <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #f0f0ec;">
+            <div style="width:36px;height:36px;background:#f0f0ec;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">📄</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{.OriginalName}}</div>
+              <div style="font-size:12px;color:#888;">{{.SizeBytes | formatSize}}</div>
+            </div>
+            <a href="{{$.DownloadBase}}/file/{{.ID}}" class="btn btn-primary btn-sm" style="flex-shrink:0;text-decoration:none;">Download</a>
+          </div>
+          {{end}}
+        </div>
+        {{if gt (len .Files) 1}}
+        <div style="display:flex;justify-content:flex-end;padding:8px 0;border-top:1px solid #f0f0ec;margin-top:4px;">
+          <a href="{{$.DownloadBase}}/zip" class="btn btn-secondary" style="text-decoration:none;">↓ Download all as ZIP</a>
+        </div>
+        {{end}}
+      </div>
+    </div>
+  </main>
+</body>
+</html>{{end}}
