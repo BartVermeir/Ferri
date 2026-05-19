@@ -15,8 +15,8 @@
         {{if .WelcomeMessage}}<p class="text-muted mt-8">{{.WelcomeMessage}}</p>{{end}}
         {{if .Error}}<div class="alert alert-error mt-16">{{.Error}}</div>{{end}}
         <form id="send-form">
-          <label>Your name</label>
-          <input type="text" name="sender_name" autocomplete="name" required>
+          <label>Your name <span style="color:#aaa; font-weight:400;">(optional)</span></label>
+          <input type="text" name="sender_name" autocomplete="name">
           <label>Your email</label>
           <input type="email" name="sender_email" autocomplete="email" required>
           <label>Title</label>
@@ -54,5 +54,19 @@
   </main>
   <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
   <script src="/static/upload.js"></script>
+
+<script>
+(function() {
+  var primary = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
+  if (!primary) return;
+  var hex = primary.replace('#','');
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  var r = parseInt(hex.substr(0,2),16)/255;
+  var g = parseInt(hex.substr(2,2),16)/255;
+  var b = parseInt(hex.substr(4,2),16)/255;
+  var luminance = 0.2126*r + 0.7152*g + 0.0722*b;
+  document.documentElement.style.setProperty('--primary-text', luminance > 0.5 ? '#000' : '#fff');
+})();
+</script>
 </body>
 </html>{{end}}
