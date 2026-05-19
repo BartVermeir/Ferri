@@ -14,16 +14,19 @@
         <h1>{{.Transfer.Title}}</h1>
         {{if .Transfer.Message}}<p class="text-muted mt-8">{{.Transfer.Message}}</p>{{end}}
         <hr class="divider">
-        <ul class="file-list">
+        <div style="margin-bottom:16px;">
           {{range .Files}}
-          <li>
-            <span>📄</span>
-            <a href="{{$.DownloadBase}}/file/{{.ID}}">{{.OriginalName}}</a>
-            <span class="file-size">{{.SizeBytes | formatSize}}</span>
-          </li>
+          <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #f0f0ec;">
+            <div style="width:36px;height:36px;background:#f0f0ec;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">📄</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{.OriginalName}}</div>
+              <div style="font-size:12px;color:#888;">{{.SizeBytes | formatSize}}</div>
+            </div>
+            <a href="{{$.DownloadBase}}/file/{{.ID}}" class="btn btn-primary btn-sm" style="flex-shrink:0;text-decoration:none;">Download</a>
+          </div>
           {{end}}
-        </ul>
-        <p class="text-muted mt-16">Expires {{.Transfer.ExpiresAt | formatDate}}</p>
+        </div>
+        <p class="text-muted">Expires {{.Transfer.ExpiresAt | formatDate}}</p>
       </div>
     </div>
   </main>

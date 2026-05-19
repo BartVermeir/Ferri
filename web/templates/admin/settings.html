@@ -19,7 +19,25 @@
         <div class="card-body">
           <label>Company name</label>
           <input type="text" name="branding.company_name" value="{{.Settings.CompanyName}}">
-          <label>Logo URL</label>
+          <label>Logo</label>
+          {{if .Settings.LogoURL}}
+          <div style="margin-bottom:8px;">
+            <img src="{{.Settings.LogoURL}}" style="height:40px;border-radius:4px;border:1px solid #e8e8e4;padding:4px;background:#fff;" alt="Current logo">
+          </div>
+          {{end}}
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <form method="POST" action="/admin/settings/logo" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;">
+              <input type="file" name="logo" accept="image/*" style="font-size:13px;width:auto;">
+              <button type="submit" class="btn btn-secondary btn-sm">Upload logo</button>
+            </form>
+            {{if .Settings.LogoURL}}
+            <form method="POST" action="/admin/settings/logo/delete" style="display:inline;">
+              <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+            </form>
+            {{end}}
+          </div>
+          <p style="font-size:12px;color:#888;margin-top:6px;">PNG, SVG or JPEG · max 200×60px recommended · transparent background</p>
+          <label style="margin-top:16px;">Or logo URL</label>
           <input type="url" name="branding.logo_url" value="{{.Settings.LogoURL}}" placeholder="https://example.com/logo.png">
           <div class="form-row">
             <div>
