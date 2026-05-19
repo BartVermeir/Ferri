@@ -17,7 +17,7 @@
           <span style="word-break:break-all; font-size:14px; color:#333;" id="upload-url">{{.UploadURL}}</span>
         </div>
         <div class="mt-16" style="display:flex; gap:8px;">
-          <button class="btn btn-secondary" id="copy-btn" onclick="(function(){var u=document.getElementById('upload-url').textContent;navigator.clipboard.writeText(u).then(function(){document.getElementById('copy-btn').textContent='Copied!';});})()">Copy link</button>
+          <button class="btn btn-secondary" id="copy-btn">Copy link</button>
           <a href="/request" class="btn btn-secondary" style="text-decoration:none;">New request</a>
         </div>
       </div>
@@ -36,6 +36,14 @@
   var luminance = 0.2126*r + 0.7152*g + 0.0722*b;
   document.documentElement.style.setProperty('--primary-text', luminance > 0.5 ? '#000' : '#fff');
 })();
+</script>
+<script>
+document.getElementById('copy-btn').addEventListener('click', function() {
+  var url = document.getElementById('upload-url').textContent.trim();
+  navigator.clipboard.writeText(url).then(function() {
+    document.getElementById('copy-btn').textContent = 'Copied!';
+  });
+});
 </script>
 </body>
 </html>{{end}}

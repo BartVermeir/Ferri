@@ -16,6 +16,7 @@ package handler
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 
@@ -152,8 +153,8 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// Enqueue notification mail to requester
 		if settings.MailFromAddress != "" {
 			subject := fmt.Sprintf("Files received: %s", req.Title)
-			bodyHTML := buildUploadCompleteHTML(req)
-			bodyText := buildUploadCompleteText(req)
+			bodyHTML := buildUploadCompleteHTML(req, cfg.BaseURL)
+			bodyText := buildUploadCompleteText(req, cfg.BaseURL)
 			if err := stores.Mail.Enqueue(nil, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("upload complete: enqueue mail", "to", req.RequesterEmail, "error", err)
 			}
@@ -189,18 +190,22 @@ func bcryptHashEqual(a, b string) bool {
 
 // ── Mail body builders ────────────────────────────────────────────────────────
 
-func buildUploadCompleteHTML(req *store.UploadRequest) string {
+func buildUploadCompleteHTML(req *store.UploadRequest, baseURL string) string {
+	viewURL := baseURL + "/admin/transfers"
+	msgPart := ""
+	if req.Message != "" {
+		msgPart = fmt.Sprintf(`<p style="margin:0 0 16px;font-size:14px;color:#555;">%s</p>`, html.EscapeString(req.Message))
+	}
 	return fmt.Sprintf(
-		`<p>An external party has finished uploading files for your request: <strong>%s</strong>.</p>
-<p>%s</p>`,
-		req.Title, req.Message,
+		`<p style="margin:0 0 16px;font-size:15px;color:#333;">An external party has uploaded files for your request <strong>%s</strong>.</p>%s<p><a href="%s" style="color:#1a1a1a;">View in admin panel</a></p>`,
+		html.EscapeString(req.Title), msgPart, viewURL,
 	)
 }
 
-func buildUploadCompleteText(req *store.UploadRequest) string {
+func buildUploadCompleteText(req *store.UploadRequest, baseURL string) string {
 	return fmt.Sprintf(
-		"Files have been uploaded for your request '%s'.\n\n%s",
-		req.Title, req.Message,
+		"Files received for your request '%s'.\n\n%s\n\nView in admin: %s/admin/transfers",
+		req.Title, req.Message, baseURL,
 	)
 }
 
