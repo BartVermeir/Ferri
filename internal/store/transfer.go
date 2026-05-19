@@ -441,12 +441,13 @@ func (s *TransferStore) MarkRecipientNotified(recipientID string) error {
 	return err
 }
 
-// ValidateForTUS checks that a transfer exists, is pending, and not expired.
+// ValidateForTUS checks that a transfer exists, is pending or active, and not expired.
+// Active is allowed because multi-file transfers activate after the first file completes.
 func (s *TransferStore) ValidateForTUS(transferID string) (bool, error) {
 	var count int
 	err := s.db.QueryRow(`
 		SELECT COUNT(*) FROM transfers
-		WHERE id = ? AND status = 'pending' AND expires_at > unixepoch()`,
+		WHERE id = ? AND status IN ('pending','active') AND expires_at > unixepoch()`,
 		transferID,
 	).Scan(&count)
 	return count > 0, err
