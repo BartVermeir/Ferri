@@ -23,8 +23,11 @@ package handler
 import (
 	"crypto/subtle"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -274,6 +277,76 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 }
 
 // ── Template rendering placeholders ──────────────────────────────────────────
+
+
+// AdminLogoUpload handles POST /admin/settings/logo
+func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(5 << 20); err != nil {
+			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			return
+		}
+		file, header, err := r.FormFile("logo")
+		if err != nil {
+			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			return
+		}
+		defer file.Close()
+
+		// Validate extension
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".svg" && ext != ".webp" {
+			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			return
+		}
+
+		// Save to storage/logo directory
+		logoDir := filepath.Join(cfg.Storage.Path, "logo")
+		if err := os.MkdirAll(logoDir, 0755); err != nil {
+			slog.Error("logo upload: mkdir", "error", err)
+			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			return
+		}
+
+		logoPath := filepath.Join(logoDir, "logo"+ext)
+		dst, err := os.Create(logoPath)
+		if err != nil {
+			slog.Error("logo upload: create file", "error", err)
+			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			return
+		}
+		defer dst.Close()
+		if _, err := io.Copy(dst, file); err != nil {
+			slog.Error("logo upload: write file", "error", err)
+			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			return
+		}
+
+		// Save logo URL to settings
+		logoURL := "/static/logo/logo" + ext
+		if err := stores.Settings.Save("branding.logo_url", logoURL); err != nil {
+			slog.Error("logo upload: save setting", "error", err)
+		}
+
+		http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+	}
+}
+
+// AdminLogoDelete handles POST /admin/settings/logo/delete
+func AdminLogoDelete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Clear the setting
+		if err := stores.Settings.Save("branding.logo_url", ""); err != nil {
+			slog.Error("logo delete: save setting", "error", err)
+		}
+		// Remove files
+		logoDir := filepath.Join(cfg.Storage.Path, "logo")
+		for _, ext := range []string{".png", ".jpg", ".jpeg", ".svg", ".webp"} {
+			os.Remove(filepath.Join(logoDir, "logo"+ext))
+		}
+		http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+	}
+}
 
 func renderAdminLogin(w http.ResponseWriter, errMsg string) {
 	if errMsg != "" {

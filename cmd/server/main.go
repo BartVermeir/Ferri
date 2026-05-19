@@ -91,6 +91,8 @@ func main() {
 	// Public routes
 	r.Get("/health", handler.Health())
 	r.Handle("/static/*", http.StripPrefix("/static/", handler.Static()))
+	// Serve uploaded logo from storage path
+	r.Handle("/static/logo/*", http.StripPrefix("/static/logo/", http.FileServer(http.Dir(cfg.Storage.Path+"/logo"))))
 	r.Get("/dl/{token}", handler.DownloadPage(cfg, stores))
 	r.Post("/dl/{token}", handler.DownloadPassword(cfg, stores))
 	r.Get("/dl/{token}/file/{fileID}", handler.DownloadFile(cfg, stores))
@@ -124,6 +126,8 @@ func main() {
 			r.Post("/admin/mail/{id}/delete", handler.AdminMailDelete(cfg, stores))
 			r.Get("/admin/settings", handler.AdminSettings(cfg, stores))
 			r.Post("/admin/settings", handler.AdminSettingsSave(cfg, stores))
+		r.Post("/admin/settings/logo", handler.AdminLogoUpload(cfg, stores))
+		r.Post("/admin/settings/logo/delete", handler.AdminLogoDelete(cfg, stores))
 			r.Post("/admin/logout", handler.AdminLogout())
 		})
 	})

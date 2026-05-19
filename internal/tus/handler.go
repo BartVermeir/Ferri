@@ -27,6 +27,7 @@ package tus
 import (
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"os"
@@ -359,7 +360,7 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 	for _, r := range recipients {
 		downloadURL := baseURL + "/dl/" + r.DownloadToken
 		subject := "Files available: " + t.Title
-		bodyHTML := buildAvailableHTML(t.SenderName, t.Title, t.Message, downloadURL)
+		bodyHTML := buildAvailableHTML(t.SenderName, t.Title, t.Message, downloadURL, h.stores.Settings.Get())
 		bodyText := buildAvailableText(t.SenderName, t.Title, t.Message, downloadURL)
 
 		if err := h.stores.Mail.Enqueue(nil, r.Email, subject, bodyHTML, bodyText); err != nil {
@@ -373,7 +374,7 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 
 	// Sender confirmation
 	subject := "Transfer sent: " + t.Title
-	bodyHTML := buildConfirmHTML(t.Title, len(recipients))
+	bodyHTML := buildConfirmHTML(t.Title, len(recipients), h.stores.Settings.Get())
 	bodyText := buildConfirmText(t.Title, len(recipients))
 	if err := h.stores.Mail.Enqueue(nil, t.SenderEmail, subject, bodyHTML, bodyText); err != nil {
 		slog.Error("tus: enqueue sender confirmation", "to", t.SenderEmail, "error", err)
@@ -436,22 +437,85 @@ func (r *responseRecorder) WriteHeader(status int) {
 // ── Mail body builders ────────────────────────────────────────────────────────
 // Placeholder implementations — replace with template rendering in internal/mail/.
 
-func buildAvailableHTML(senderName, title, message, downloadURL string) string {
-	return fmt.Sprintf(`<p><strong>%s</strong> has shared files with you.</p>
-<p><strong>%s</strong></p>
-<p>%s</p>
-<p><a href="%s">Download files</a></p>`,
-		senderName, title, message, downloadURL)
+func mailWrap(settings *store.Settings, bodyHTML string) string {
+	primary := settings.PrimaryColor
+	if primary == "" {
+		primary = "#000000"
+	}
+	company := settings.CompanyName
+	if company == "" {
+		company = "Ferri"
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f8f8f6;font-family:system-ui,sans-serif;">
+  <table width="100%%" cellpadding="0" cellspacing="0" style="background:#f8f8f6;padding:32px 16px;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;">
+        <tr><td style="background:%s;padding:20px 32px;border-radius:8px 8px 0 0;">
+          <span style="color:#fff;font-size:16px;font-weight:600;">%s</span>
+        </td></tr>
+        <tr><td style="background:#fff;padding:32px;border-radius:0 0 8px 8px;border:1px solid #e8e8e4;border-top:none;">
+          %s
+        </td></tr>
+        <tr><td style="padding:16px 0;text-align:center;">
+          <span style="color:#aaa;font-size:12px;">Sent via %s</span>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`, primary, company, bodyHTML, company)
+}
+
+func buildAvailableHTML(senderName, title, message, downloadURL string, settings *store.Settings) string {
+	senderDisplay := senderName
+	if senderDisplay == "" {
+		senderDisplay = "Someone"
+	}
+	body := fmt.Sprintf(`
+<p style="margin:0 0 16px;font-size:15px;color:#333;"><strong>%s</strong> has shared files with you.</p>
+<p style="margin:0 0 8px;font-size:18px;font-weight:600;color:#1a1a1a;">%s</p>
+%s
+<table width="100%%" cellpadding="0" cellspacing="0" style="margin:24px 0;">
+  <tr><td>
+    <a href="%s" style="display:inline-block;padding:12px 24px;background:%s;color:#fff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:500;">Download files</a>
+  </td></tr>
+</table>`,
+		html.EscapeString(senderDisplay),
+		html.EscapeString(title),
+		func() string {
+			if message == "" { return "" }
+			return fmt.Sprintf(`<p style="margin:0 0 16px;font-size:14px;color:#555;">%s</p>`, html.EscapeString(message))
+		}(),
+		downloadURL,
+		func() string {
+			if settings != nil && settings.PrimaryColor != "" { return settings.PrimaryColor }
+			return "#000000"
+		}(),
+	)
+	if settings != nil {
+		return mailWrap(settings, body)
+	}
+	return body
 }
 
 func buildAvailableText(senderName, title, message, downloadURL string) string {
+	if senderName == "" {
+		senderName = "Someone"
+	}
 	return fmt.Sprintf("%s has shared files with you.\n\n%s\n%s\n\nDownload: %s",
 		senderName, title, message, downloadURL)
 }
 
-func buildConfirmHTML(title string, recipientCount int) string {
-	return fmt.Sprintf(`<p>Your transfer <strong>%s</strong> has been sent to %s.</p>`,
-		title, strconv.Itoa(recipientCount)+" recipient(s)")
+func buildConfirmHTML(title string, recipientCount int, settings *store.Settings) string {
+	body := fmt.Sprintf(`<p style="margin:0 0 16px;font-size:15px;color:#333;">Your transfer <strong>%s</strong> has been sent to %d recipient(s) and is ready for download.</p>`,
+		html.EscapeString(title), recipientCount)
+	if settings != nil {
+		return mailWrap(settings, body)
+	}
+	return body
 }
 
 func buildConfirmText(title string, recipientCount int) string {
