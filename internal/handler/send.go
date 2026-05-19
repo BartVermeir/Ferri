@@ -271,64 +271,19 @@ func jsonError(w http.ResponseWriter, msg string, status int) {
 // Replace with real template rendering when web/templates/ are implemented.
 
 func renderSendPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-	// Build expiry options HTML
-	var opts strings.Builder
-	for _, opt := range cfg.ExpiryOptions {
-		opts.WriteString(fmt.Sprintf(
-			`<option value="%d">%s</option>`, opt.Hours, opt.Label,
-		))
-	}
-
 	pageTitle := settings.SendPageTitle
 	if pageTitle == "" {
 		pageTitle = "Send files"
 	}
-
-	welcomeMsg := ""
-	if settings.WelcomeMessage != "" {
-		welcomeMsg = fmt.Sprintf("<p>%s</p>", settings.WelcomeMessage)
-	}
-
-	errHTML := ""
-	if errMsg != "" {
-		errHTML = fmt.Sprintf(`<p style="color:red">%s</p>`, errMsg)
-	}
-
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-  <title>%s — %s</title>
-  <meta charset="utf-8">
-</head>
-<body>
-  <h1>%s</h1>
-  %s
-  %s
-  <form id="send-form">
-    <label>Your name<br><input type="text" name="sender_name" required></label><br><br>
-    <label>Your email<br><input type="email" name="sender_email" required></label><br><br>
-    <label>Title<br><input type="text" name="title"></label><br><br>
-    <label>Message<br><textarea name="message"></textarea></label><br><br>
-    <label>Recipients (one per line or comma-separated)<br>
-      <textarea name="recipients" required></textarea>
-    </label><br><br>
-    <label>Files<br><input type="file" name="files" multiple required></label><br><br>
-    <label>Expires after
-      <select name="expiry_hours">%s</select>
-    </label><br><br>
-    <label>Password (optional)<br><input type="password" name="password"></label><br><br>
-    <button type="submit">Send files</button>
-  </form>
-  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
-  <script src="/static/upload.js"></script>
-</body>
-</html>`,
-		pageTitle, settings.CompanyName,
-		pageTitle,
-		welcomeMsg,
-		errHTML,
-		opts.String(),
-	)
+	renderPage(w, "send.html", struct {
+		baseData
+		ExpiryOptions []config.ExpiryOption
+		Error         string
+		WelcomeMessage string
+	}{
+		baseData:      baseData{PageTitle: pageTitle, Settings: settings},
+		ExpiryOptions: cfg.ExpiryOptions,
+		Error:         errMsg,
+		WelcomeMessage: settings.WelcomeMessage,
+	})
 }

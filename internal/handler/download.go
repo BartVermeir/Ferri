@@ -322,47 +322,40 @@ type downloadPageData struct {
 }
 
 func renderDownloadPage(w http.ResponseWriter, data downloadPageData) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Download files</title></head>
-<body>
-<h1>%s</h1>
-<p>%s</p>
-<ul>
-`, data.Transfer.Title, data.Transfer.Message)
-	for _, f := range data.Files {
-		fmt.Fprintf(w, `<li><a href="/dl/%s/file/%s">%s</a></li>`,
-			data.Token, f.ID, f.OriginalName)
+	pageTitle := data.Settings.DownloadPageTitle
+	if pageTitle == "" {
+		pageTitle = "Download files"
 	}
-	fmt.Fprintf(w, `</ul></body></html>`)
+	renderPage(w, "download.html", struct {
+		baseData
+		Transfer     *store.Transfer
+		Files        []store.File
+		DownloadBase string
+	}{
+		baseData:     baseData{PageTitle: pageTitle, Settings: data.Settings},
+		Transfer:     data.Transfer,
+		Files:        data.Files,
+		DownloadBase: "/dl/" + data.Token,
+	})
 }
 
 func renderPasswordPage(w http.ResponseWriter, tok string, settings *store.Settings, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if errMsg != "" {
-		w.WriteHeader(http.StatusUnauthorized)
-	}
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Password required</title></head>
-<body>
-<h1>Password required</h1>
-%s
-<form method="POST" action="/dl/%s">
-  <input type="password" name="password" autofocus>
-  <button type="submit">Continue</button>
-</form>
-</body></html>`, errMsg, tok)
+	renderPage(w, "password.html", struct {
+		baseData
+		Token string
+		Error string
+	}{
+		baseData: baseData{PageTitle: "Password required", Settings: settings},
+		Token:    tok,
+		Error:    errMsg,
+	})
 }
 
 func renderNotFound(w http.ResponseWriter, settings *store.Settings) {
 	// Headers MUST be set before WriteHeader — after WriteHeader they are ignored.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><title>Not found</title></head>
-<body><h1>Transfer not found or expired.</h1></body></html>`)
+	renderPage(w, "download.html", baseData{PageTitle: "Download complete", Settings: settings})
 }
 
 // ── Mail body builders ────────────────────────────────────────────────────────

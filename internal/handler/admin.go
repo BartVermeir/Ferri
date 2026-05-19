@@ -23,7 +23,6 @@ package handler
 import (
 	"crypto/subtle"
 	"fmt"
-	"html"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -277,187 +276,99 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 // ── Template rendering placeholders ──────────────────────────────────────────
 
 func renderAdminLogin(w http.ResponseWriter, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if errMsg != "" {
 		w.WriteHeader(http.StatusUnauthorized)
 	}
+	// Login page uses minimal inline HTML (no settings available yet)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	errHTML := ""
 	if errMsg != "" {
-		errHTML = fmt.Sprintf(`<p style="color:red">%s</p>`, errMsg)
+		errHTML = `<p style="color:red;margin-bottom:16px">` + errMsg + `</p>`
 	}
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
-<head><title>Admin login</title><meta charset="utf-8"></head>
+<head><title>Admin login</title><meta charset="utf-8">
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f8f8f6;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#fff;border:1px solid #e8e8e4;border-radius:12px;padding:32px;width:340px}h1{font-size:20px;font-weight:500;margin-bottom:24px}label{display:block;font-size:13px;font-weight:500;color:#555;margin-bottom:4px}input{width:100%%;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none;margin-bottom:16px}.btn{width:100%%;padding:10px;border:none;border-radius:8px;background:#000;color:#fff;font-size:14px;font-weight:500;cursor:pointer}</style>
+</head>
 <body>
+<div class="card">
   <h1>Admin login</h1>
   %s
   <form method="POST" action="/admin/login">
-    <label>Token<br><input type="password" name="token" autofocus required></label><br><br>
-    <button type="submit">Login</button>
+    <label>Token</label>
+    <input type="password" name="token" autofocus required>
+    <button type="submit" class="btn">Login</button>
   </form>
+</div>
 </body>
 </html>`, errHTML)
 }
 
+type dashboardStats struct {
+	ActiveTransfers int
+	ActiveRequests  int
+	PendingMails    int
+	FailedMails     int
+}
+
 func renderAdminDashboard(w http.ResponseWriter, settings *store.Settings, transfers []store.Transfer, failedMailCount int) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-	mailBadge := ""
-	if failedMailCount > 0 {
-		mailBadge = fmt.Sprintf(` <span style="color:red">(%d failed)</span>`, failedMailCount)
-	}
-
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Admin — %s</title><meta charset="utf-8"></head>
-<body>
-  <h1>%s — Admin</h1>
-  <nav>
-    <a href="/admin">Dashboard</a> |
-    <a href="/admin/transfers">Transfers</a> |
-    <a href="/admin/mail">Mail queue%s</a> |
-    <a href="/admin/settings">Settings</a> |
-    <form method="POST" action="/admin/logout" style="display:inline">
-      <button type="submit">Logout</button>
-    </form>
-  </nav>
-  <hr>
-  <h2>Active transfers (%d)</h2>
-  <ul>`,
-		settings.CompanyName, settings.CompanyName, mailBadge, len(transfers))
-
+	active := 0
 	for _, t := range transfers {
-		fmt.Fprintf(w, `<li>%s — %s (expires %s)</li>`,
-			t.Title, t.SenderEmail, t.ExpiresAt.Format("2 Jan 2006"))
+		if t.Status == "active" {
+			active++
+		}
 	}
-
-	fmt.Fprintf(w, `</ul></body></html>`)
+	// Show only recent 10
+	recent := transfers
+	if len(recent) > 10 {
+		recent = recent[:10]
+	}
+	renderPage(w, "admin/dashboard.html", struct {
+		adminData
+		Stats           dashboardStats
+		RecentTransfers []store.Transfer
+	}{
+		adminData: adminData{PageTitle: "Dashboard", ActiveNav: "dashboard", Settings: settings},
+		Stats: dashboardStats{
+			ActiveTransfers: active,
+			FailedMails:     failedMailCount,
+		},
+		RecentTransfers: recent,
+	})
 }
 
 func renderAdminTransfers(w http.ResponseWriter, settings *store.Settings, transfers []store.Transfer) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Transfers — Admin</title><meta charset="utf-8"></head>
-<body>
-  <h1>All transfers</h1>
-  <a href="/admin">← Dashboard</a>
-  <table border="1" cellpadding="4">
-    <tr><th>Title</th><th>Sender</th><th>Status</th><th>Expires</th><th>Action</th></tr>`)
-
-	for _, t := range transfers {
-		deleteBtn := fmt.Sprintf(`<form method="POST" action="/admin/transfers/%s/delete" style="display:inline">
-      <button type="submit" onclick="return confirm('Delete this transfer?')">Delete</button>
-    </form>`, t.ID)
-		if t.Status == "deleted" {
-			deleteBtn = "—"
-		}
-		fmt.Fprintf(w, `<tr>
-      <td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>
-    </tr>`,
-			t.Title, t.SenderEmail, t.Status,
-			t.ExpiresAt.Format("2 Jan 2006 15:04"),
-			deleteBtn)
-	}
-
-	fmt.Fprintf(w, `</table></body></html>`)
+	renderPage(w, "admin/transfers.html", struct {
+		adminData
+		Transfers []store.Transfer
+	}{
+		adminData: adminData{PageTitle: "Transfers", ActiveNav: "transfers", Settings: settings},
+		Transfers: transfers,
+	})
 }
 
 func renderAdminMail(w http.ResponseWriter, settings *store.Settings, mails []store.MailItem) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Mail queue — Admin</title><meta charset="utf-8"></head>
-<body>
-  <h1>Failed mail queue (%d)</h1>
-  <a href="/admin">← Dashboard</a>
-  <table border="1" cellpadding="4">
-    <tr><th>To</th><th>Subject</th><th>Attempts</th><th>Error</th><th>Actions</th></tr>`,
-		len(mails))
-
-	for _, m := range mails {
-		errMsg := ""
-		if m.ErrorMessage.Valid {
-			errMsg = m.ErrorMessage.String
-		}
-		fmt.Fprintf(w, `<tr>
-      <td>%s</td><td>%s</td><td>%d/%d</td><td>%s</td>
-      <td>
-        <form method="POST" action="/admin/mail/%s/retry" style="display:inline">
-          <button type="submit">Retry</button>
-        </form>
-        <form method="POST" action="/admin/mail/%s/delete" style="display:inline">
-          <button type="submit" onclick="return confirm('Delete this mail?')">Delete</button>
-        </form>
-      </td>
-    </tr>`,
-			m.ToAddress, m.Subject, m.Attempts, m.MaxAttempts, errMsg,
-			m.ID, m.ID)
-	}
-
-	fmt.Fprintf(w, `</table></body></html>`)
+	renderPage(w, "admin/mail.html", struct {
+		adminData
+		Mails []store.MailItem
+	}{
+		adminData: adminData{PageTitle: "Mail queue", ActiveNav: "mail", Settings: settings},
+		Mails:     mails,
+	})
 }
 
 func renderAdminSettings(w http.ResponseWriter, settings *store.Settings, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if errMsg != "" {
-		w.WriteHeader(http.StatusInternalServerError)
+	saved := errMsg == "saved"
+	if saved {
+		errMsg = ""
 	}
-	errHTML := ""
-	if errMsg != "" {
-		errHTML = fmt.Sprintf(`<p style="color:red">%s</p>`, errMsg)
-	}
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Settings — Admin</title><meta charset="utf-8"></head>
-<body>
-  <h1>Settings</h1>
-  <a href="/admin">← Dashboard</a>
-  %s
-  <form method="POST" action="/admin/settings">
-    <h2>Branding</h2>
-    <label>Company name<br><input type="text" name="branding.company_name" value="%s"></label><br><br>
-    <label>Logo URL<br><input type="text" name="branding.logo_url" value="%s"></label><br><br>
-    <label>Primary colour<br><input type="color" name="branding.primary_color" value="%s"></label><br><br>
-    <label>Accent colour<br><input type="color" name="branding.accent_color" value="%s"></label><br><br>
-    <label>Background colour<br><input type="color" name="branding.bg_color" value="%s"></label><br><br>
-
-    <h2>UI text</h2>
-    <label>Welcome message<br><textarea name="ui.welcome_message">%s</textarea></label><br><br>
-    <label>Send page title<br><input type="text" name="ui.send_page_title" value="%s"></label><br><br>
-    <label>Download page title<br><input type="text" name="ui.download_page_title" value="%s"></label><br><br>
-
-    <h2>Mail</h2>
-    <label>From name<br><input type="text" name="mail.from_name" value="%s"></label><br><br>
-    <label>From address<br><input type="email" name="mail.from_address" value="%s"></label><br><br>
-    <label><input type="checkbox" name="mail.notify_on_download" value="true" %s>
-      Notify sender on each download</label><br><br>
-    <label><input type="checkbox" name="mail.expiry_summary" value="true" %s>
-      Send expiry summary when transfer expires</label><br><br>
-
-    <button type="submit">Save settings</button>
-  </form>
-</body>
-</html>`,
-		errHTML,
-		html.EscapeString(settings.CompanyName),
-		html.EscapeString(settings.LogoURL),
-		html.EscapeString(settings.PrimaryColor),
-		html.EscapeString(settings.AccentColor),
-		html.EscapeString(settings.BgColor),
-		html.EscapeString(settings.WelcomeMessage),
-		html.EscapeString(settings.SendPageTitle),
-		html.EscapeString(settings.DownloadPageTitle),
-		html.EscapeString(settings.MailFromName),
-		html.EscapeString(settings.MailFromAddress),
-		checkedIf(settings.NotifyOnDownload),
-		checkedIf(settings.ExpirySummary),
-	)
-}
-
-func checkedIf(b bool) string {
-	if b {
-		return "checked"
-	}
-	return ""
+	renderPage(w, "admin/settings.html", struct {
+		adminData
+		Saved bool
+		Error string
+	}{
+		adminData: adminData{PageTitle: "Settings", ActiveNav: "settings", Settings: settings},
+		Saved:     saved,
+		Error:     errMsg,
+	})
 }

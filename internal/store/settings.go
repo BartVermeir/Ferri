@@ -14,6 +14,7 @@ type Settings struct {
 	PrimaryColor      string
 	AccentColor       string
 	BgColor           string
+	FontFamily        string
 	WelcomeMessage    string
 	SendPageTitle     string
 	DownloadPageTitle string
@@ -111,6 +112,7 @@ func (s *SettingsStore) load() (*Settings, error) {
 		CompanyName:       orDefault(kv["branding.company_name"], "My Organisation"),
 		LogoURL:           kv["branding.logo_url"],
 		PrimaryColor:      orDefault(kv["branding.primary_color"], "#000000"),
+		FontFamily:        kv["branding.font_family"],
 		AccentColor:       orDefault(kv["branding.accent_color"], "#f0c800"),
 		BgColor:           orDefault(kv["branding.bg_color"], "#ffffff"),
 		WelcomeMessage:    kv["ui.welcome_message"],
