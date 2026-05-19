@@ -15,8 +15,10 @@ package handler
 //   - Download notification mail enqueued (not sent directly) if enabled
 
 import (
+	"archive/zip"
 	"crypto/subtle"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -371,6 +373,77 @@ func buildDownloadNotifyText(t *store.Transfer, recipientEmail, filename string)
 }
 
 // ── Logging helper ────────────────────────────────────────────────────────────
+
+
+// DownloadZIP handles GET /dl/:token/zip.
+// Streams all files in the transfer as a ZIP archive.
+func DownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok := chi.URLParam(r, "token")
+		settings := appMiddleware.GetSettings(r)
+
+		transfer, _, files, err := stores.Transfers.GetByDownloadToken(tok)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if transfer == nil {
+			renderNotFound(w, settings)
+			return
+		}
+
+		if transfer.PasswordHash.Valid {
+			if !downloadPasswordValid(r, transfer.PasswordHash.String) {
+				http.Redirect(w, r, "/dl/"+tok, http.StatusSeeOther)
+				return
+			}
+		}
+
+		// Derive a safe ZIP filename from the transfer title
+		zipName := strings.Map(func(r rune) rune {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == ' ' {
+				return r
+			}
+			return '_'
+		}, transfer.Title)
+		if zipName == "" {
+			zipName = "files"
+		}
+		zipName = strings.ReplaceAll(zipName, " ", "_") + ".zip"
+
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename="+url.QueryEscape(zipName))
+
+		zw := zip.NewWriter(w)
+		defer zw.Close()
+
+		for _, f := range files {
+			absPath := filepath.Join(cfg.Storage.Path, f.StoragePath)
+			src, err := os.Open(absPath)
+			if err != nil && os.IsNotExist(err) && f.TUSUploadID.Valid {
+				absPath = filepath.Join(cfg.Storage.Path, f.TUSUploadID.String)
+				src, err = os.Open(absPath)
+			}
+			if err != nil {
+				slog.Error("zip: open file", "file_id", f.ID, "error", err)
+				continue
+			}
+
+			entry, err := zw.Create(f.OriginalName)
+			if err != nil {
+				src.Close()
+				slog.Error("zip: create entry", "file_id", f.ID, "error", err)
+				continue
+			}
+			if _, err := io.Copy(entry, src); err != nil {
+				src.Close()
+				slog.Error("zip: copy file", "file_id", f.ID, "error", err)
+				continue
+			}
+			src.Close()
+		}
+	}
+}
 
 func logDownloadError(op string, err error, fileID string) {
 	slog.Error("download handler: "+op, "file_id", fileID, "error", err)
