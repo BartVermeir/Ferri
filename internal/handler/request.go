@@ -13,7 +13,6 @@ package handler
 //   (/ul/:token) which the internal user sends to the external party.
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -123,59 +122,25 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 // ── Template rendering placeholders ──────────────────────────────────────────
 
 func renderRequestPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-	var opts strings.Builder
-	for _, opt := range cfg.ExpiryOptions {
-		opts.WriteString(fmt.Sprintf(`<option value="%d">%s</option>`, opt.Hours, opt.Label))
-	}
-
-	errHTML := ""
-	if errMsg != "" {
-		w.WriteHeader(http.StatusBadRequest)
-		errHTML = fmt.Sprintf(`<p style="color:red">%s</p>`, errMsg)
-	}
-
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Request files — %s</title><meta charset="utf-8"></head>
-<body>
-  <h1>Request files</h1>
-  %s
-  <form method="POST" action="/request">
-    <label>Your name<br><input type="text" name="requester_name" required></label><br><br>
-    <label>Your email<br><input type="email" name="requester_email" required></label><br><br>
-    <label>Title<br><input type="text" name="title"></label><br><br>
-    <label>Message (instructions for uploader)<br>
-      <textarea name="message"></textarea>
-    </label><br><br>
-    <label>Link expires after
-      <select name="expiry_hours">%s</select>
-    </label><br><br>
-    <label>Password (optional)<br><input type="password" name="password"></label><br><br>
-    <button type="submit">Create upload link</button>
-  </form>
-</body>
-</html>`,
-		settings.CompanyName,
-		errHTML,
-		opts.String(),
-	)
+	renderPage(w, "request.html", struct {
+		baseData
+		ExpiryOptions []config.ExpiryOption
+		Error         string
+	}{
+		baseData:      baseData{PageTitle: "Request files", Settings: settings},
+		ExpiryOptions: cfg.ExpiryOptions,
+		Error:         errMsg,
+	})
 }
 
 func renderRequestResult(w http.ResponseWriter, uploadURL, title string, settings *store.Settings) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Upload link created — %s</title><meta charset="utf-8"></head>
-<body>
-  <h1>Upload link created</h1>
-  <p>Send this link to the person you want files from:</p>
-  <p><a href="%s">%s</a></p>
-  <p><input type="text" value="%s" readonly onclick="this.select()"></p>
-</body>
-</html>`,
-		settings.CompanyName,
-		uploadURL, uploadURL, uploadURL,
-	)
+	renderPage(w, "request_created.html", struct {
+		baseData
+		UploadURL string
+		ExpiresAt string
+	}{
+		baseData:  baseData{PageTitle: "Upload link created", Settings: settings},
+		UploadURL: uploadURL,
+		ExpiresAt: "",
+	})
 }

@@ -70,13 +70,11 @@ func (s *Scheduler) runLoop(interval time.Duration, fn func()) {
 // Sends via SMTP and updates status. Retries on failure with exponential backoff.
 // See architecture.md §10 (Mail job) for the full specification.
 func (s *Scheduler) runMailJob() {
-	slog.Info("mail job: tick")
 	items, err := s.stores.Mail.FetchPending(20)
 	if err != nil {
 		slog.Error("mail job: fetch pending", "error", err)
 		return
 	}
-	slog.Info("mail job: fetched", "count", len(items))
 
 	// Load settings once per batch — provides runtime from_address and from_name.
 	settings := s.stores.Settings.Get()

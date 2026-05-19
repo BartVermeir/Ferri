@@ -125,13 +125,6 @@ func (h *Handler) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 	meta := hook.Upload.MetaData
 	size := hook.Upload.Size
 
-	// Debug: log all received metadata keys
-	metaKeys := make([]string, 0, len(meta))
-	for k := range meta {
-		metaKeys = append(metaKeys, k)
-	}
-	slog.Info("tus: preUploadCreate", "meta_keys", metaKeys, "size", size)
-
 	if transferID, ok := meta["transfer_id"]; ok {
 		return h.preCreateTransferFile(transferID, meta, size)
 	}
@@ -139,7 +132,6 @@ func (h *Handler) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 		return h.preCreateRequestFile(reqToken, meta, size)
 	}
 
-	slog.Warn("tus: missing transfer_id or upload_request_token", "meta_keys", metaKeys)
 	return rejectWith(http.StatusBadRequest,
 		"missing transfer_id or upload_request_token in TUS metadata")
 }
@@ -249,8 +241,6 @@ func (h *Handler) handleCreated(ch <-chan tusd.HookEvent) {
 		fileID := event.Upload.MetaData[metaKeyFileID]
 		ctx := event.Upload.MetaData["context"]
 		tusID := event.Upload.ID
-
-		slog.Info("tus: handleCreated", "file_id", fileID, "tus_id", tusID, "ctx", ctx)
 
 		if fileID == "" {
 			slog.Warn("tus: handleCreated missing file_id", "tus_id", tusID)

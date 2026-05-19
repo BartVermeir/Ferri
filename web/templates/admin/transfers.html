@@ -1,1 +1,37 @@
+{{template "admin/base.html" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>All transfers</h1>
+</div>
 
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Sender</th>
+        <th>Status</th>
+        <th>Expires</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Transfers}}
+      <tr>
+        <td>{{.Title}}</td>
+        <td>{{.SenderEmail}}</td>
+        <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+        <td>{{.ExpiresAt | formatDate}}</td>
+        <td>
+          <form method="POST" action="/admin/transfers/{{.ID}}/delete" style="display:inline">
+            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this transfer?')">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="5" style="color:#aaa; text-align:center; padding:24px;">No transfers</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}

@@ -1,1 +1,55 @@
+{{template "admin/base.html" .}}
+{{define "content"}}
+<div class="page-header">
+  <h1>Dashboard</h1>
+  <a href="/send" class="btn btn-secondary btn-sm">↗ Send files</a>
+</div>
 
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-label">Active transfers</div>
+    <div class="stat-value">{{.Stats.ActiveTransfers}}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Active requests</div>
+    <div class="stat-value">{{.Stats.ActiveRequests}}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Pending mails</div>
+    <div class="stat-value">{{.Stats.PendingMails}}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Failed mails</div>
+    <div class="stat-value">{{.Stats.FailedMails}}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    Recent active transfers
+    <a href="/admin/transfers" class="btn btn-secondary btn-sm">View all</a>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Type</th>
+        <th>Sender</th>
+        <th>Expires</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .RecentTransfers}}
+      <tr>
+        <td>{{.Title}}</td>
+        <td><span class="badge badge-transfer">Transfer</span></td>
+        <td>{{.SenderEmail}}</td>
+        <td>{{.ExpiresAt | formatDate}}</td>
+      </tr>
+      {{else}}
+      <tr><td colspan="4" style="color:#aaa; text-align:center; padding:24px;">No active transfers</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}

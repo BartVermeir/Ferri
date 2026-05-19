@@ -1,1 +1,20 @@
-
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-wrap">
+  <div class="card">
+    <h1>{{.Transfer.Title}}</h1>
+    {{if .Transfer.Message}}<p class="text-muted mt-8">{{.Transfer.Message}}</p>{{end}}
+    <hr class="divider">
+    <ul class="file-list">
+      {{range .Files}}
+      <li>
+        <span>📄</span>
+        <a href="{{$.DownloadBase}}/file/{{.ID}}">{{.OriginalName}}</a>
+        <span class="file-size">{{.SizeBytes | formatSize}}</span>
+      </li>
+      {{end}}
+    </ul>
+    <p class="text-muted mt-16">Expires {{.Transfer.ExpiresAt | formatDate}}</p>
+  </div>
+</div>
+{{end}}

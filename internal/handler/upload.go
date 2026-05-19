@@ -207,71 +207,46 @@ func buildUploadCompleteText(req *store.UploadRequest) string {
 // ── Template rendering placeholders ──────────────────────────────────────────
 
 func renderUploadPage(w http.ResponseWriter, tok string, req *store.UploadRequest, settings *store.Settings) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Upload files — %s</title><meta charset="utf-8"></head>
-<body>
-  <h1>%s</h1>
-  <p>%s</p>
-  <div id="upload-area">
-    <input type="file" id="file-input" multiple>
-    <div id="file-list"></div>
-    <button id="upload-btn">Start upload</button>
-  </div>
-  <form id="complete-form" method="POST" action="/ul/%s/complete" style="display:none">
-    <button type="submit">I'm done uploading</button>
-  </form>
-  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
-  <script>
-    window.FERRI_UPLOAD_TOKEN = %q;
-  </script>
-  <script src="/static/upload.js"></script>
-</body>
-</html>`,
-		settings.CompanyName,
-		req.Title,
-		req.Message,
-		tok,
-		tok,
-	)
+	renderPage(w, "upload.html", struct {
+		baseData
+		Request     *store.UploadRequest
+		CompleteURL string
+	}{
+		baseData:    baseData{PageTitle: req.Title, Settings: settings},
+		Request:     req,
+		CompleteURL: "/ul/" + tok + "/complete",
+	})
 }
 
 func renderUploadPasswordPage(w http.ResponseWriter, tok string, settings *store.Settings, errMsg string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if errMsg != "" {
-		w.WriteHeader(http.StatusUnauthorized)
-	}
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Password required</title><meta charset="utf-8"></head>
-<body>
-  <h1>Password required</h1>
-  %s
-  <form method="POST" action="/ul/%s">
-    <input type="password" name="password" autofocus>
-    <button type="submit">Continue</button>
-  </form>
-</body>
-</html>`, errMsg, tok)
-}
-
-func renderUploadComplete(w http.ResponseWriter, req *store.UploadRequest, settings *store.Settings) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Upload complete</title><meta charset="utf-8"></head>
-<body>
-  <h1>Thank you</h1>
-  <p>Your files have been received. You can close this window.</p>
-</body>
-</html>`)
+	renderPage(w, "password.html", struct {
+		baseData
+		Token string
+		Error string
+	}{
+		baseData: baseData{PageTitle: "Password required", Settings: settings},
+		Token:    tok,
+		Error:    errMsg,
+	})
 }
 
 func renderUploadNotFound(w http.ResponseWriter, settings *store.Settings) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html><head><title>Not found</title></head>
-<body><h1>Upload link not found or expired.</h1></body></html>`)
+	renderPage(w, "upload_complete.html", struct {
+		baseData
+		Message string
+	}{
+		baseData: baseData{PageTitle: "Not found", Settings: settings},
+		Message:  "This upload link has expired or does not exist.",
+	})
+}
+
+func renderUploadComplete(w http.ResponseWriter, req *store.UploadRequest, settings *store.Settings) {
+	renderPage(w, "upload_complete.html", struct {
+		baseData
+		Message string
+	}{
+		baseData: baseData{PageTitle: "Upload complete", Settings: settings},
+		Message:  "Your files have been received.",
+	})
 }
