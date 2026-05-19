@@ -16,6 +16,7 @@ package handler
 
 import (
 	"fmt"
+	"strings"
 	"net/url"
 	"time"
 	"path/filepath"
@@ -284,29 +285,26 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerF
 			return
 		}
 
-		files, err := stores.Requests.GetFiles(req.ID)
-		if err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		var target *store.UploadRequestFile
-		for i := range files {
-			if files[i].ID == fileID {
-				target = &files[i]
-				break
-			}
-		}
-		if target == nil {
+		// Read file fresh from DB to get latest tus_upload_id
+		target, err := stores.Requests.GetRequestFileByID(fileID)
+		if err != nil || target == nil || target.UploadRequestID != req.ID {
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
 
 		absPath := filepath.Join(cfg.Storage.Path, target.StoragePath)
 		f, err := os.Open(absPath)
-		if err != nil && os.IsNotExist(err) && target.TUSUploadID.Valid {
-			absPath = filepath.Join(cfg.Storage.Path, target.TUSUploadID.String)
-			f, err = os.Open(absPath)
+		if err != nil && os.IsNotExist(err) {
+			if target.TUSUploadID.Valid && target.TUSUploadID.String != "" {
+				absPath = filepath.Join(cfg.Storage.Path, target.TUSUploadID.String)
+				f, err = os.Open(absPath)
+			}
+			if err != nil && os.IsNotExist(err) {
+				if found := findFileInStorage(cfg.Storage.Path, target.ID); found != "" {
+					absPath = found
+					f, err = os.Open(absPath)
+				}
+			}
 		}
 		if err != nil {
 			http.Error(w, "File not found", http.StatusNotFound)
@@ -345,9 +343,16 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFu
 		for _, f := range files {
 			absPath := filepath.Join(cfg.Storage.Path, f.StoragePath)
 			src, err := os.Open(absPath)
-			if err != nil && os.IsNotExist(err) && f.TUSUploadID.Valid {
-				absPath = filepath.Join(cfg.Storage.Path, f.TUSUploadID.String)
-				src, err = os.Open(absPath)
+			if err != nil && os.IsNotExist(err) {
+				if f.TUSUploadID.Valid && f.TUSUploadID.String != "" {
+					absPath = filepath.Join(cfg.Storage.Path, f.TUSUploadID.String)
+					src, err = os.Open(absPath)
+				}
+				if err != nil && os.IsNotExist(err) {
+					if found := findFileInStorage(cfg.Storage.Path, f.ID); found != "" {
+						src, err = os.Open(found)
+					}
+				}
 			}
 			if err != nil {
 				continue
@@ -361,6 +366,34 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFu
 			src.Close()
 		}
 	}
+}
+
+
+// findFileInStorage tries to find a file by scanning tusd .info files in the storage root.
+// This is a fallback for when tus_upload_id is not stored in the DB.
+func findFileInStorage(storagePath, ferriFileID string) string {
+	entries, err := os.ReadDir(storagePath)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".info") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(storagePath, e.Name()))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(data), ferriFileID) {
+			// Found it — return the path without .info extension
+			base := strings.TrimSuffix(e.Name(), ".info")
+			candidate := filepath.Join(storagePath, base)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return ""
 }
 
 func renderUploadPage(w http.ResponseWriter, tok string, req *store.UploadRequest, settings *store.Settings) {
