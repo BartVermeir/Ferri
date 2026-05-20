@@ -201,8 +201,12 @@
         return;
       }
 
-      if (progWrap) progWrap.style.display = 'none';
-      if (doneArea) doneArea.style.display = '';
+      // All files uploaded — automatically submit the complete form.
+      updateProgress(progFill, progLbl, 100, 'Finishing…');
+      var completeForm = document.getElementById('complete-form');
+      if (completeForm) {
+        completeForm.submit();
+      }
     });
   }
 
