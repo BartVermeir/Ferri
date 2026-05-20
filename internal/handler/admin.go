@@ -521,11 +521,7 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 // Returns JSON: {"ok": true} or {"ok": false, "error": "..."}.
 func AdminStorageTest(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			writeJSON(w, map[string]any{"ok": false, "error": "invalid form"})
-			return
-		}
-
+		// r.FormValue handles both url-encoded and multipart automatically.
 		host := strings.TrimSpace(r.FormValue("storage.smb_host"))
 		share := strings.TrimSpace(r.FormValue("storage.smb_share"))
 		basePath := strings.TrimSpace(r.FormValue("storage.smb_base_path"))
