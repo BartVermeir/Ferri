@@ -89,9 +89,10 @@ func AdminLogout() http.HandlerFunc {
 // adminOverviewData holds everything the combined overview page needs.
 type adminOverviewData struct {
 	adminData
-	Transfers []store.TransferSummary
-	Requests  []store.RequestSummary
+	Transfers   []store.TransferSummary
+	Requests    []store.RequestSummary
 	FailedMails []store.MailItem
+	TotalBytes  int64
 }
 
 // AdminDashboard handles GET /admin — combined overview page.
@@ -119,11 +120,20 @@ func AdminDashboard(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			failedMails = nil // non-fatal
 		}
 
+		var totalBytes int64
+		for _, t := range transfers {
+			totalBytes += t.TotalBytes
+		}
+		for _, r := range requests {
+			totalBytes += r.TotalBytes
+		}
+
 		renderPage(w, "admin/dashboard.html", adminOverviewData{
 			adminData:   adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
 			Transfers:   transfers,
 			Requests:    requests,
 			FailedMails: failedMails,
+			TotalBytes:  totalBytes,
 		})
 	}
 }
