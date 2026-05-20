@@ -19,6 +19,7 @@ import (
 	"github.com/your-org/ferri/internal/handler"
 	"github.com/your-org/ferri/internal/jobs"
 	"github.com/your-org/ferri/internal/middleware"
+	"github.com/your-org/ferri/internal/storage"
 	"github.com/your-org/ferri/internal/store"
 	ferritls "github.com/your-org/ferri/internal/tus"
 )
@@ -72,8 +73,20 @@ func main() {
 	// ── Stores ─────────────────────────────────────────────────────────────
 	stores := store.New(database)
 
+	// ── Storage Manager ────────────────────────────────────────────────────
+	// Initialize from current settings. Defaults to local backend.
+	// The Manager can be hot-swapped at runtime via the admin settings UI.
+	initialSettings := stores.Settings.Get()
+	initialBackend, err := storage.FromSettings(initialSettings, cfg, cfg.Admin.Token)
+	if err != nil {
+		slog.Warn("storage: could not initialize from settings, falling back to local", "error", err)
+		initialBackend = storage.NewLocalBackend(cfg.Storage.Path)
+	}
+	storageMgr := storage.NewManager(initialBackend)
+	defer storageMgr.Close()
+
 	// ── TUS handler ────────────────────────────────────────────────────────
-	tusHandler, err := ferritls.NewHandler(cfg, stores)
+	tusHandler, err := ferritls.NewHandler(cfg, stores, storageMgr)
 	if err != nil {
 		slog.Error("failed to create TUS handler", "error", err)
 		os.Exit(1)
@@ -95,14 +108,14 @@ func main() {
 	r.Handle("/static/logo/*", http.StripPrefix("/static/logo/", http.FileServer(http.Dir(cfg.Storage.Path+"/logo"))))
 	r.Get("/dl/{token}", handler.DownloadPage(cfg, stores))
 	r.Post("/dl/{token}", handler.DownloadPassword(cfg, stores))
-	r.Get("/dl/{token}/file/{fileID}", handler.DownloadFile(cfg, stores))
-	r.Get("/dl/{token}/zip", handler.DownloadZIP(cfg, stores))
+	r.Get("/dl/{token}/file/{fileID}", handler.DownloadFile(cfg, stores, storageMgr))
+	r.Get("/dl/{token}/zip", handler.DownloadZIP(cfg, stores, storageMgr))
 	r.Get("/ul/{token}", handler.UploadPage(cfg, stores))
 	r.Post("/ul/{token}", handler.UploadPassword(cfg, stores))
 	r.Post("/ul/{token}/complete", handler.UploadComplete(cfg, stores))
 	r.Get("/ul/{token}/files", handler.RequestDownloadPage(cfg, stores))
-	r.Get("/ul/{token}/file/{fileID}", handler.RequestDownloadFile(cfg, stores))
-	r.Get("/ul/{token}/zip", handler.RequestDownloadZIP(cfg, stores))
+	r.Get("/ul/{token}/file/{fileID}", handler.RequestDownloadFile(cfg, stores, storageMgr))
+	r.Get("/ul/{token}/zip", handler.RequestDownloadZIP(cfg, stores, storageMgr))
 	// TUS: use http.StripPrefix so tusd sees the path without /tus prefix
 	r.Mount("/tus", http.StripPrefix("/tus", tusHandler))
 
@@ -126,18 +139,20 @@ func main() {
 			r.Get("/admin/transfers", handler.AdminTransfers(cfg, stores))
 			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores))
 			r.Get("/admin/mail", handler.AdminMail(cfg, stores))
-			r.Post("/admin/mail/{id}/retry", handler.AdminMailRetry(cfg, stores))
-			r.Post("/admin/mail/{id}/delete", handler.AdminMailDelete(cfg, stores))
-			r.Get("/admin/settings", handler.AdminSettings(cfg, stores))
-			r.Post("/admin/settings", handler.AdminSettingsSave(cfg, stores))
-		r.Post("/admin/settings/logo", handler.AdminLogoUpload(cfg, stores))
-		r.Post("/admin/settings/logo/delete", handler.AdminLogoDelete(cfg, stores))
-			r.Post("/admin/logout", handler.AdminLogout())
+					r.Post("/admin/mail/{id}/retry", handler.AdminMailRetry(cfg, stores))
+					r.Post("/admin/mail/{id}/delete", handler.AdminMailDelete(cfg, stores))
+					r.Get("/admin/settings", handler.AdminSettings(cfg, stores))
+					r.Post("/admin/settings", handler.AdminSettingsSave(cfg, stores))
+					r.Post("/admin/settings/logo", handler.AdminLogoUpload(cfg, stores))
+					r.Post("/admin/settings/logo/delete", handler.AdminLogoDelete(cfg, stores))
+					r.Post("/admin/settings/storage", handler.AdminStorageSave(cfg, stores, storageMgr))
+					r.Post("/admin/settings/storage/test", handler.AdminStorageTest(cfg, stores))
+					r.Post("/admin/logout", handler.AdminLogout())
 		})
 	})
 
 	// ── Jobs ───────────────────────────────────────────────────────────────
-	scheduler := jobs.NewScheduler(cfg, stores)
+	scheduler := jobs.NewScheduler(cfg, stores, storageMgr)
 	scheduler.Start()
 	defer scheduler.Stop()
 

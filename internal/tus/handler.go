@@ -30,14 +30,13 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
+	"path"
 
-	"github.com/tus/tusd/v2/pkg/filestore"
 	"github.com/tus/tusd/v2/pkg/memorylocker"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
 	"github.com/your-org/ferri/internal/config"
+	"github.com/your-org/ferri/internal/storage"
 	"github.com/your-org/ferri/internal/store"
 	"github.com/your-org/ferri/internal/token"
 )
@@ -56,30 +55,30 @@ const (
 type Handler struct {
 	cfg     *config.Config
 	stores  *store.Stores
+	mgr     *storage.Manager
 	handler *tusd.Handler
 }
 
 // NewHandler creates and configures the TUS HTTP handler.
 // Storage directories are created if they do not exist.
-func NewHandler(cfg *config.Config, stores *store.Stores) (*Handler, error) {
+func NewHandler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) (*Handler, error) {
 	for _, sub := range []string{"transfers", "requests"} {
-		dir := filepath.Join(cfg.Storage.Path, sub)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("tus: create storage dir %s: %w", dir, err)
+		if err := mgr.MkdirAll(sub); err != nil {
+			return nil, fmt.Errorf("tus: create storage dir %s: %w", sub, err)
 		}
 	}
 
-	h := &Handler{cfg: cfg, stores: stores}
+	h := &Handler{cfg: cfg, stores: stores, mgr: mgr}
 
-	// tusd filestore: writes upload data and .info sidecar files under StoragePath.
-	// Ferri manages its own path layout (transfers/<id>/<file_id>) separately.
-	fs := filestore.New(cfg.Storage.Path)
+	// tusd DataStore: backed by the storage Manager (local or SMB).
+	// The managerTUSStore delegates to whatever backend is active at call time.
+	tusDataStore := mgr.TUSDataStore()
 	// memorylocker: in-memory locking, prevents concurrent writes to the same upload.
 	// For production with multiple instances, replace with filelocker or redislocker.
 	locker := memorylocker.New()
 
 	composer := tusd.NewStoreComposer()
-	fs.UseIn(composer)
+	composer.UseCore(tusDataStore)
 	locker.UseIn(composer)
 
 	tusConfig := tusd.Config{
@@ -161,9 +160,9 @@ func (h *Handler) preCreateTransferFile(
 	}
 
 	fileID := token.Generate()
-	storagePath := filepath.Join("transfers", transferID, fileID)
+	storagePath := "transfers/" + transferID + "/" + fileID
 
-	if err := os.MkdirAll(filepath.Join(h.cfg.Storage.Path, "transfers", transferID), 0o755); err != nil {
+	if err := h.mgr.MkdirAll("transfers/" + transferID); err != nil {
 		slog.Error("tus: mkdir", "error", err)
 		return rejectWith(http.StatusInternalServerError, "storage error")
 	}
@@ -210,9 +209,9 @@ func (h *Handler) preCreateRequestFile(
 	}
 
 	fileID := token.Generate()
-	storagePath := filepath.Join("requests", requestID, fileID)
+	storagePath := "requests/" + requestID + "/" + fileID
 
-	if err := os.MkdirAll(filepath.Join(h.cfg.Storage.Path, "requests", requestID), 0o755); err != nil {
+	if err := h.mgr.MkdirAll("requests/" + requestID); err != nil {
 		slog.Error("tus: mkdir", "error", err)
 		return rejectWith(http.StatusInternalServerError, "storage error")
 	}
@@ -385,7 +384,7 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 // ── Post-PATCH activity ───────────────────────────────────────────────────────
 
 func (h *Handler) recordPatchActivity(r *http.Request) {
-	tusID := filepath.Base(r.URL.Path)
+	tusID := path.Base(r.URL.Path)
 	if tusID == "" || tusID == "." || tusID == "/" {
 		return
 	}

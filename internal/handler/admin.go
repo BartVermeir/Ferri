@@ -22,6 +22,7 @@ package handler
 
 import (
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/your-org/ferri/internal/config"
 	appMiddleware "github.com/your-org/ferri/internal/middleware"
+	"github.com/your-org/ferri/internal/storage"
 	"github.com/your-org/ferri/internal/store"
 )
 
@@ -212,7 +214,9 @@ func AdminMailDelete(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 func AdminSettings(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
-		renderAdminSettings(w, settings, "")
+		storageSaved := r.URL.Query().Get("storage_saved") == "1"
+		storageError := r.URL.Query().Get("storage_error")
+		renderAdminSettings(w, settings, "", storageSaved, storageError)
 	}
 }
 
@@ -222,7 +226,7 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, settings, "Invalid form data.")
+			renderAdminSettings(w, settings, "Invalid form data.", false, "")
 			return
 		}
 
@@ -267,7 +271,7 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 
 		if saveErr != "" {
 			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, settings, saveErr)
+			renderAdminSettings(w, settings, saveErr, false, "")
 			return
 		}
 
@@ -430,18 +434,147 @@ func renderAdminMail(w http.ResponseWriter, settings *store.Settings, mails []st
 	})
 }
 
-func renderAdminSettings(w http.ResponseWriter, settings *store.Settings, errMsg string) {
+func renderAdminSettings(w http.ResponseWriter, settings *store.Settings, errMsg string, storageSaved bool, storageError string) {
 	saved := errMsg == "saved"
 	if saved {
 		errMsg = ""
 	}
 	renderPage(w, "admin/settings.html", struct {
 		adminData
-		Saved bool
-		Error string
+		Saved        bool
+		Error        string
+		StorageSaved bool
+		StorageError string
 	}{
-		adminData: adminData{PageTitle: "Settings", ActiveNav: "settings", Settings: settings},
-		Saved:     saved,
-		Error:     errMsg,
+		adminData:    adminData{PageTitle: "Settings", ActiveNav: "settings", Settings: settings},
+		Saved:        saved,
+		Error:        errMsg,
+		StorageSaved: storageSaved,
+		StorageError: storageError,
 	})
 }
+
+// ── Storage settings ──────────────────────────────────────────────────────────
+
+// AdminStorageSave handles POST /admin/settings/storage.
+// Saves SMB storage settings, encrypting the password with the admin token key.
+// After saving, reloads the storage Manager so the new backend is used immediately.
+func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Redirect(w, r, "/admin/settings?storage_error=invalid+form", http.StatusSeeOther)
+			return
+		}
+
+		storageType := r.FormValue("storage.type")
+		if storageType != "local" && storageType != "smb" {
+			storageType = "local"
+		}
+
+		saves := map[string]string{
+			"storage.type":          storageType,
+			"storage.smb_host":      strings.TrimSpace(r.FormValue("storage.smb_host")),
+			"storage.smb_share":     strings.TrimSpace(r.FormValue("storage.smb_share")),
+			"storage.smb_base_path": strings.TrimSpace(r.FormValue("storage.smb_base_path")),
+			"storage.smb_username":  strings.TrimSpace(r.FormValue("storage.smb_username")),
+			"storage.smb_domain":    strings.TrimSpace(r.FormValue("storage.smb_domain")),
+		}
+
+		// Only update password if a new one was provided (empty = keep existing).
+		newPassword := r.FormValue("storage.smb_password")
+		if newPassword != "" {
+			key := storage.DeriveKey(cfg.Admin.Token)
+			encrypted, err := storage.Encrypt(key, newPassword)
+			if err != nil {
+				slog.Error("admin storage: encrypt password", "error", err)
+				http.Redirect(w, r, "/admin/settings?storage_error=encrypt+failed", http.StatusSeeOther)
+				return
+			}
+			saves["storage.smb_password_encrypted"] = encrypted
+		}
+
+		for key, value := range saves {
+			if err := stores.Settings.Save(key, value); err != nil {
+				slog.Error("admin storage: save setting", "key", key, "error", err)
+				http.Redirect(w, r, "/admin/settings?storage_error=save+failed", http.StatusSeeOther)
+				return
+			}
+		}
+
+		// Reload the storage backend immediately with the new settings.
+		settings := stores.Settings.Get()
+		newBackend, err := storage.FromSettings(settings, cfg, cfg.Admin.Token)
+		if err != nil {
+			slog.Error("admin storage: reload backend", "error", err)
+			http.Redirect(w, r, "/admin/settings?storage_error="+err.Error(), http.StatusSeeOther)
+			return
+		}
+		mgr.Swap(newBackend)
+
+		slog.Info("admin: storage settings saved", "type", storageType)
+		http.Redirect(w, r, "/admin/settings?storage_saved=1", http.StatusSeeOther)
+	}
+}
+
+// AdminStorageTest handles POST /admin/settings/storage/test.
+// Tests the connection to the configured storage backend.
+// Returns JSON: {"ok": true} or {"ok": false, "error": "..."}.
+func AdminStorageTest(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			writeJSON(w, map[string]any{"ok": false, "error": "invalid form"})
+			return
+		}
+
+		host := strings.TrimSpace(r.FormValue("storage.smb_host"))
+		share := strings.TrimSpace(r.FormValue("storage.smb_share"))
+		basePath := strings.TrimSpace(r.FormValue("storage.smb_base_path"))
+		username := strings.TrimSpace(r.FormValue("storage.smb_username"))
+		domain := strings.TrimSpace(r.FormValue("storage.smb_domain"))
+
+		// Use submitted password if provided; otherwise decrypt stored one.
+		password := r.FormValue("storage.smb_password")
+		if password == "" {
+			settings := stores.Settings.Get()
+			if settings.SMBPasswordEncrypted != "" {
+				key := storage.DeriveKey(cfg.Admin.Token)
+				decrypted, err := storage.Decrypt(key, settings.SMBPasswordEncrypted)
+				if err == nil {
+					password = decrypted
+				}
+			}
+		}
+
+		if host == "" || share == "" {
+			writeJSON(w, map[string]any{"ok": false, "error": "host and share are required"})
+			return
+		}
+
+		b, err := storage.NewSMBBackend(storage.SMBConfig{
+			Host:     host,
+			Share:    share,
+			BasePath: basePath,
+			Username: username,
+			Password: password,
+			Domain:   domain,
+		})
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		defer b.Close()
+
+		if err := b.TestConnection(); err != nil {
+			writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+
+		writeJSON(w, map[string]any{"ok": true})
+	}
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+

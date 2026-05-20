@@ -3,14 +3,13 @@ package jobs
 import (
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/your-org/ferri/internal/config"
 	"github.com/your-org/ferri/internal/mail"
+	"github.com/your-org/ferri/internal/storage"
 	"github.com/your-org/ferri/internal/store"
 )
 
@@ -18,16 +17,18 @@ import (
 type Scheduler struct {
 	cfg       *config.Config
 	stores    *store.Stores
+	mgr       *storage.Manager
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	startOnce sync.Once // guards against Start() being called more than once
 }
 
 // NewScheduler creates a Scheduler. Call Start() to begin running jobs.
-func NewScheduler(cfg *config.Config, stores *store.Stores) *Scheduler {
+func NewScheduler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) *Scheduler {
 	return &Scheduler{
 		cfg:    cfg,
 		stores: stores,
+		mgr:    mgr,
 		stop:   make(chan struct{}),
 	}
 }
@@ -187,8 +188,8 @@ func (s *Scheduler) runCleanupJob() {
 			slog.Error("cleanup job: sum sizes", "transfer", t.ID, "error", err)
 		}
 
-		dir := filepath.Join(s.cfg.Storage.Path, "transfers", t.ID)
-		if err := os.RemoveAll(dir); err != nil {
+		dir := "transfers/" + t.ID
+		if err := s.mgr.RemoveAll(dir); err != nil {
 			slog.Error("cleanup job: remove files", "transfer", t.ID, "dir", dir, "error", err)
 			continue // retry next run
 		}
@@ -209,8 +210,8 @@ func (s *Scheduler) runCleanupJob() {
 	}
 
 	for _, r := range requests {
-		dir := filepath.Join(s.cfg.Storage.Path, "requests", r.ID)
-		if err := os.RemoveAll(dir); err != nil {
+		dir := "requests/" + r.ID
+		if err := s.mgr.RemoveAll(dir); err != nil {
 			slog.Error("cleanup job: remove request files", "request", r.ID, "error", err)
 			continue
 		}
@@ -238,12 +239,10 @@ func (s *Scheduler) cleanupStalled() {
 
 	var removed int
 	for _, f := range stalledFiles {
-		storagePath := filepath.Join(s.cfg.Storage.Path, f.StoragePath)
-
 		// Remove both the content file and the TUS .info sidecar.
 		// If only the content file is removed, TUS believes the upload can be resumed.
-		_ = os.Remove(storagePath)
-		_ = os.Remove(storagePath + ".info")
+		_ = s.mgr.Remove(f.StoragePath)
+		_ = s.mgr.Remove(f.StoragePath + ".info")
 
 		if err := s.stores.Transfers.MarkFileDeleted(f.ID); err != nil {
 			slog.Error("cleanup job: mark stalled deleted", "file", f.ID, "error", err)
@@ -260,9 +259,8 @@ func (s *Scheduler) cleanupStalled() {
 	}
 	var removedReq int
 	for _, f := range stalledReqFiles {
-		storagePath := filepath.Join(s.cfg.Storage.Path, f.StoragePath)
-		_ = os.Remove(storagePath)
-		_ = os.Remove(storagePath + ".info")
+		_ = s.mgr.Remove(f.StoragePath)
+		_ = s.mgr.Remove(f.StoragePath + ".info")
 		if err := s.stores.Requests.MarkFileDeleted(f.ID); err != nil {
 			slog.Error("cleanup job: mark stalled request file deleted", "file", f.ID, "error", err)
 			continue
