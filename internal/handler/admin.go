@@ -314,8 +314,9 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 		// explicitly: an unchecked checkbox sends NO form value, so r.FormValue
 		// returns "". The settings cache evaluates '' != "false" as true, meaning
 		// unchecked boxes would be permanently stuck on. We normalise to "true"/"false".
-		checkboxVal := func(key string) string {
-			if r.FormValue(key) == "true" {
+		checkboxVal := func(formKey string) string {
+			v := r.FormValue(formKey)
+			if v == "1" || v == "true" {
 				return "true"
 			}
 			return "false"
@@ -327,13 +328,14 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 			"branding.primary_color":  r.FormValue("branding.primary_color"),
 			"branding.accent_color":   r.FormValue("branding.accent_color"),
 			"branding.bg_color":       r.FormValue("branding.bg_color"),
-			"ui.welcome_message":      r.FormValue("ui.welcome_message"),
-			"ui.send_page_title":      r.FormValue("ui.send_page_title"),
-			"ui.download_page_title":  r.FormValue("ui.download_page_title"),
+			"branding.font_family":    r.FormValue("branding.font_family"),
+			"ui.welcome_message":      r.FormValue("branding.welcome_message"),
+			"ui.send_page_title":      r.FormValue("branding.send_page_title"),
+			"ui.download_page_title":  r.FormValue("branding.download_page_title"),
 			"mail.from_name":          r.FormValue("mail.from_name"),
 			"mail.from_address":       r.FormValue("mail.from_address"),
-			"mail.notify_on_download": checkboxVal("mail.notify_on_download"),
-			"mail.expiry_summary":     checkboxVal("mail.expiry_summary"),
+			"mail.notify_on_download": checkboxVal("notify.on_download"),
+			"mail.expiry_summary":     checkboxVal("notify.expiry_summary"),
 		}
 
 		// Settings are saved individually. If one fails, earlier saves are not
