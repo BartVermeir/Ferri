@@ -23,7 +23,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -34,6 +33,7 @@ import (
 
 	"github.com/your-org/ferri/internal/config"
 	appMiddleware "github.com/your-org/ferri/internal/middleware"
+	"github.com/your-org/ferri/internal/storage"
 	"github.com/your-org/ferri/internal/store"
 )
 
@@ -138,7 +138,7 @@ func DownloadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 
 // DownloadFile handles GET /dl/:token/file/:fileID.
 // Validates token + file ownership, records the download event, streams the file.
-func DownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
 		fileID := chi.URLParam(r, "fileID")
@@ -176,22 +176,22 @@ func DownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		}
 
 		// Open file from storage.
-		// Try our own path layout first (transfers/<transfer_id>/<file_id>).
-		// Fall back to tusd's own path layout (<storage_path>/<tus_upload_id>)
-		// for files uploaded before the path layout was correctly wired.
-		absPath := filepath.Join(cfg.Storage.Path, targetFile.StoragePath)
-		f, err := os.Open(absPath)
-		if err != nil && os.IsNotExist(err) && targetFile.TUSUploadID.Valid {
-			// Fallback: tusd stores files as <storage_path>/<tus_upload_id>
-			absPath = filepath.Join(cfg.Storage.Path, targetFile.TUSUploadID.String)
-			f, err = os.Open(absPath)
+		// Try our own path layout first (transfers/<transfer_id>/<file_id>),
+		// then fall back to the flat tusd layout (<tus_upload_id>).
+		f, err := mgr.Open(targetFile.StoragePath)
+		if err != nil && targetFile.TUSUploadID.Valid {
+			f, err = mgr.Open(targetFile.TUSUploadID.String)
+		}
+		// Local-only legacy fallback: scan .info files (pre-bugfix uploads).
+		if err != nil && mgr.Type() == "local" {
+			if found := findFileInStorage(cfg.Storage.Path, targetFile.ID); found != "" {
+				rel, _ := filepath.Rel(cfg.Storage.Path, found)
+				f, err = mgr.Open(rel)
+			}
 		}
 		if err != nil {
-			if os.IsNotExist(err) {
-				http.Error(w, "File not found", http.StatusNotFound)
-				return
-			}
-			http.Error(w, "Storage error", http.StatusInternalServerError)
+			slog.Error("download: open file", "file_id", fileID, "error", err)
+			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
 		defer f.Close()
@@ -377,7 +377,7 @@ func buildDownloadNotifyText(t *store.Transfer, recipientEmail, filename string)
 
 // DownloadZIP handles GET /dl/:token/zip.
 // Streams all files in the transfer as a ZIP archive.
-func DownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
 		settings := appMiddleware.GetSettings(r)
@@ -418,11 +418,9 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		defer zw.Close()
 
 		for _, f := range files {
-			absPath := filepath.Join(cfg.Storage.Path, f.StoragePath)
-			src, err := os.Open(absPath)
-			if err != nil && os.IsNotExist(err) && f.TUSUploadID.Valid {
-				absPath = filepath.Join(cfg.Storage.Path, f.TUSUploadID.String)
-				src, err = os.Open(absPath)
+			src, err := mgr.Open(f.StoragePath)
+			if err != nil && f.TUSUploadID.Valid {
+				src, err = mgr.Open(f.TUSUploadID.String)
 			}
 			if err != nil {
 				slog.Error("zip: open file", "file_id", f.ID, "error", err)

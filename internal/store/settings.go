@@ -22,6 +22,18 @@ type Settings struct {
 	MailFromAddress   string
 	NotifyOnDownload  bool
 	ExpirySummary     bool
+
+	// Storage settings
+	// StorageType is "local" (default) or "smb".
+	StorageType          string
+	SMBHost              string
+	SMBShare             string
+	SMBBasePath          string
+	SMBUsername          string
+	// SMBPasswordEncrypted holds the AES-256-GCM encrypted password, base64-encoded.
+	// Empty when no password is configured or backend is local.
+	SMBPasswordEncrypted string
+	SMBDomain            string
 }
 
 // SettingsStore maintains an in-memory cache of the settings table.
@@ -122,6 +134,14 @@ func (s *SettingsStore) load() (*Settings, error) {
 		MailFromAddress:   kv["mail.from_address"],
 		NotifyOnDownload:  kv["mail.notify_on_download"] != "false",
 		ExpirySummary:     kv["mail.expiry_summary"] != "false",
+
+		StorageType:          orDefault(kv["storage.type"], "local"),
+		SMBHost:              kv["storage.smb_host"],
+		SMBShare:             kv["storage.smb_share"],
+		SMBBasePath:          kv["storage.smb_base_path"],
+		SMBUsername:          kv["storage.smb_username"],
+		SMBPasswordEncrypted: kv["storage.smb_password_encrypted"],
+		SMBDomain:            kv["storage.smb_domain"],
 	}, nil
 }
 

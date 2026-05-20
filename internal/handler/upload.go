@@ -15,23 +15,24 @@ package handler
 //   The handler marks the request completed and enqueues a notification mail.
 
 import (
-	"fmt"
-	"strings"
-	"net/url"
-	"time"
-	"path/filepath"
-	"os"
-	"io"
 	"archive/zip"
+	"fmt"
 	"html"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/your-org/ferri/internal/config"
 	appMiddleware "github.com/your-org/ferri/internal/middleware"
+	"github.com/your-org/ferri/internal/storage"
 	"github.com/your-org/ferri/internal/store"
 )
 
@@ -274,7 +275,7 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 }
 
 // RequestDownloadFile handles GET /ul/:token/file/:fileID — stream uploaded file.
-func RequestDownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
 		fileID := chi.URLParam(r, "fileID")
@@ -292,18 +293,14 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerF
 			return
 		}
 
-		absPath := filepath.Join(cfg.Storage.Path, target.StoragePath)
-		f, err := os.Open(absPath)
-		if err != nil && os.IsNotExist(err) {
-			if target.TUSUploadID.Valid && target.TUSUploadID.String != "" {
-				absPath = filepath.Join(cfg.Storage.Path, target.TUSUploadID.String)
-				f, err = os.Open(absPath)
-			}
-			if err != nil && os.IsNotExist(err) {
-				if found := findFileInStorage(cfg.Storage.Path, target.ID); found != "" {
-					absPath = found
-					f, err = os.Open(absPath)
-				}
+		f, err := mgr.Open(target.StoragePath)
+		if err != nil && target.TUSUploadID.Valid && target.TUSUploadID.String != "" {
+			f, err = mgr.Open(target.TUSUploadID.String)
+		}
+		if err != nil && mgr.Type() == "local" {
+			if found := findFileInStorage(cfg.Storage.Path, target.ID); found != "" {
+				rel, _ := filepath.Rel(cfg.Storage.Path, found)
+				f, err = mgr.Open(rel)
 			}
 		}
 		if err != nil {
@@ -318,7 +315,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores) http.HandlerF
 }
 
 // RequestDownloadZIP handles GET /ul/:token/zip — stream all uploaded files as ZIP.
-func RequestDownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
 
@@ -341,18 +338,9 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores) http.HandlerFu
 		defer zw.Close()
 
 		for _, f := range files {
-			absPath := filepath.Join(cfg.Storage.Path, f.StoragePath)
-			src, err := os.Open(absPath)
-			if err != nil && os.IsNotExist(err) {
-				if f.TUSUploadID.Valid && f.TUSUploadID.String != "" {
-					absPath = filepath.Join(cfg.Storage.Path, f.TUSUploadID.String)
-					src, err = os.Open(absPath)
-				}
-				if err != nil && os.IsNotExist(err) {
-					if found := findFileInStorage(cfg.Storage.Path, f.ID); found != "" {
-						src, err = os.Open(found)
-					}
-				}
+			src, err := mgr.Open(f.StoragePath)
+			if err != nil && f.TUSUploadID.Valid && f.TUSUploadID.String != "" {
+				src, err = mgr.Open(f.TUSUploadID.String)
 			}
 			if err != nil {
 				continue
