@@ -184,16 +184,14 @@ function toggleSMB(val) {
 
 function testConnection() {
   const form = document.getElementById('storage-form');
-  const data = new URLSearchParams(new FormData(form));
   const result = document.getElementById('test-result');
   result.style.color = '#888';
   result.textContent = 'Testing…';
 
-  fetch('/admin/settings/storage/test', {
-    method: 'POST',
-    body: data,
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-  })
+  const body = new URLSearchParams();
+  new FormData(form).forEach((v, k) => body.append(k, v));
+
+  fetch('/admin/settings/storage/test', { method: 'POST', body: body })
     .then(r => r.json())
     .then(d => {
       if (d.ok) {
