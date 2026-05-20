@@ -525,6 +525,11 @@ func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
+// GetFilesByTransferID returns all complete files for a transfer. Used by the admin delete handler.
+func (s *TransferStore) GetFilesByTransferID(transferID string) ([]File, error) {
+	return s.filesByTransferID(transferID)
+}
+
 func (s *TransferStore) filesByTransferID(transferID string) ([]File, error) {
 	rows, err := s.db.Query(`
 		SELECT id, transfer_id, original_name, storage_path, size_bytes,
@@ -579,6 +584,65 @@ func scanFiles(rows *sql.Rows) ([]File, error) {
 		list = append(list, f)
 	}
 	return list, rows.Err()
+}
+
+// TransferSummary enriches Transfer with file stats and recipients for the admin overview.
+type TransferSummary struct {
+	Transfer
+	FileCount  int
+	TotalBytes int64
+	Recipients []Recipient
+}
+
+// ListForAdmin returns all non-expired, non-deleted transfers with file counts and recipients.
+func (s *TransferStore) ListForAdmin(limit int) ([]TransferSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT t.id, t.title, t.message, t.sender_name, t.sender_email,
+		       t.password_hash, t.status, t.expires_at, t.activated_at,
+		       t.expired_at, t.created_at,
+		       COUNT(f.id)                    AS file_count,
+		       COALESCE(SUM(f.size_bytes), 0) AS total_bytes
+		FROM transfers t
+		LEFT JOIN files f ON f.transfer_id = t.id AND f.status = 'complete'
+		WHERE t.status NOT IN ('expired', 'deleted')
+		GROUP BY t.id
+		ORDER BY t.created_at DESC
+		LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []TransferSummary
+	for rows.Next() {
+		var ts TransferSummary
+		var expiresAt, createdAt int64
+		if err := rows.Scan(
+			&ts.ID, &ts.Title, &ts.Message, &ts.SenderName, &ts.SenderEmail,
+			&ts.PasswordHash, &ts.Status, &expiresAt, &ts.ActivatedAt,
+			&ts.ExpiredAt, &createdAt,
+			&ts.FileCount, &ts.TotalBytes,
+		); err != nil {
+			return nil, err
+		}
+		ts.ExpiresAt = time.Unix(expiresAt, 0)
+		ts.CreatedAt = time.Unix(createdAt, 0)
+		list = append(list, ts)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Enrich with recipients (N+1 is fine for admin page sizes)
+	for i := range list {
+		recipients, err := s.GetRecipients(list[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		list[i].Recipients = recipients
+	}
+	return list, nil
 }
 
 // txFunc executes fn inside a transaction, rolling back on error.

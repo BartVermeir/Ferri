@@ -390,3 +390,49 @@ func scanRequestFiles(rows *sql.Rows) ([]UploadRequestFile, error) {
 	}
 	return list, rows.Err()
 }
+
+// RequestSummary enriches UploadRequest with file stats for the admin overview.
+type RequestSummary struct {
+	UploadRequest
+	FileCount  int
+	TotalBytes int64
+}
+
+// ListForAdmin returns all non-expired, non-deleted upload requests with file counts.
+func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT r.id, r.title, r.message, r.requester_name, r.requester_email,
+		       r.upload_token, r.password_hash, r.max_files, r.max_total_bytes,
+		       r.status, r.expires_at, r.completed_at, r.expired_at, r.created_at,
+		       COUNT(f.id)                    AS file_count,
+		       COALESCE(SUM(f.size_bytes), 0) AS total_bytes
+		FROM upload_requests r
+		LEFT JOIN upload_request_files f ON f.upload_request_id = r.id AND f.status = 'complete'
+		WHERE r.status NOT IN ('expired', 'deleted')
+		GROUP BY r.id
+		ORDER BY r.created_at DESC
+		LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []RequestSummary
+	for rows.Next() {
+		var rs RequestSummary
+		var expiresAt, createdAt int64
+		if err := rows.Scan(
+			&rs.ID, &rs.Title, &rs.Message, &rs.RequesterName, &rs.RequesterEmail,
+			&rs.UploadToken, &rs.PasswordHash, &rs.MaxFiles, &rs.MaxTotalBytes,
+			&rs.Status, &expiresAt, &rs.CompletedAt, &rs.ExpiredAt, &createdAt,
+			&rs.FileCount, &rs.TotalBytes,
+		); err != nil {
+			return nil, err
+		}
+		rs.ExpiresAt = time.Unix(expiresAt, 0)
+		rs.CreatedAt = time.Unix(createdAt, 0)
+		list = append(list, rs)
+	}
+	return list, rows.Err()
+}

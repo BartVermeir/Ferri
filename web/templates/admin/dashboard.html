@@ -3,52 +3,168 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.PageTitle}} — Admin</title>
+  <title>Overview — Admin</title>
   {{template "admin-css" .}}
+  <style>
+    .overview-table td.recipients { font-size: 12px; color: #555; line-height: 1.6; }
+    .overview-table td.recipients a { color: var(--primary); }
+    .type-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+    .type-transfer { background: #f0f0ec; color: #444; }
+    .type-request  { background: #eff6ff; color: #1d4ed8; }
+    .size-label { font-size: 11px; color: #aaa; margin-left: 4px; }
+    .mail-section { margin-top: 32px; }
+    .empty-row td { color: #bbb; text-align: center; padding: 32px !important; font-size: 13px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 28px; }
+    .stat-card { background: #fff; border: 1px solid #e8e8e4; border-radius: 10px; padding: 16px 20px; }
+    .stat-label { font-size: 11px; color: #999; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat-value { font-size: 26px; font-weight: 500; color: #1a1a1a; }
+  </style>
 </head>
 <body>
 <div class="admin-layout">
   {{template "admin-nav" .}}
   <main class="main-content">
     <div class="page-header">
-      <h1>Dashboard</h1>
-      <a href="/send" class="btn btn-secondary btn-sm">Send files</a>
+      <h1>Overview</h1>
+      <a href="/" class="btn btn-secondary btn-sm">↑ Send files</a>
     </div>
+
+    {{/* ── Stats ── */}}
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-label">Active transfers</div>
-        <div class="stat-value">{{.Stats.ActiveTransfers}}</div>
+        <div class="stat-value">{{len .Transfers}}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Upload requests</div>
+        <div class="stat-value">{{len .Requests}}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Failed mails</div>
-        <div class="stat-value">{{.Stats.FailedMails}}</div>
+        <div class="stat-value">{{len .FailedMails}}</div>
       </div>
     </div>
+
+    {{/* ── Combined transfers + requests table ── */}}
     <div class="card">
-      <div class="card-header">
-        Recent transfers
-        <a href="/admin/transfers" class="btn btn-secondary btn-sm">View all</a>
-      </div>
-      <table>
+      <div class="card-header">Transfers &amp; upload requests</div>
+      <table class="overview-table">
         <thead>
-          <tr><th>Title</th><th>Sender</th><th>Expires</th></tr>
+          <tr>
+            <th style="width:36px;"></th>
+            <th>Title</th>
+            <th>From</th>
+            <th>To / Link</th>
+            <th>Files</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th style="width:70px;"></th>
+          </tr>
         </thead>
         <tbody>
-          {{range .RecentTransfers}}
+
+          {{/* ── Transfers ── */}}
+          {{range .Transfers}}
           <tr>
-            <td>{{.Title}}</td>
-            <td>{{.SenderEmail}}</td>
-            <td>{{.ExpiresAt | formatDate}}</td>
+            <td><span class="type-badge type-transfer">Send</span></td>
+            <td style="font-weight:500;">{{.Title}}</td>
+            <td style="font-size:12px; color:#555;">{{.SenderEmail}}</td>
+            <td class="recipients">
+              {{range .Recipients}}
+                <a href="/dl/{{.DownloadToken}}" target="_blank">{{.Email}}</a>
+                {{if .DownloadCount}}<span style="color:#aaa;">({{.DownloadCount}}×)</span>{{end}}<br>
+              {{else}}
+                <span style="color:#ccc;">—</span>
+              {{end}}
+            </td>
+            <td style="font-size:12px;">
+              {{.FileCount}}
+              {{if .TotalBytes}}<span class="size-label">{{.TotalBytes | formatSize}}</span>{{end}}
+            </td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td style="font-size:12px; color:#aaa;">{{.CreatedAt | formatDate}}</td>
+            <td>
+              <form method="POST" action="/admin/transfers/{{.ID}}/delete" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm"
+                  onclick="return confirm('Delete this transfer and all its files? This cannot be undone.')">
+                  Delete
+                </button>
+              </form>
+            </td>
           </tr>
-          {{else}}
-          <tr><td colspan="3" style="color:#aaa; text-align:center; padding:24px;">No active transfers</td></tr>
           {{end}}
+
+          {{/* ── Upload requests ── */}}
+          {{range .Requests}}
+          <tr>
+            <td><span class="type-badge type-request">Request</span></td>
+            <td style="font-weight:500;">{{.Title}}</td>
+            <td style="font-size:12px; color:#555;">{{.RequesterEmail}}</td>
+            <td class="recipients">
+              <a href="/ul/{{.UploadToken}}" target="_blank">upload link</a>
+            </td>
+            <td style="font-size:12px;">
+              {{.FileCount}}
+              {{if .TotalBytes}}<span class="size-label">{{.TotalBytes | formatSize}}</span>{{end}}
+            </td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td style="font-size:12px; color:#aaa;">{{.CreatedAt | formatDate}}</td>
+            <td>
+              <form method="POST" action="/admin/requests/{{.ID}}/delete" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm"
+                  onclick="return confirm('Delete this upload request and all its files? This cannot be undone.')">
+                  Delete
+                </button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+
+          {{if and (eq (len .Transfers) 0) (eq (len .Requests) 0)}}
+          <tr class="empty-row"><td colspan="8">No active transfers or upload requests</td></tr>
+          {{end}}
+
         </tbody>
       </table>
     </div>
+
+    {{/* ── Mail queue (failed only) ── */}}
+    {{if .FailedMails}}
+    <div class="mail-section">
+      <div class="card">
+        <div class="card-header" style="color:#991b1b;">
+          Failed mail queue
+          <span style="font-size:12px; font-weight:400; color:#aaa;">Mails that failed to send</span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>To</th><th>Subject</th><th>Attempts</th><th>Error</th><th></th></tr>
+          </thead>
+          <tbody>
+            {{range .FailedMails}}
+            <tr>
+              <td style="font-size:12px;">{{.ToAddress}}</td>
+              <td style="font-size:12px;">{{.Subject}}</td>
+              <td style="font-size:12px; color:#aaa;">{{.Attempts}}</td>
+              <td style="font-size:11px; color:#c00;">{{.ErrorMessage.String}}</td>
+              <td style="white-space:nowrap;">
+                <form method="POST" action="/admin/mail/{{.ID}}/retry" style="display:inline;">
+                  <button type="submit" class="btn btn-secondary btn-sm">Retry</button>
+                </form>
+                <form method="POST" action="/admin/mail/{{.ID}}/delete" style="display:inline; margin-left:4px;">
+                  <button type="submit" class="btn btn-danger btn-sm">✕</button>
+                </form>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {{end}}
+
   </main>
 </div>
-
 <script>
 (function() {
   var primary = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();

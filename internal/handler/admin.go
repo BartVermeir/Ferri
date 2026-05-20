@@ -84,53 +84,62 @@ func AdminLogout() http.HandlerFunc {
 	}
 }
 
-// ── Dashboard ─────────────────────────────────────────────────────────────────
+// ── Overview (combined dashboard + transfers + requests + mail) ───────────────
 
-// AdminDashboard handles GET /admin.
+// adminOverviewData holds everything the combined overview page needs.
+type adminOverviewData struct {
+	adminData
+	Transfers []store.TransferSummary
+	Requests  []store.RequestSummary
+	FailedMails []store.MailItem
+}
+
+// AdminDashboard handles GET /admin — combined overview page.
 func AdminDashboard(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
 
-		// Fetch data for dashboard
-		activeTransfers, err := stores.Transfers.ListActive(100)
+		transfers, err := stores.Transfers.ListForAdmin(500)
 		if err != nil {
-			slog.Error("admin dashboard: list active", "error", err)
+			slog.Error("admin overview: list transfers", "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		failedMailCount, err := stores.Mail.CountFailed()
+		requests, err := stores.Requests.ListForAdmin(500)
 		if err != nil {
-			slog.Error("admin dashboard: count failed mail", "error", err)
-			failedMailCount = 0 // non-fatal
+			slog.Error("admin overview: list requests", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
 
-		renderAdminDashboard(w, settings, activeTransfers, failedMailCount)
+		failedMails, err := stores.Mail.ListFailed(50)
+		if err != nil {
+			slog.Error("admin overview: list failed mails", "error", err)
+			failedMails = nil // non-fatal
+		}
+
+		renderPage(w, "admin/dashboard.html", adminOverviewData{
+			adminData:   adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
+			Transfers:   transfers,
+			Requests:    requests,
+			FailedMails: failedMails,
+		})
 	}
 }
 
-// ── Transfers ─────────────────────────────────────────────────────────────────
-
-// AdminTransfers handles GET /admin/transfers.
+// AdminTransfers is kept for backward compatibility but redirects to the overview.
 func AdminTransfers(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		settings := appMiddleware.GetSettings(r)
-
-		transfers, err := stores.Transfers.ListAll(500)
-		if err != nil {
-			slog.Error("admin transfers: list", "error", err)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		renderAdminTransfers(w, settings, transfers)
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}
 }
 
+// ── Delete (transfer or upload request) ──────────────────────────────────────
+
 // AdminTransferDelete handles POST /admin/transfers/:id/delete.
-// Soft-deletes a transfer (status → 'deleted'). Does NOT remove files from disk —
-// the cleanup job handles that based on the grace period.
-func AdminTransferDelete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+// Hard-deletes: removes all files from storage, marks records deleted in DB.
+func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if id == "" {
@@ -138,14 +147,62 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores) http.HandlerF
 			return
 		}
 
+		// Remove files from storage
+		files, err := stores.Transfers.GetFilesByTransferID(id)
+		if err != nil {
+			slog.Error("admin: get files for delete", "id", id, "error", err)
+		} else {
+			for _, f := range files {
+				_ = mgr.Remove(f.StoragePath)
+				_ = mgr.Remove(f.StoragePath + ".info")
+			}
+		}
+		// Best-effort removal of the transfer directory (may be empty for TUS uploads)
+		_ = mgr.RemoveAll("transfers/" + id)
+
+		if err := stores.Transfers.MarkFilesDeleted(id); err != nil {
+			slog.Error("admin: mark files deleted", "id", id, "error", err)
+		}
 		if err := stores.Transfers.SoftDelete(id); err != nil {
 			slog.Error("admin: soft delete transfer", "id", id, "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		slog.Info("admin: transfer soft-deleted", "id", id)
-		http.Redirect(w, r, "/admin/transfers", http.StatusSeeOther)
+		slog.Info("admin: transfer hard-deleted", "id", id)
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	}
+}
+
+// AdminRequestDelete handles POST /admin/requests/:id/delete.
+// Hard-deletes an upload request and its files from storage.
+func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "Missing request ID", http.StatusBadRequest)
+			return
+		}
+
+		files, err := stores.Requests.GetFiles(id)
+		if err != nil {
+			slog.Error("admin: get request files for delete", "id", id, "error", err)
+		} else {
+			for _, f := range files {
+				_ = mgr.Remove(f.StoragePath)
+				_ = mgr.Remove(f.StoragePath + ".info")
+			}
+		}
+		_ = mgr.RemoveAll("requests/" + id)
+
+		if err := stores.Requests.SetExpired(id); err != nil {
+			slog.Error("admin: mark request deleted", "id", id, "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		slog.Info("admin: upload request hard-deleted", "id", id)
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}
 }
 

@@ -112,15 +112,20 @@
   <div class="logo">{{.Settings.CompanyName}}</div>
   <nav>
     <div class="nav-section">Overview</div>
-    <a href="/admin" class="{{if eq .ActiveNav "dashboard"}}active{{end}}">Dashboard</a>
-    <div class="nav-section">Manage</div>
-    <a href="/admin/transfers" class="{{if eq .ActiveNav "transfers"}}active{{end}}">Transfers</a>
-    <a href="/admin/mail" class="{{if eq .ActiveNav "mail"}}active{{end}}">Mail queue</a>
+    <a href="/admin" class="{{if eq .ActiveNav "dashboard"}}active{{end}}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Overview
+    </a>
     <div class="nav-section">Configure</div>
-    <a href="/admin/settings" class="{{if eq .ActiveNav "settings"}}active{{end}}">Settings</a>
+    <a href="/admin/settings" class="{{if eq .ActiveNav "settings"}}active{{end}}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </a>
   </nav>
   <div class="nav-logout">
-    <a href="/admin/logout" style="color:#888; font-size:13px;">Logout</a>
+    <form method="POST" action="/admin/logout" style="margin:0;">
+      <button type="submit" style="background:none;border:none;color:#888;font-size:13px;cursor:pointer;padding:0;font-family:var(--font);">Logout</button>
+    </form>
   </div>
 </aside>
 {{end}}
