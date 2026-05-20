@@ -382,7 +382,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		tok := chi.URLParam(r, "token")
 		settings := appMiddleware.GetSettings(r)
 
-		transfer, _, files, err := stores.Transfers.GetByDownloadToken(tok)
+		transfer, recipient, files, err := stores.Transfers.GetByDownloadToken(tok)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -396,6 +396,36 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 			if !downloadPasswordValid(r, transfer.PasswordHash.String) {
 				http.Redirect(w, r, "/dl/"+tok, http.StatusSeeOther)
 				return
+			}
+		}
+
+		// Record a download event for each file in the ZIP — before streaming
+		// so events are captured even if the client disconnects mid-download.
+		ip := r.Header.Get("X-Real-IP")
+		if ip == "" {
+			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				ip = host
+			} else {
+				ip = r.RemoteAddr
+			}
+		}
+		ua := r.Header.Get("User-Agent")
+
+		for _, f := range files {
+			if _, err := stores.Downloads.RecordDownload(
+				recipient.ID, f.ID, f.OriginalName, ip, ua,
+			); err != nil {
+				logDownloadError("zip: record download event", err, f.ID)
+			}
+		}
+
+		// Enqueue a single notification mail for the ZIP download if enabled
+		if settings.NotifyOnDownload && settings.MailFromAddress != "" {
+			subject := fmt.Sprintf("All files downloaded (ZIP): %s", transfer.Title)
+			bodyHTML := buildDownloadNotifyHTML(transfer, recipient.Email, "all files (ZIP)")
+			bodyText := buildDownloadNotifyText(transfer, recipient.Email, "all files (ZIP)")
+			if err := stores.Mail.Enqueue(nil, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
+				slog.Error("zip: enqueue download notification", "error", err)
 			}
 		}
 
