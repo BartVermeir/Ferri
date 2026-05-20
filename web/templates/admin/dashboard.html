@@ -6,18 +6,27 @@
   <title>Overview — Admin</title>
   {{template "admin-css" .}}
   <style>
-    .overview-table td.recipients { font-size: 12px; color: #555; line-height: 1.6; }
+    .overview-table td.recipients { font-size: 12px; color: #555; line-height: 1.8; }
     .overview-table td.recipients a { color: var(--primary); }
-    .type-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+    .type-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
     .type-transfer { background: #f0f0ec; color: #444; }
     .type-request  { background: #eff6ff; color: #1d4ed8; }
-    .size-label { font-size: 11px; color: #aaa; margin-left: 4px; }
-    .mail-section { margin-top: 32px; }
+    .badge-open      { background: #fef9c3; color: #854d0e; }
+    .badge-pending   { background: #fef9c3; color: #854d0e; }
+    .badge-active    { background: #dcfce7; color: #166534; }
+    .badge-completed { background: #dcfce7; color: #166534; }
+    .badge-expired   { background: #f1f5f9; color: #64748b; }
+    .badge-deleted   { background: #fee2e2; color: #991b1b; }
+    .size-label { font-size: 11px; color: #bbb; margin-left: 3px; }
+    .mail-section { margin-top: 28px; }
     .empty-row td { color: #bbb; text-align: center; padding: 32px !important; font-size: 13px; }
-    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 28px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 28px; }
     .stat-card { background: #fff; border: 1px solid #e8e8e4; border-radius: 10px; padding: 16px 20px; }
     .stat-label { font-size: 11px; color: #999; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
     .stat-value { font-size: 26px; font-weight: 500; color: #1a1a1a; }
+    .expires-col { font-size: 11px; color: #aaa; white-space: nowrap; }
+    .expires-col.soon { color: #d97706; font-weight: 500; }
+    .dl-count { font-size: 11px; color: #bbb; margin-left: 2px; }
   </style>
 </head>
 <body>
@@ -45,44 +54,44 @@
       </div>
     </div>
 
-    {{/* ── Combined transfers + requests table ── */}}
+    {{/* ── Combined table ── */}}
     <div class="card">
       <div class="card-header">Transfers &amp; upload requests</div>
       <table class="overview-table">
         <thead>
           <tr>
-            <th style="width:36px;"></th>
+            <th style="width:60px;"></th>
             <th>Title</th>
             <th>From</th>
             <th>To / Link</th>
             <th>Files</th>
             <th>Status</th>
             <th>Created</th>
+            <th>Expires</th>
             <th style="width:70px;"></th>
           </tr>
         </thead>
         <tbody>
 
-          {{/* ── Transfers ── */}}
           {{range .Transfers}}
           <tr>
             <td><span class="type-badge type-transfer">Send</span></td>
             <td style="font-weight:500;">{{.Title}}</td>
-            <td style="font-size:12px; color:#555;">{{.SenderEmail}}</td>
+            <td style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
             <td class="recipients">
               {{range .Recipients}}
                 <a href="/dl/{{.DownloadToken}}" target="_blank">{{.Email}}</a>
-                {{if .DownloadCount}}<span style="color:#aaa;">({{.DownloadCount}}×)</span>{{end}}<br>
+                {{if .DownloadCount}}<span class="dl-count">({{.DownloadCount}}×)</span>{{end}}<br>
               {{else}}
                 <span style="color:#ccc;">—</span>
               {{end}}
             </td>
-            <td style="font-size:12px;">
-              {{.FileCount}}
-              {{if .TotalBytes}}<span class="size-label">{{.TotalBytes | formatSize}}</span>{{end}}
+            <td style="font-size:12px; white-space:nowrap;">
+              {{if .FileCount}}{{.FileCount}}<span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
             </td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
-            <td style="font-size:12px; color:#aaa;">{{.CreatedAt | formatDate}}</td>
+            <td style="font-size:12px; color:#aaa; white-space:nowrap;">{{.CreatedAt | formatDate}}</td>
+            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
             <td>
               <form method="POST" action="/admin/transfers/{{.ID}}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm"
@@ -94,21 +103,23 @@
           </tr>
           {{end}}
 
-          {{/* ── Upload requests ── */}}
           {{range .Requests}}
           <tr>
             <td><span class="type-badge type-request">Request</span></td>
             <td style="font-weight:500;">{{.Title}}</td>
-            <td style="font-size:12px; color:#555;">{{.RequesterEmail}}</td>
+            <td style="font-size:12px; color:#666;">{{.RequesterEmail}}</td>
             <td class="recipients">
-              <a href="/ul/{{.UploadToken}}" target="_blank">upload link</a>
+              <a href="/ul/{{.UploadToken}}" target="_blank" title="/ul/{{.UploadToken}}">upload link</a>
+              {{if .FileCount}}
+              &nbsp;·&nbsp;<a href="/ul/{{.UploadToken}}/files" target="_blank" style="color:#aaa; font-size:11px;">view files</a>
+              {{end}}
             </td>
-            <td style="font-size:12px;">
-              {{.FileCount}}
-              {{if .TotalBytes}}<span class="size-label">{{.TotalBytes | formatSize}}</span>{{end}}
+            <td style="font-size:12px; white-space:nowrap;">
+              {{if .FileCount}}{{.FileCount}}<span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
             </td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
-            <td style="font-size:12px; color:#aaa;">{{.CreatedAt | formatDate}}</td>
+            <td style="font-size:12px; color:#aaa; white-space:nowrap;">{{.CreatedAt | formatDate}}</td>
+            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
             <td>
               <form method="POST" action="/admin/requests/{{.ID}}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm"
@@ -121,20 +132,20 @@
           {{end}}
 
           {{if and (eq (len .Transfers) 0) (eq (len .Requests) 0)}}
-          <tr class="empty-row"><td colspan="8">No active transfers or upload requests</td></tr>
+          <tr class="empty-row"><td colspan="9">No active transfers or upload requests</td></tr>
           {{end}}
 
         </tbody>
       </table>
     </div>
 
-    {{/* ── Mail queue (failed only) ── */}}
+    {{/* ── Failed mail queue — only shown when non-empty ── */}}
     {{if .FailedMails}}
     <div class="mail-section">
       <div class="card">
         <div class="card-header" style="color:#991b1b;">
           Failed mail queue
-          <span style="font-size:12px; font-weight:400; color:#aaa;">Mails that failed to send</span>
+          <span style="font-size:12px; font-weight:400; color:#aaa; margin-left:8px;">These mails could not be sent</span>
         </div>
         <table>
           <thead>

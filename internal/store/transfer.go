@@ -605,6 +605,7 @@ func (s *TransferStore) ListForAdmin(limit int) ([]TransferSummary, error) {
 		FROM transfers t
 		LEFT JOIN files f ON f.transfer_id = t.id AND f.status = 'complete'
 		WHERE t.status NOT IN ('expired', 'deleted')
+		  AND t.expires_at > unixepoch()
 		GROUP BY t.id
 		ORDER BY t.created_at DESC
 		LIMIT ?`, limit,

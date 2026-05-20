@@ -409,6 +409,7 @@ func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
 		FROM upload_requests r
 		LEFT JOIN upload_request_files f ON f.upload_request_id = r.id AND f.status = 'complete'
 		WHERE r.status NOT IN ('expired', 'deleted')
+		  AND r.expires_at > unixepoch()
 		GROUP BY r.id
 		ORDER BY r.created_at DESC
 		LIMIT ?`, limit,
