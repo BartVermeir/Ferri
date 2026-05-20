@@ -525,9 +525,20 @@ func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// GetFilesByTransferID returns all complete files for a transfer. Used by the admin delete handler.
+// GetFilesByTransferID returns all non-deleted files for a transfer. Used by the admin delete handler.
 func (s *TransferStore) GetFilesByTransferID(transferID string) ([]File, error) {
-	return s.filesByTransferID(transferID)
+	rows, err := s.db.Query(`
+		SELECT id, transfer_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM files WHERE transfer_id = ? AND status != 'deleted'
+		ORDER BY created_at`,
+		transferID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
 }
 
 func (s *TransferStore) filesByTransferID(transferID string) ([]File, error) {

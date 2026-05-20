@@ -225,7 +225,7 @@ func (s *RequestStore) GetFiles(requestID string) ([]UploadRequestFile, error) {
 		SELECT id, upload_request_id, original_name, storage_path, size_bytes,
 		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
 		FROM upload_request_files
-		WHERE upload_request_id = ? AND status = 'complete'`,
+		WHERE upload_request_id = ? AND status != 'deleted'`,
 		requestID,
 	)
 	if err != nil {

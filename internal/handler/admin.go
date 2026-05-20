@@ -147,7 +147,10 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 			return
 		}
 
-		// Remove files from storage
+		// Remove files from storage.
+		// Files are stored flat by TUS as <tus_upload_id> on the backend.
+		// storage_path holds the logical path; TUSUploadID holds the actual filename.
+		// Mirror the same fallback logic used in the download handler.
 		files, err := stores.Transfers.GetFilesByTransferID(id)
 		if err != nil {
 			slog.Error("admin: get files for delete", "id", id, "error", err)
@@ -155,9 +158,13 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 			for _, f := range files {
 				_ = mgr.Remove(f.StoragePath)
 				_ = mgr.Remove(f.StoragePath + ".info")
+				if f.TUSUploadID.Valid {
+					_ = mgr.Remove(f.TUSUploadID.String)
+					_ = mgr.Remove(f.TUSUploadID.String + ".info")
+				}
 			}
 		}
-		// Best-effort removal of the transfer directory (may be empty for TUS uploads)
+		// Best-effort removal of the transfer directory (empty for TUS uploads)
 		_ = mgr.RemoveAll("transfers/" + id)
 
 		if err := stores.Transfers.MarkFilesDeleted(id); err != nil {
@@ -184,6 +191,7 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			return
 		}
 
+		// Mirror download handler fallback: try storage_path first, then TUSUploadID
 		files, err := stores.Requests.GetFiles(id)
 		if err != nil {
 			slog.Error("admin: get request files for delete", "id", id, "error", err)
@@ -191,6 +199,10 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			for _, f := range files {
 				_ = mgr.Remove(f.StoragePath)
 				_ = mgr.Remove(f.StoragePath + ".info")
+				if f.TUSUploadID.Valid {
+					_ = mgr.Remove(f.TUSUploadID.String)
+					_ = mgr.Remove(f.TUSUploadID.String + ".info")
+				}
 			}
 		}
 		_ = mgr.RemoveAll("requests/" + id)
