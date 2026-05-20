@@ -30,15 +30,8 @@
           <div class="progress-bar"><div class="progress-bar-fill" id="progress-fill"></div></div>
           <div class="progress-label" id="progress-label">Uploading…</div>
         </div>
-        <div id="done-area" style="display:none" class="mt-16">
-          <div class="alert alert-success">All files uploaded.</div>
-          <div class="mt-16">
-            <form method="POST" action="{{.CompleteURL}}">
-              <button type="submit" class="btn btn-primary">I'm done uploading</button>
-            </form>
-          </div>
-        </div>
         <div id="result-msg"></div>
+        <form id="complete-form" method="POST" action="{{.CompleteURL}}" style="display:none"></form>
       </div>
     </div>
   </main>
