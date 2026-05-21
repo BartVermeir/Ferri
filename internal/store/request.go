@@ -171,6 +171,14 @@ func (s *RequestStore) SetExpired(requestID string) error {
 	return err
 }
 
+// SoftDelete marks an upload request as deleted (files physically removed).
+func (s *RequestStore) SoftDelete(requestID string) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_requests SET status = 'deleted' WHERE id = ?`, requestID,
+	)
+	return err
+}
+
 // GetExpired returns open requests past their expiry.
 func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
