@@ -252,6 +252,9 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 			}
 		}
 		_ = s.mgr.RemoveAll("requests/" + r.ID)
+		if err := s.stores.Requests.MarkFilesDeleted(r.ID); err != nil {
+			slog.Error("cleanup job: mark request files deleted", "request", r.ID, "error", err)
+		}
 		if err := s.stores.Requests.SoftDelete(r.ID); err != nil {
 			slog.Error("cleanup job: soft delete request", "request", r.ID, "error", err)
 		}
