@@ -234,8 +234,10 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 	if err != nil {
 		slog.Error("cleanup job: get requests for cleanup", "error", err)
 	}
+	slog.Info("cleanup job: found requests to clean", "count", len(requests))
 
 	for _, r := range requests {
+		slog.Info("cleanup job: cleaning request", "id", r.ID, "status", r.Status, "expires_at", r.ExpiresAt, "expired_at", r.ExpiredAt)
 		files, err := s.stores.Requests.GetFiles(r.ID)
 		if err != nil {
 			slog.Error("cleanup job: get request files", "request", r.ID, "error", err)

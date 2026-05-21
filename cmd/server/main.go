@@ -142,6 +142,7 @@ func main() {
 			r.Use(middleware.AdminAuth(cfg))
 			r.Get("/admin", handler.AdminDashboard(cfg, stores))
 			r.Post("/admin/cleanup", handler.AdminForceCleanup(cfg, scheduler))
+			r.Get("/admin/diag", handler.AdminDiag(cfg, stores))
 			r.Get("/admin/transfers", handler.AdminTransfers(cfg, stores))
 			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores, storageMgr))
 			r.Post("/admin/requests/{id}/delete", handler.AdminRequestDelete(cfg, stores, storageMgr))
