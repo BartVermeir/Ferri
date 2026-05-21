@@ -40,7 +40,7 @@ func (s *Scheduler) Start() {
 		s.wg.Add(3)
 		go s.runLoop(time.Duration(s.cfg.Jobs.MailIntervalMinutes)*time.Minute, s.runMailJob)
 		go s.runLoop(time.Duration(s.cfg.Jobs.ExpiryIntervalMinutes)*time.Minute, s.runExpiryJob)
-		go s.runLoop(time.Duration(s.cfg.Jobs.CleanupIntervalHours)*time.Hour, s.runCleanupJob)
+		go s.runLoop(time.Duration(s.cfg.Jobs.CleanupIntervalHours)*time.Hour, func() { s.runCleanupJob() })
 	})
 }
 
