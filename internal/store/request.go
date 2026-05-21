@@ -516,3 +516,13 @@ func (s *RequestStore) DiagPendingFiles() ([]struct {
 	}
 	return result, rows.Err()
 }
+
+// MarkFilesDeleted marks all files of an upload request as deleted in the DB.
+// Call AFTER physical file deletion.
+func (s *RequestStore) MarkFilesDeleted(requestID string) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_request_files SET status = 'deleted' WHERE upload_request_id = ?`,
+		requestID,
+	)
+	return err
+}
