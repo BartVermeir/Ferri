@@ -180,15 +180,22 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 			slog.Error("admin: get files for delete", "id", id, "error", err)
 		} else {
 			for _, f := range files {
-				_ = mgr.Remove(f.StoragePath)
-				_ = mgr.Remove(f.StoragePath + ".info")
+				if err := mgr.Remove(f.StoragePath); err != nil {
+					slog.Warn("admin: remove StoragePath", "path", f.StoragePath, "error", err)
+				}
+				if err := mgr.Remove(f.StoragePath + ".info"); err != nil {
+					slog.Warn("admin: remove StoragePath.info", "path", f.StoragePath+".info", "error", err)
+				}
 				if f.TUSUploadID.Valid {
-					_ = mgr.Remove(f.TUSUploadID.String)
-					_ = mgr.Remove(f.TUSUploadID.String + ".info")
+					if err := mgr.Remove(f.TUSUploadID.String); err != nil {
+						slog.Warn("admin: remove TUSUploadID", "tus_id", f.TUSUploadID.String, "error", err)
+					}
+					if err := mgr.Remove(f.TUSUploadID.String + ".info"); err != nil {
+						slog.Warn("admin: remove TUSUploadID.info", "tus_id", f.TUSUploadID.String+".info", "error", err)
+					}
 				}
 			}
 		}
-		// Best-effort removal of the transfer directory (empty for TUS uploads)
 		_ = mgr.RemoveAll("transfers/" + id)
 
 		if err := stores.Transfers.MarkFilesDeleted(id); err != nil {
@@ -221,11 +228,19 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			slog.Error("admin: get request files for delete", "id", id, "error", err)
 		} else {
 			for _, f := range files {
-				_ = mgr.Remove(f.StoragePath)
-				_ = mgr.Remove(f.StoragePath + ".info")
+				if err := mgr.Remove(f.StoragePath); err != nil {
+					slog.Warn("admin: remove request StoragePath", "path", f.StoragePath, "error", err)
+				}
+				if err := mgr.Remove(f.StoragePath + ".info"); err != nil {
+					slog.Warn("admin: remove request StoragePath.info", "path", f.StoragePath+".info", "error", err)
+				}
 				if f.TUSUploadID.Valid {
-					_ = mgr.Remove(f.TUSUploadID.String)
-					_ = mgr.Remove(f.TUSUploadID.String + ".info")
+					if err := mgr.Remove(f.TUSUploadID.String); err != nil {
+						slog.Warn("admin: remove request TUSUploadID", "tus_id", f.TUSUploadID.String, "error", err)
+					}
+					if err := mgr.Remove(f.TUSUploadID.String + ".info"); err != nil {
+						slog.Warn("admin: remove request TUSUploadID.info", "tus_id", f.TUSUploadID.String+".info", "error", err)
+					}
 				}
 			}
 		}
