@@ -34,14 +34,43 @@ import (
 	"github.com/your-org/ferri/internal/store"
 )
 
+// homePageData is the template data for the combined send/request page.
+type homePageData struct {
+	baseData
+	ExpiryOptions  []config.ExpiryOption
+	WelcomeMessage string
+	Mode           string // "send" or "request"
+	Error          string // request panel validation error
+}
+
+// renderHomePage renders the combined send/request page (send.html).
+func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, mode, errMsg string) {
+	if mode != "request" {
+		mode = "send"
+	}
+	pageTitle := settings.SendPageTitle
+	if pageTitle == "" {
+		pageTitle = "Send files"
+	}
+	renderPage(w, "send.html", homePageData{
+		baseData:       baseData{PageTitle: pageTitle, Settings: settings},
+		ExpiryOptions:  cfg.ExpiryOptions,
+		WelcomeMessage: settings.WelcomeMessage,
+		Mode:           mode,
+		Error:          errMsg,
+	})
+}
+
 // ── Send form ─────────────────────────────────────────────────────────────────
 
 // SendPage handles GET /.
-// Renders the send form with expiry options from config and branding from settings.
+// Renders the combined send/request page. The ?mode=request query param
+// pre-selects the request tab.
 func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
-		renderSendPage(w, cfg, settings, "")
+		mode := r.URL.Query().Get("mode")
+		renderHomePage(w, cfg, settings, mode, "")
 	}
 }
 
@@ -194,9 +223,9 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		// Return transfer_id to browser JS — it drives the TUS uploads from here.
 		jsonOK(w, map[string]any{
-			"transfer_id":    result.TransferID,
-			"file_count":     len(files),
-			"recipient_count": len(result.Recipients),
+			"transfer_id":      result.TransferID,
+			"file_count":       len(files),
+			"recipient_count":  len(result.Recipients),
 		})
 	}
 }
@@ -267,23 +296,7 @@ func jsonError(w http.ResponseWriter, msg string, status int) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-// ── Template rendering placeholder ───────────────────────────────────────────
-// Replace with real template rendering when web/templates/ are implemented.
-
+// renderSendPage is kept for backwards compatibility — wraps renderHomePage.
 func renderSendPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	pageTitle := settings.SendPageTitle
-	if pageTitle == "" {
-		pageTitle = "Send files"
-	}
-	renderPage(w, "send.html", struct {
-		baseData
-		ExpiryOptions []config.ExpiryOption
-		Error         string
-		WelcomeMessage string
-	}{
-		baseData:      baseData{PageTitle: pageTitle, Settings: settings},
-		ExpiryOptions: cfg.ExpiryOptions,
-		Error:         errMsg,
-		WelcomeMessage: settings.WelcomeMessage,
-	})
+	renderHomePage(w, cfg, settings, "send", errMsg)
 }

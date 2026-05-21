@@ -5,68 +5,153 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
   {{template "base-css" .}}
+  <style>
+    .mode-tabs {
+      display: flex;
+      background: #f0f0ec;
+      border-radius: 8px;
+      padding: 4px;
+      gap: 4px;
+      margin-bottom: 28px;
+    }
+    .mode-tab {
+      flex: 1;
+      padding: 9px 16px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      color: #666;
+      transition: all 0.15s;
+      font-family: var(--font);
+    }
+    .mode-tab.active {
+      background: #fff;
+      color: #1a1a1a;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+    .mode-panel { display: none; }
+    .mode-panel.active { display: block; }
+  </style>
 </head>
 <body>
   {{template "base-header" .}}
   <main>
     <div class="page-wrap">
       <div class="card">
-        <h1>{{.PageTitle}}</h1>
-        {{if .WelcomeMessage}}<p class="text-muted mt-8">{{.WelcomeMessage}}</p>{{end}}
-        {{if .Error}}<div class="alert alert-error mt-16">{{.Error}}</div>{{end}}
-        <form id="send-form">
-          <label>Your name <span style="color:#aaa; font-weight:400;">(optional)</span></label>
-          <input type="text" name="sender_name" autocomplete="name">
-          <label>Your email</label>
-          <input type="email" name="sender_email" autocomplete="email" required>
-          <label>Title</label>
-          <input type="text" name="title">
-          <label>Message</label>
-          <textarea name="message" rows="3"></textarea>
-          <label>Recipients <span class="text-muted">(one per line or comma-separated)</span></label>
-          <textarea name="recipients" rows="3" required></textarea>
-          <label>Files</label>
-          <div class="file-drop" id="file-drop">
-            <div class="file-drop-icon">↑</div>
-            <div class="file-drop-text">Click to select or drag &amp; drop files</div>
-            <input type="file" id="file-input" multiple>
-          </div>
-          <ul class="file-list" id="file-list"></ul>
-          <label>Expires after</label>
-          <select name="expiry_hours">
-            {{range .ExpiryOptions}}
-            <option value="{{.Hours}}">{{.Label}}</option>
-            {{end}}
-          </select>
-          <label>Password <span class="text-muted">(optional)</span></label>
-          <input type="password" name="password" autocomplete="new-password">
-          <div class="mt-24">
-            <button type="submit" class="btn btn-primary" id="submit-btn">Send files</button>
-          </div>
-        </form>
-        <div id="progress-wrap" class="progress-wrap" style="display:none">
-          <div class="progress-bar"><div class="progress-bar-fill" id="progress-fill"></div></div>
-          <div class="progress-label" id="progress-label">Uploading…</div>
+
+        <div class="mode-tabs">
+          <button class="mode-tab" data-mode="send" type="button">Send files</button>
+          <button class="mode-tab" data-mode="request" type="button">Request files</button>
         </div>
-        <div id="result-msg"></div>
+
+        {{/* ── Send panel ─────────────────────────────────────────────── */}}
+        <div class="mode-panel" id="panel-send">
+          {{if .WelcomeMessage}}<p class="text-muted" style="margin-bottom:16px;">{{.WelcomeMessage}}</p>{{end}}
+          <form id="send-form">
+            <label>Your name <span style="color:#aaa; font-weight:400;">(optional)</span></label>
+            <input type="text" name="sender_name" autocomplete="name">
+            <label>Your email</label>
+            <input type="email" name="sender_email" autocomplete="email" required>
+            <label>Title</label>
+            <input type="text" name="title">
+            <label>Message</label>
+            <textarea name="message" rows="3"></textarea>
+            <label>Recipients <span class="text-muted">(one per line or comma-separated)</span></label>
+            <textarea name="recipients" rows="3" required></textarea>
+            <label>Files</label>
+            <div class="file-drop" id="file-drop">
+              <div class="file-drop-icon">↑</div>
+              <div class="file-drop-text">Click to select or drag &amp; drop files</div>
+              <input type="file" id="file-input" multiple>
+            </div>
+            <ul class="file-list" id="file-list"></ul>
+            <label>Expires after</label>
+            <select name="expiry_hours">
+              {{range .ExpiryOptions}}
+              <option value="{{.Hours}}">{{.Label}}</option>
+              {{end}}
+            </select>
+            <label>Password <span class="text-muted">(optional)</span></label>
+            <input type="password" name="password" autocomplete="new-password">
+            <div class="mt-24">
+              <button type="submit" class="btn btn-primary" id="submit-btn">Send files</button>
+            </div>
+          </form>
+          <div id="progress-wrap" class="progress-wrap" style="display:none">
+            <div class="progress-bar"><div class="progress-bar-fill" id="progress-fill"></div></div>
+            <div class="progress-label" id="progress-label">Uploading…</div>
+          </div>
+          <div id="result-msg"></div>
+        </div>
+
+        {{/* ── Request panel ───────────────────────────────────────────── */}}
+        <div class="mode-panel" id="panel-request">
+          {{if .Error}}<div class="alert alert-error" style="margin-bottom:16px;">{{.Error}}</div>{{end}}
+          <form method="POST" action="/request">
+            <label>Your name</label>
+            <input type="text" name="requester_name" autocomplete="name" required>
+            <label>Your email</label>
+            <input type="email" name="requester_email" autocomplete="email" required>
+            <label>Title</label>
+            <input type="text" name="title" required>
+            <label>Message <span class="text-muted">(instructions for the uploader)</span></label>
+            <textarea name="message" rows="3"></textarea>
+            <label>Link expires after</label>
+            <select name="expiry_hours">
+              {{range .ExpiryOptions}}
+              <option value="{{.Hours}}">{{.Label}}</option>
+              {{end}}
+            </select>
+            <label>Password <span class="text-muted">(optional)</span></label>
+            <input type="password" name="password" autocomplete="new-password">
+            <div class="mt-24">
+              <button type="submit" class="btn btn-primary">Create upload link</button>
+            </div>
+          </form>
+        </div>
+
       </div>
     </div>
   </main>
+
   <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
   <script src="/static/upload.js?v=1779206025"></script>
+  <script>
+  (function() {
+    var initialMode = '{{ if eq .Mode "request" }}request{{ else }}send{{ end }}';
 
-<script>
-(function() {
-  var primary = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
-  if (!primary) return;
-  var hex = primary.replace('#','');
-  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
-  var r = parseInt(hex.substr(0,2),16)/255;
-  var g = parseInt(hex.substr(2,2),16)/255;
-  var b = parseInt(hex.substr(4,2),16)/255;
-  var luminance = 0.2126*r + 0.7152*g + 0.0722*b;
-  document.documentElement.style.setProperty('--primary-text', luminance > 0.5 ? '#000' : '#fff');
-})();
-</script>
+    function switchMode(mode) {
+      document.querySelectorAll('.mode-tab').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.mode === mode);
+      });
+      document.querySelectorAll('.mode-panel').forEach(function(p) {
+        p.classList.toggle('active', p.id === 'panel-' + mode);
+      });
+    }
+
+    document.querySelectorAll('.mode-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        switchMode(this.dataset.mode);
+      });
+    });
+
+    switchMode(initialMode);
+  })();
+
+  (function() {
+    var primary = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
+    if (!primary) return;
+    var hex = primary.replace('#','');
+    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+    var r = parseInt(hex.substr(0,2),16)/255;
+    var g = parseInt(hex.substr(2,2),16)/255;
+    var b = parseInt(hex.substr(4,2),16)/255;
+    var luminance = 0.2126*r + 0.7152*g + 0.0722*b;
+    document.documentElement.style.setProperty('--primary-text', luminance > 0.5 ? '#000' : '#fff');
+  })();
+  </script>
 </body>
 </html>{{end}}
