@@ -290,16 +290,20 @@ func (s *TransferStore) SetExpired(transferID string) error {
 }
 
 // GetForCleanup returns transfers whose files still need physical deletion:
-//   - expired transfers past the grace period
-//   - admin-deleted transfers (always immediate, regardless of expires_at)
+//   - admin-deleted transfers: always immediate
+//   - expired transfers: uses COALESCE(expired_at, expires_at) to respect grace period
+//     whether they expired via the job (expired_at set) or by time (expires_at past)
 func (s *TransferStore) GetForCleanup(graceHours int) ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
 		       password_hash, status, expires_at, activated_at, expired_at, created_at
 		FROM transfers
 		WHERE (
-		        (status = 'expired' AND expires_at < (unixepoch() - ? * 3600))
-		        OR status = 'deleted'
+		        status = 'deleted'
+		        OR (
+		              status = 'expired'
+		              AND COALESCE(expired_at, expires_at) < (unixepoch() - ? * 3600)
+		           )
 		      )
 		  AND EXISTS (
 		        SELECT 1 FROM files

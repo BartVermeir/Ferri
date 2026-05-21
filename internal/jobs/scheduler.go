@@ -191,6 +191,7 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 		slog.Error("cleanup job: get for cleanup", "error", err)
 		return
 	}
+	slog.Info("cleanup job: found transfers to clean", "count", len(transfers))
 
 	for _, t := range transfers {
 		size, err := s.stores.Transfers.SumFileSizes(t.ID)
