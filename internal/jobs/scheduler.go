@@ -220,6 +220,9 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 			slog.Error("cleanup job: mark deleted", "transfer", t.ID, "error", err)
 			continue
 		}
+		if err := s.stores.Transfers.SoftDelete(t.ID); err != nil {
+			slog.Error("cleanup job: soft delete transfer", "transfer", t.ID, "error", err)
+		}
 
 		totalBytes += size
 		totalTransfers++
@@ -246,6 +249,9 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 			}
 		}
 		_ = s.mgr.RemoveAll("requests/" + r.ID)
+		if err := s.stores.Requests.SoftDelete(r.ID); err != nil {
+			slog.Error("cleanup job: soft delete request", "request", r.ID, "error", err)
+		}
 	}
 
 	// Clean up stalled uploads (independent of transfer expiry)

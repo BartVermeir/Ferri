@@ -231,7 +231,7 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 		}
 		_ = mgr.RemoveAll("requests/" + id)
 
-		if err := stores.Requests.SetExpired(id); err != nil {
+		if err := stores.Requests.SoftDelete(id); err != nil {
 			slog.Error("admin: mark request deleted", "id", id, "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
