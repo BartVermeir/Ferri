@@ -196,14 +196,18 @@ func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
 }
 
 // GetForCleanup returns expired requests past the grace period.
+// GetForCleanup returns upload requests whose files still need physical deletion.
+// Admin-deleted requests are cleaned immediately; expired/completed respect the grace period.
 func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
 		       upload_token, password_hash, max_files, max_total_bytes,
 		       status, expires_at, completed_at, expired_at, created_at
 		FROM upload_requests
-		WHERE status IN ('expired', 'completed', 'deleted')
-		  AND expires_at < (unixepoch() - ? * 3600)
+		WHERE (
+		        (status IN ('expired', 'completed') AND expires_at < (unixepoch() - ? * 3600))
+		        OR status = 'deleted'
+		      )
 		  AND EXISTS (
 		        SELECT 1 FROM upload_request_files
 		        WHERE upload_request_files.upload_request_id = upload_requests.id
