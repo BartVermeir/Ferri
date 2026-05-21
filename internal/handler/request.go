@@ -3,7 +3,7 @@ package handler
 // Request handler — internal user side.
 //
 // Routes (IP-restricted — internal network only):
-//   GET  /request — render upload request creation form
+//   GET  /request — render upload request creation form (tab pre-selected)
 //   POST /request — create upload request, return upload link
 //
 // Flow (architecture.md §5b step 1):
@@ -29,10 +29,11 @@ import (
 // ── Request form ──────────────────────────────────────────────────────────────
 
 // RequestPage handles GET /request.
+// Renders the combined send/request page with the request tab pre-selected.
 func RequestPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
-		renderRequestPage(w, cfg, settings, "")
+		renderHomePage(w, cfg, settings, "request", "")
 	}
 }
 
@@ -45,7 +46,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		settings := appMiddleware.GetSettings(r)
 
 		if err := r.ParseForm(); err != nil {
-			renderRequestPage(w, cfg, settings, "Invalid form data.")
+			renderHomePage(w, cfg, settings, "request", "Invalid form data.")
 			return
 		}
 
@@ -59,17 +60,17 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		expiryStr := r.FormValue("expiry_hours")
 
 		if requesterName == "" {
-			renderRequestPage(w, cfg, settings, "Your name is required.")
+			renderHomePage(w, cfg, settings, "request", "Your name is required.")
 			return
 		}
 		if !isValidEmail(requesterEmail) {
-			renderRequestPage(w, cfg, settings, "Valid email address is required.")
+			renderHomePage(w, cfg, settings, "request", "Valid email address is required.")
 			return
 		}
 
 		expiryHours, err := strconv.Atoi(expiryStr)
 		if err != nil || !isValidExpiryOption(expiryHours, cfg.ExpiryOptions) {
-			renderRequestPage(w, cfg, settings, "Invalid expiry option.")
+			renderHomePage(w, cfg, settings, "request", "Invalid expiry option.")
 			return
 		}
 
@@ -80,7 +81,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 			if err != nil {
 				slog.Error("request: bcrypt hash", "error", err)
-				renderRequestPage(w, cfg, settings, "Internal server error.")
+				renderHomePage(w, cfg, settings, "request", "Internal server error.")
 				return
 			}
 			passwordHash = string(hash)
@@ -102,7 +103,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		_, uploadToken, err := stores.Requests.Create(input)
 		if err != nil {
 			slog.Error("request: create", "error", err)
-			renderRequestPage(w, cfg, settings, "Internal server error.")
+			renderHomePage(w, cfg, settings, "request", "Internal server error.")
 			return
 		}
 
@@ -119,18 +120,12 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	}
 }
 
-// ── Template rendering placeholders ──────────────────────────────────────────
+// ── Template rendering ────────────────────────────────────────────────────────
 
+// renderRequestPage renders the combined page with the request tab active.
+// Kept for any future callers; delegates to renderHomePage.
 func renderRequestPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	renderPage(w, "request.html", struct {
-		baseData
-		ExpiryOptions []config.ExpiryOption
-		Error         string
-	}{
-		baseData:      baseData{PageTitle: "Request files", Settings: settings},
-		ExpiryOptions: cfg.ExpiryOptions,
-		Error:         errMsg,
-	})
+	renderHomePage(w, cfg, settings, "request", errMsg)
 }
 
 func renderRequestResult(w http.ResponseWriter, uploadURL, title string, settings *store.Settings) {
