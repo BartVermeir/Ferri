@@ -437,3 +437,17 @@ func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
 	}
 	return list, rows.Err()
 }
+
+// SumPendingCleanupBytes returns total bytes of files that belong to expired/deleted
+// requests but have not yet been removed from storage.
+func (s *RequestStore) SumPendingCleanupBytes() (int64, error) {
+	var total int64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(f.size_bytes), 0)
+		FROM upload_request_files f
+		JOIN upload_requests r ON r.id = f.upload_request_id
+		WHERE r.status IN ('expired', 'deleted')
+		  AND f.status != 'deleted'`,
+	).Scan(&total)
+	return total, err
+}

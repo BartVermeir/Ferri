@@ -168,31 +168,53 @@ func (s *Scheduler) enqueueExpirySummary(transferID, senderEmail, title string) 
 
 // ── Cleanup job ───────────────────────────────────────────────────────────────
 
+// RunCleanupNow runs the cleanup job immediately, bypassing the grace period.
+// Called by the admin "Force cleanup" button.
+func (s *Scheduler) RunCleanupNow() {
+	s.runCleanupJob(0)
+}
+
 // runCleanupJob deletes files from storage for expired transfers past the grace period,
 // and cleans up stalled uploads.
-func (s *Scheduler) runCleanupJob() {
+func (s *Scheduler) runCleanupJob(graceHours ...int) {
+	grace := s.cfg.Jobs.CleanupGraceHours
+	if len(graceHours) > 0 {
+		grace = graceHours[0]
+	}
+
 	var totalBytes int64
 	var totalTransfers int
 
 	// Clean up expired transfers
-	transfers, err := s.stores.Transfers.GetForCleanup(s.cfg.Jobs.CleanupGraceHours)
+	transfers, err := s.stores.Transfers.GetForCleanup(grace)
 	if err != nil {
 		slog.Error("cleanup job: get for cleanup", "error", err)
 		return
 	}
 
 	for _, t := range transfers {
-		// Sum bytes BEFORE deletion (os.RemoveAll returns no size info)
 		size, err := s.stores.Transfers.SumFileSizes(t.ID)
 		if err != nil {
 			slog.Error("cleanup job: sum sizes", "transfer", t.ID, "error", err)
 		}
 
-		dir := "transfers/" + t.ID
-		if err := s.mgr.RemoveAll(dir); err != nil {
-			slog.Error("cleanup job: remove files", "transfer", t.ID, "dir", dir, "error", err)
-			continue // retry next run
+		// Remove flat TUS files (the actual content) — files are stored as
+		// <tus_upload_id> and <tus_upload_id>.info, not in a subdirectory.
+		files, err := s.stores.Transfers.GetFilesByTransferID(t.ID)
+		if err != nil {
+			slog.Error("cleanup job: get files", "transfer", t.ID, "error", err)
+		} else {
+			for _, f := range files {
+				_ = s.mgr.Remove(f.StoragePath)
+				_ = s.mgr.Remove(f.StoragePath + ".info")
+				if f.TUSUploadID.Valid {
+					_ = s.mgr.Remove(f.TUSUploadID.String)
+					_ = s.mgr.Remove(f.TUSUploadID.String + ".info")
+				}
+			}
 		}
+		// Best-effort removal of (empty) transfer directory
+		_ = s.mgr.RemoveAll("transfers/" + t.ID)
 
 		if err := s.stores.Transfers.MarkFilesDeleted(t.ID); err != nil {
 			slog.Error("cleanup job: mark deleted", "transfer", t.ID, "error", err)
@@ -204,17 +226,26 @@ func (s *Scheduler) runCleanupJob() {
 	}
 
 	// Clean up expired upload requests
-	requests, err := s.stores.Requests.GetForCleanup(s.cfg.Jobs.CleanupGraceHours)
+	requests, err := s.stores.Requests.GetForCleanup(grace)
 	if err != nil {
 		slog.Error("cleanup job: get requests for cleanup", "error", err)
 	}
 
 	for _, r := range requests {
-		dir := "requests/" + r.ID
-		if err := s.mgr.RemoveAll(dir); err != nil {
-			slog.Error("cleanup job: remove request files", "request", r.ID, "error", err)
-			continue
+		files, err := s.stores.Requests.GetFiles(r.ID)
+		if err != nil {
+			slog.Error("cleanup job: get request files", "request", r.ID, "error", err)
+		} else {
+			for _, f := range files {
+				_ = s.mgr.Remove(f.StoragePath)
+				_ = s.mgr.Remove(f.StoragePath + ".info")
+				if f.TUSUploadID.Valid {
+					_ = s.mgr.Remove(f.TUSUploadID.String)
+					_ = s.mgr.Remove(f.TUSUploadID.String + ".info")
+				}
+			}
 		}
+		_ = s.mgr.RemoveAll("requests/" + r.ID)
 	}
 
 	// Clean up stalled uploads (independent of transfer expiry)

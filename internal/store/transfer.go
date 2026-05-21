@@ -671,3 +671,17 @@ func txFunc(db *sql.DB, fn func(tx *sql.Tx) error) error {
 	}
 	return tx.Commit()
 }
+
+// SumPendingCleanupBytes returns total bytes of files that belong to expired/deleted
+// transfers but have not yet been removed from storage (status != 'deleted').
+func (s *TransferStore) SumPendingCleanupBytes() (int64, error) {
+	var total int64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(f.size_bytes), 0)
+		FROM files f
+		JOIN transfers t ON t.id = f.transfer_id
+		WHERE t.status IN ('expired', 'deleted')
+		  AND f.status != 'deleted'`,
+	).Scan(&total)
+	return total, err
+}
