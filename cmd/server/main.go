@@ -92,6 +92,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Jobs ───────────────────────────────────────────────────────────────
+	scheduler := jobs.NewScheduler(cfg, stores, storageMgr)
+	scheduler.Start()
+	defer scheduler.Stop()
+
 	// ── Router ─────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
 
@@ -136,6 +141,7 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.AdminAuth(cfg))
 			r.Get("/admin", handler.AdminDashboard(cfg, stores))
+			r.Post("/admin/cleanup", handler.AdminForceCleanup(cfg, scheduler))
 			r.Get("/admin/transfers", handler.AdminTransfers(cfg, stores))
 			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores, storageMgr))
 			r.Post("/admin/requests/{id}/delete", handler.AdminRequestDelete(cfg, stores, storageMgr))
@@ -151,11 +157,6 @@ func main() {
 					r.Post("/admin/logout", handler.AdminLogout())
 		})
 	})
-
-	// ── Jobs ───────────────────────────────────────────────────────────────
-	scheduler := jobs.NewScheduler(cfg, stores, storageMgr)
-	scheduler.Start()
-	defer scheduler.Stop()
 
 	// ── Server ─────────────────────────────────────────────────────────────
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

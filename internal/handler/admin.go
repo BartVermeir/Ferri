@@ -89,10 +89,11 @@ func AdminLogout() http.HandlerFunc {
 // adminOverviewData holds everything the combined overview page needs.
 type adminOverviewData struct {
 	adminData
-	Transfers   []store.TransferSummary
-	Requests    []store.RequestSummary
-	FailedMails []store.MailItem
-	TotalBytes  int64
+	Transfers    []store.TransferSummary
+	Requests     []store.RequestSummary
+	FailedMails  []store.MailItem
+	TotalBytes   int64
+	PendingBytes int64
 }
 
 // AdminDashboard handles GET /admin — combined overview page.
@@ -128,17 +129,30 @@ func AdminDashboard(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			totalBytes += r.TotalBytes
 		}
 
+		pendingT, _ := stores.Transfers.SumPendingCleanupBytes()
+		pendingR, _ := stores.Requests.SumPendingCleanupBytes()
+		pendingBytes := pendingT + pendingR
+
 		renderPage(w, "admin/dashboard.html", adminOverviewData{
-			adminData:   adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
-			Transfers:   transfers,
-			Requests:    requests,
-			FailedMails: failedMails,
-			TotalBytes:  totalBytes,
+			adminData:    adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
+			Transfers:    transfers,
+			Requests:     requests,
+			FailedMails:  failedMails,
+			TotalBytes:   totalBytes,
+			PendingBytes: pendingBytes,
 		})
 	}
 }
 
-// AdminTransfers is kept for backward compatibility but redirects to the overview.
+// AdminForceCleanup handles POST /admin/cleanup.
+// Runs the cleanup job immediately, bypassing the grace period.
+func AdminForceCleanup(cfg *config.Config, scheduler interface{ RunCleanupNow() }) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slog.Info("admin: force cleanup triggered")
+		go scheduler.RunCleanupNow() // run in background — page redirects immediately
+		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	}
+}
 func AdminTransfers(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
