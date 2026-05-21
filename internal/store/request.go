@@ -202,8 +202,13 @@ func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 		       upload_token, password_hash, max_files, max_total_bytes,
 		       status, expires_at, completed_at, expired_at, created_at
 		FROM upload_requests
-		WHERE status IN ('expired', 'completed')
-		  AND expires_at < (unixepoch() - ? * 3600)`,
+		WHERE status IN ('expired', 'completed', 'deleted')
+		  AND expires_at < (unixepoch() - ? * 3600)
+		  AND EXISTS (
+		        SELECT 1 FROM upload_request_files
+		        WHERE upload_request_files.upload_request_id = upload_requests.id
+		          AND upload_request_files.status != 'deleted'
+		      )`,
 		graceHours,
 	)
 	if err != nil {

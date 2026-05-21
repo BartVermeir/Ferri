@@ -289,14 +289,20 @@ func (s *TransferStore) SetExpired(transferID string) error {
 	return err
 }
 
-// GetForCleanup returns expired transfers whose cleanup grace period has passed.
+// GetForCleanup returns expired transfers whose cleanup grace period has passed
+// AND that still have files not yet removed from storage.
 func (s *TransferStore) GetForCleanup(graceHours int) ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
 		       password_hash, status, expires_at, activated_at, expired_at, created_at
 		FROM transfers
-		WHERE status = 'expired'
-		  AND expires_at < (unixepoch() - ? * 3600)`,
+		WHERE status IN ('expired', 'deleted')
+		  AND expires_at < (unixepoch() - ? * 3600)
+		  AND EXISTS (
+		        SELECT 1 FROM files
+		        WHERE files.transfer_id = transfers.id
+		          AND files.status != 'deleted'
+		      )`,
 		graceHours,
 	)
 	if err != nil {
