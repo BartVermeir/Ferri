@@ -2,6 +2,7 @@ server:
   host: "0.0.0.0"
   port: 8080
   base_url: "https://send.example.com"   # Full public URL. Used in mail links. No trailing slash.
+  timezone: "Europe/Brussels"             # IANA timezone for date display. Handles DST automatically.
   trusted_proxies:                        # CIDR ranges of reverse proxies (for X-Forwarded-For)
     - "172.16.0.0/12"
   shutdown_timeout_seconds: 300          # Must match stop_grace_period in docker-compose.yml

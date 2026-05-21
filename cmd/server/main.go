@@ -46,6 +46,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Timezone ───────────────────────────────────────────────────────────
+	tz := cfg.Server.Timezone
+	if tz == "" {
+		tz = "Europe/Brussels"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		slog.Error("invalid timezone in config", "timezone", tz, "error", err)
+		os.Exit(1)
+	}
+	handler.InitTemplates(loc)
+	slog.Info("timezone set", "timezone", tz)
+
 	// ── Logger ─────────────────────────────────────────────────────────────
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,

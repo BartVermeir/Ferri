@@ -12,10 +12,29 @@ import (
 
 var templates *template.Template
 
+// displayLocation is the timezone used for formatting dates in templates.
+// Defaults to UTC; overridden by InitTemplates at startup.
+var displayLocation = time.UTC
+
+// InitTemplates (re-)initialises the template set with the given timezone.
+// Call this once in main() after loading config, before the HTTP server starts.
+func InitTemplates(loc *time.Location) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	displayLocation = loc
+	buildTemplates()
+}
+
 func init() {
+	// Default init with UTC so tests that never call InitTemplates still work.
+	buildTemplates()
+}
+
+func buildTemplates() {
 	funcMap := template.FuncMap{
 		"formatDate": func(t time.Time) string {
-			return t.Format("2 Jan 2006 15:04")
+			return t.In(displayLocation).Format("2 Jan 2006 15:04")
 		},
 		"formatSize": func(b int64) string {
 			const unit = 1024

@@ -37,6 +37,7 @@ type ServerConfig struct {
 	BaseURL                 string   `yaml:"base_url"`
 	TrustedProxies          []string `yaml:"trusted_proxies"`
 	ShutdownTimeoutSeconds  int      `yaml:"shutdown_timeout_seconds"`
+	Timezone                string   `yaml:"timezone"` // IANA timezone, e.g. "Europe/Brussels"
 }
 
 type StorageConfig struct {
@@ -88,6 +89,7 @@ func Defaults() *Config {
 			Host:                   "0.0.0.0",
 			Port:                   8080,
 			ShutdownTimeoutSeconds: 300, // matches stop_grace_period in docker-compose.yml
+			Timezone:               "Europe/Brussels",
 		},
 		Storage: StorageConfig{Path: "/data/storage"},
 		DB:      DBConfig{Path: "/data/app.db"},
