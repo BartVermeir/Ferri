@@ -669,3 +669,27 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+
+// AdminDiag handles GET /admin/diag — temporary diagnostic endpoint.
+func AdminDiag(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now().Unix()
+		rows, err := stores.Transfers.DiagPendingFiles()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, "now=%d\n\n", now)
+		fmt.Fprintf(w, "%-52s %-10s %-12s %-12s %s %s\n",
+			"transfer_id", "status", "expired_at", "expires_at", "files", "bytes")
+		for _, row := range rows {
+			expiredAt := "NULL"
+			if row.ExpiredAt.Valid {
+				expiredAt = fmt.Sprintf("%d", row.ExpiredAt.Int64)
+			}
+			fmt.Fprintf(w, "%-52s %-10s %-12s %-12d %d %d\n",
+				row.TransferID, row.Status, expiredAt, row.ExpiresAt, row.FileCount, row.TotalBytes)
+		}
+	}
+}

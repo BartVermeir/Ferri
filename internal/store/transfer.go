@@ -698,3 +698,48 @@ func (s *TransferStore) SumPendingCleanupBytes() (int64, error) {
 	).Scan(&total)
 	return total, err
 }
+// DiagPendingFiles returns a summary of files pending cleanup, for debugging.
+func (s *TransferStore) DiagPendingFiles() ([]struct {
+	TransferID string
+	Status     string
+	ExpiredAt  sql.NullInt64
+	ExpiresAt  int64
+	FileCount  int
+	TotalBytes int64
+}, error) {
+	rows, err := s.db.Query(`
+		SELECT t.id, t.status, t.expired_at, t.expires_at,
+		       COUNT(f.id), COALESCE(SUM(f.size_bytes),0)
+		FROM transfers t
+		JOIN files f ON f.transfer_id = t.id AND f.status != 'deleted'
+		WHERE t.status IN ('expired','deleted')
+		GROUP BY t.id
+		ORDER BY t.created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []struct {
+		TransferID string
+		Status     string
+		ExpiredAt  sql.NullInt64
+		ExpiresAt  int64
+		FileCount  int
+		TotalBytes int64
+	}
+	for rows.Next() {
+		var r struct {
+			TransferID string
+			Status     string
+			ExpiredAt  sql.NullInt64
+			ExpiresAt  int64
+			FileCount  int
+			TotalBytes int64
+		}
+		if err := rows.Scan(&r.TransferID, &r.Status, &r.ExpiredAt, &r.ExpiresAt, &r.FileCount, &r.TotalBytes); err != nil {
+			return nil, err
+		}
+		result = append(result, r)
+	}
+	return result, rows.Err()
+}
