@@ -206,16 +206,24 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 			slog.Error("cleanup job: get files", "transfer", t.ID, "error", err)
 		} else {
 			for _, f := range files {
-				_ = s.mgr.Remove(f.StoragePath)
-				_ = s.mgr.Remove(f.StoragePath + ".info")
+				// StoragePath is a logical path (transfers/<id>/<file_id>) that does
+				// not exist on SMB — only attempt it for local storage fallback.
+				removeFile(s.mgr, f.StoragePath, t.ID)
+				removeFile(s.mgr, f.StoragePath+".info", t.ID)
 				if f.TUSUploadID.Valid {
-					_ = s.mgr.Remove(f.TUSUploadID.String)
-					_ = s.mgr.Remove(f.TUSUploadID.String + ".info")
+					// Actual file location on both local and SMB backends.
+					removeFile(s.mgr, f.TUSUploadID.String, t.ID)
+					removeFile(s.mgr, f.TUSUploadID.String+".info", t.ID)
+				} else {
+					slog.Warn("cleanup job: file has no tus_upload_id, may be orphaned on storage",
+						"transfer", t.ID, "file", f.ID, "storage_path", f.StoragePath)
 				}
 			}
 		}
 		// Best-effort removal of (empty) transfer directory
-		_ = s.mgr.RemoveAll("transfers/" + t.ID)
+		if err := s.mgr.RemoveAll("transfers/" + t.ID); err != nil {
+			slog.Warn("cleanup job: remove transfer dir", "transfer", t.ID, "error", err)
+		}
 
 		if err := s.stores.Transfers.MarkFilesDeleted(t.ID); err != nil {
 			slog.Error("cleanup job: mark deleted", "transfer", t.ID, "error", err)
@@ -243,15 +251,20 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 			slog.Error("cleanup job: get request files", "request", r.ID, "error", err)
 		} else {
 			for _, f := range files {
-				_ = s.mgr.Remove(f.StoragePath)
-				_ = s.mgr.Remove(f.StoragePath + ".info")
+				removeFile(s.mgr, f.StoragePath, r.ID)
+				removeFile(s.mgr, f.StoragePath+".info", r.ID)
 				if f.TUSUploadID.Valid {
-					_ = s.mgr.Remove(f.TUSUploadID.String)
-					_ = s.mgr.Remove(f.TUSUploadID.String + ".info")
+					removeFile(s.mgr, f.TUSUploadID.String, r.ID)
+					removeFile(s.mgr, f.TUSUploadID.String+".info", r.ID)
+				} else {
+					slog.Warn("cleanup job: request file has no tus_upload_id, may be orphaned on storage",
+						"request", r.ID, "file", f.ID, "storage_path", f.StoragePath)
 				}
 			}
 		}
-		_ = s.mgr.RemoveAll("requests/" + r.ID)
+		if err := s.mgr.RemoveAll("requests/" + r.ID); err != nil {
+			slog.Warn("cleanup job: remove request dir", "request", r.ID, "error", err)
+		}
 		if err := s.stores.Requests.MarkFilesDeleted(r.ID); err != nil {
 			slog.Error("cleanup job: mark request files deleted", "request", r.ID, "error", err)
 		}
@@ -284,8 +297,8 @@ func (s *Scheduler) cleanupStalled() {
 	for _, f := range stalledFiles {
 		// Remove both the content file and the TUS .info sidecar.
 		// If only the content file is removed, TUS believes the upload can be resumed.
-		_ = s.mgr.Remove(f.StoragePath)
-		_ = s.mgr.Remove(f.StoragePath + ".info")
+		removeFile(s.mgr, f.StoragePath, f.ID)
+		removeFile(s.mgr, f.StoragePath+".info", f.ID)
 
 		if err := s.stores.Transfers.MarkFileDeleted(f.ID); err != nil {
 			slog.Error("cleanup job: mark stalled deleted", "file", f.ID, "error", err)
@@ -302,8 +315,8 @@ func (s *Scheduler) cleanupStalled() {
 	}
 	var removedReq int
 	for _, f := range stalledReqFiles {
-		_ = s.mgr.Remove(f.StoragePath)
-		_ = s.mgr.Remove(f.StoragePath + ".info")
+		removeFile(s.mgr, f.StoragePath, f.ID)
+		removeFile(s.mgr, f.StoragePath+".info", f.ID)
 		if err := s.stores.Requests.MarkFileDeleted(f.ID); err != nil {
 			slog.Error("cleanup job: mark stalled request file deleted", "file", f.ID, "error", err)
 			continue
@@ -313,6 +326,18 @@ func (s *Scheduler) cleanupStalled() {
 
 	if total := removed + removedReq; total > 0 {
 		slog.Info("cleanup job: stalled uploads removed", "count", total)
+	}
+}
+
+// removeFile removes a single file from storage, logging a warning if it fails.
+// "Not found" errors are ignored — the file may already have been removed.
+func removeFile(mgr interface{ Remove(string) error }, path, contextID string) {
+	if err := mgr.Remove(path); err != nil {
+		slog.Warn("cleanup job: remove file failed",
+			"path", path,
+			"context", contextID,
+			"error", err,
+		)
 	}
 }
 
