@@ -36,12 +36,40 @@ import (
 
 // ── Send form ─────────────────────────────────────────────────────────────────
 
+// homePageData is the template data for the combined send/request page.
+type homePageData struct {
+	baseData
+	ExpiryOptions  []config.ExpiryOption
+	WelcomeMessage string
+	Mode           string // "send" or "request"
+	Error          string // request panel validation error
+}
+
+// renderHomePage renders the combined send/request page (send.html).
+func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, mode, errMsg string) {
+	if mode != "request" {
+		mode = "send"
+	}
+	pageTitle := settings.SendPageTitle
+	if pageTitle == "" {
+		pageTitle = "Send files"
+	}
+	renderPage(w, "send.html", homePageData{
+		baseData:       baseData{PageTitle: pageTitle, Settings: settings},
+		ExpiryOptions:  cfg.ExpiryOptions,
+		WelcomeMessage: settings.WelcomeMessage,
+		Mode:           mode,
+		Error:          errMsg,
+	})
+}
+
 // SendPage handles GET /.
-// Renders the send form with expiry options from config and branding from settings.
+// Renders the combined send/request page. ?mode=request pre-selects the request tab.
 func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
-		renderSendPage(w, cfg, settings, "")
+		mode := r.URL.Query().Get("mode")
+		renderHomePage(w, cfg, settings, mode, "")
 	}
 }
 
@@ -284,19 +312,5 @@ func jsonError(w http.ResponseWriter, msg string, status int) {
 // Replace with real template rendering when web/templates/ are implemented.
 
 func renderSendPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	pageTitle := settings.SendPageTitle
-	if pageTitle == "" {
-		pageTitle = "Send files"
-	}
-	renderPage(w, "send.html", struct {
-		baseData
-		ExpiryOptions []config.ExpiryOption
-		Error         string
-		WelcomeMessage string
-	}{
-		baseData:      baseData{PageTitle: pageTitle, Settings: settings},
-		ExpiryOptions: cfg.ExpiryOptions,
-		Error:         errMsg,
-		WelcomeMessage: settings.WelcomeMessage,
-	})
+	renderHomePage(w, cfg, settings, "send", errMsg)
 }
