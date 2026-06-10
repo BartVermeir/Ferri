@@ -34,43 +34,14 @@ import (
 	"github.com/your-org/ferri/internal/store"
 )
 
-// homePageData is the template data for the combined send/request page.
-type homePageData struct {
-	baseData
-	ExpiryOptions  []config.ExpiryOption
-	WelcomeMessage string
-	Mode           string // "send" or "request"
-	Error          string // request panel validation error
-}
-
-// renderHomePage renders the combined send/request page (send.html).
-func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, mode, errMsg string) {
-	if mode != "request" {
-		mode = "send"
-	}
-	pageTitle := settings.SendPageTitle
-	if pageTitle == "" {
-		pageTitle = "Send files"
-	}
-	renderPage(w, "send.html", homePageData{
-		baseData:       baseData{PageTitle: pageTitle, Settings: settings},
-		ExpiryOptions:  cfg.ExpiryOptions,
-		WelcomeMessage: settings.WelcomeMessage,
-		Mode:           mode,
-		Error:          errMsg,
-	})
-}
-
 // ── Send form ─────────────────────────────────────────────────────────────────
 
 // SendPage handles GET /.
-// Renders the combined send/request page. The ?mode=request query param
-// pre-selects the request tab.
+// Renders the send form with expiry options from config and branding from settings.
 func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
-		mode := r.URL.Query().Get("mode")
-		renderHomePage(w, cfg, settings, mode, "")
+		renderSendPage(w, cfg, settings, "")
 	}
 }
 
@@ -99,6 +70,7 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		password := r.FormValue("password")
 		expiryStr := r.FormValue("expiry_hours")
 		recipientsRaw := r.FormValue("recipients") // comma or newline separated
+		linkOnly := r.FormValue("link_only") == "1"
 
 		if senderName == "" {
 			jsonError(w, "Sender name is required", http.StatusBadRequest)
@@ -116,16 +88,23 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		// Parse recipients — comma or newline separated, trim whitespace
-		recipients := parseRecipients(recipientsRaw)
-		if len(recipients) == 0 {
-			jsonError(w, "At least one recipient is required", http.StatusBadRequest)
-			return
-		}
-		for _, r := range recipients {
-			if !isValidEmail(r) {
-				jsonError(w, fmt.Sprintf("Invalid recipient email: %s", r), http.StatusBadRequest)
+		// Determine recipients
+		var recipients []string
+		if linkOnly {
+			// Link-only: use sender as sole recipient to generate a download token.
+			// No notification email will be sent.
+			recipients = []string{senderEmail}
+		} else {
+			recipients = parseRecipients(recipientsRaw)
+			if len(recipients) == 0 {
+				jsonError(w, "At least one recipient is required", http.StatusBadRequest)
 				return
+			}
+			for _, r := range recipients {
+				if !isValidEmail(r) {
+					jsonError(w, fmt.Sprintf("Invalid recipient email: %s", r), http.StatusBadRequest)
+					return
+				}
 			}
 		}
 
@@ -195,15 +174,14 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		expiresAt := time.Now().Add(time.Duration(expiryHours) * time.Hour)
 
 		input := store.CreateTransferInput{
-			Title:        title,
-			Message:      message,
-			SenderName:   senderName,
-			SenderEmail:  senderEmail,
-			PasswordHash: passwordHash,
-			ExpiresAt:    expiresAt,
-			Recipients:   recipients,
-			// Files are NOT created here — TUS PreUploadCreateCallback creates
-			// file rows with the correct storage path when each upload starts.
+			Title:            title,
+			Message:          message,
+			SenderName:       senderName,
+			SenderEmail:      senderEmail,
+			PasswordHash:     passwordHash,
+			ExpiresAt:        expiresAt,
+			Recipients:       recipients,
+			NotifyRecipients: !linkOnly,
 		}
 
 		result, err := stores.Transfers.Create(input)
@@ -219,14 +197,20 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			"recipients", len(recipients),
 			"files", len(files),
 			"expiry_hours", expiryHours,
+			"link_only", linkOnly,
 		)
 
-		// Return transfer_id to browser JS — it drives the TUS uploads from here.
-		jsonOK(w, map[string]any{
-			"transfer_id":      result.TransferID,
-			"file_count":       len(files),
-			"recipient_count":  len(result.Recipients),
-		})
+		resp := map[string]any{
+			"transfer_id":     result.TransferID,
+			"file_count":      len(files),
+			"recipient_count": len(result.Recipients),
+			"link_only":       linkOnly,
+		}
+		// In link-only mode return the download URL so the JS can display it.
+		if linkOnly && len(result.Recipients) > 0 {
+			resp["download_url"] = cfg.Server.BaseURL + "/dl/" + result.Recipients[0].DownloadToken
+		}
+		jsonOK(w, resp)
 	}
 }
 
@@ -296,7 +280,23 @@ func jsonError(w http.ResponseWriter, msg string, status int) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
-// renderSendPage is kept for backwards compatibility — wraps renderHomePage.
+// ── Template rendering placeholder ───────────────────────────────────────────
+// Replace with real template rendering when web/templates/ are implemented.
+
 func renderSendPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	renderHomePage(w, cfg, settings, "send", errMsg)
+	pageTitle := settings.SendPageTitle
+	if pageTitle == "" {
+		pageTitle = "Send files"
+	}
+	renderPage(w, "send.html", struct {
+		baseData
+		ExpiryOptions []config.ExpiryOption
+		Error         string
+		WelcomeMessage string
+	}{
+		baseData:      baseData{PageTitle: pageTitle, Settings: settings},
+		ExpiryOptions: cfg.ExpiryOptions,
+		Error:         errMsg,
+		WelcomeMessage: settings.WelcomeMessage,
+	})
 }

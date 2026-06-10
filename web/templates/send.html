@@ -34,6 +34,9 @@
     }
     .mode-panel { display: none; }
     .mode-panel.active { display: block; }
+    .delivery-tabs { display:flex; background:#f0f0ec; border-radius:6px; padding:3px; gap:3px; margin-top:12px; }
+    .delivery-tab { flex:1; padding:5px 10px; border:none; border-radius:4px; background:transparent; font-size:12px; font-weight:500; cursor:pointer; color:#666; font-family:var(--font); }
+    .delivery-tab.active { background:#fff; color:#1a1a1a; box-shadow:0 1px 2px rgba(0,0,0,0.1); }
   </style>
 </head>
 <body>
@@ -58,9 +61,16 @@
             <label>Title</label>
             <input type="text" name="title">
             <label>Message</label>
-            <textarea name="message" rows="3"></textarea>
-            <label>Recipients <span class="text-muted">(one per line or comma-separated)</span></label>
-            <textarea name="recipients" rows="3" required></textarea>
+            <textarea name="message" rows="2"></textarea>
+            <div class="delivery-tabs">
+              <button class="delivery-tab active" data-delivery="email" type="button">Notify by email</button>
+              <button class="delivery-tab" data-delivery="link" type="button">Get a link</button>
+            </div>
+            <input type="hidden" name="link_only" id="link_only" value="0">
+            <div id="recipients-section">
+              <label>Recipients <span class="text-muted">(one per line or comma-separated)</span></label>
+              <textarea name="recipients" id="recipients" rows="2" required></textarea>
+            </div>
             <label>Files</label>
             <div class="file-drop" id="file-drop">
               <div class="file-drop-icon">↑</div>
@@ -145,6 +155,34 @@
     if (window.history && window.history.replaceState) {
       window.history.replaceState({}, '', window.location.pathname);
     }
+  })();
+
+  // Delivery mode toggle (send panel)
+  (function() {
+    var recipientsSection = document.getElementById('recipients-section');
+    var recipientsField   = document.getElementById('recipients');
+    var linkOnlyInput     = document.getElementById('link_only');
+    var submitBtn         = document.getElementById('submit-btn');
+
+    document.querySelectorAll('.delivery-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        var mode = this.dataset.delivery;
+        document.querySelectorAll('.delivery-tab').forEach(function(t) {
+          t.classList.toggle('active', t.dataset.delivery === mode);
+        });
+        if (mode === 'link') {
+          recipientsSection.style.display = 'none';
+          recipientsField.required = false;
+          linkOnlyInput.value = '1';
+          submitBtn.textContent = 'Upload & get link';
+        } else {
+          recipientsSection.style.display = '';
+          recipientsField.required = true;
+          linkOnlyInput.value = '0';
+          submitBtn.textContent = 'Send files';
+        }
+      });
+    });
   })();
 
   (function() {
