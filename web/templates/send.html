@@ -140,6 +140,11 @@
     });
 
     switchMode(initialMode);
+
+    // Remove ?mode= from URL so refreshing always returns to the send tab
+    if (window.history && window.history.replaceState) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   })();
 
   (function() {
