@@ -349,6 +349,11 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 		return fmt.Errorf("get transfer for mail: %w", err)
 	}
 
+	// Link-only transfers: no notification emails, no sender confirmation.
+	if !t.NotifyRecipients {
+		return nil
+	}
+
 	recipients, err := h.stores.Transfers.GetRecipients(transferID)
 	if err != nil {
 		return fmt.Errorf("get recipients: %w", err)

@@ -14,17 +14,18 @@ type TransferStore struct {
 
 // Transfer represents a row in the transfers table.
 type Transfer struct {
-	ID           string
-	Title        string
-	Message      string
-	SenderName   string
-	SenderEmail  string
-	PasswordHash sql.NullString
-	Status       string
-	ExpiresAt    time.Time
-	ActivatedAt  sql.NullInt64 // nullable epoch seconds
-	ExpiredAt    sql.NullInt64 // nullable epoch seconds
-	CreatedAt    time.Time
+	ID               string
+	Title            string
+	Message          string
+	SenderName       string
+	SenderEmail      string
+	PasswordHash     sql.NullString
+	Status           string
+	ExpiresAt        time.Time
+	ActivatedAt      sql.NullInt64 // nullable epoch seconds
+	ExpiredAt        sql.NullInt64 // nullable epoch seconds
+	CreatedAt        time.Time
+	NotifyRecipients bool // false = link-only mode, skip notification emails
 }
 
 // File represents a row in the files table.
@@ -55,14 +56,15 @@ type Recipient struct {
 
 // CreateTransferInput holds all data needed to create a transfer atomically.
 type CreateTransferInput struct {
-	Title        string
-	Message      string
-	SenderName   string
-	SenderEmail  string
-	PasswordHash string // empty = no password
-	ExpiresAt    time.Time
-	Recipients   []string // email addresses
-	Files        []CreateFileInput
+	Title            string
+	Message          string
+	SenderName       string
+	SenderEmail      string
+	PasswordHash     string // empty = no password
+	ExpiresAt        time.Time
+	Recipients       []string // email addresses
+	Files            []CreateFileInput
+	NotifyRecipients bool // false = link-only, skip notification emails
 }
 
 type CreateFileInput struct {
@@ -103,8 +105,8 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 
 		_, err := tx.Exec(`
 			INSERT INTO transfers (id, title, message, sender_name, sender_email,
-			                       password_hash, status, expires_at)
-			VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+			                       password_hash, status, expires_at, notify_recipients)
+			VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
 			transferID,
 			input.Title,
 			input.Message,
@@ -112,6 +114,7 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 			input.SenderEmail,
 			passwordHash,
 			input.ExpiresAt.Unix(),
+			boolToInt(input.NotifyRecipients),
 		)
 		if err != nil {
 			return fmt.Errorf("insert transfer: %w", err)
@@ -516,14 +519,16 @@ func (s *TransferStore) GetFileIDByTUSID(tusUploadID string) (string, error) {
 func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
 	var t Transfer
 	var expiresAt, createdAt int64
+	var notifyRecipients int
 	err := s.db.QueryRow(`
 		SELECT id, title, message, sender_name, sender_email,
-		       password_hash, status, expires_at, activated_at, expired_at, created_at
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients
 		FROM transfers WHERE id = ?`, transferID,
 	).Scan(
 		&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
 		&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
-		&t.ExpiredAt, &createdAt,
+		&t.ExpiredAt, &createdAt, &notifyRecipients,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -533,10 +538,18 @@ func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
 	}
 	t.ExpiresAt = time.Unix(expiresAt, 0)
 	t.CreatedAt = time.Unix(createdAt, 0)
+	t.NotifyRecipients = notifyRecipients != 0
 	return &t, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // GetFilesByTransferID returns all non-deleted files for a transfer. Used by the admin delete handler.
 func (s *TransferStore) GetFilesByTransferID(transferID string) ([]File, error) {

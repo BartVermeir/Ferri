@@ -125,6 +125,7 @@
       data.delete('files');
 
       var transferId;
+      var downloadUrl;
       try {
         var resp = await fetch('/send', { method: 'POST', body: data });
         var json = await resp.json();
@@ -135,6 +136,7 @@
           return;
         }
         transferId = json.transfer_id;
+        downloadUrl = json.download_url || null;
       } catch (err) {
         showResult(resultEl, 'error', 'Network error. Please try again.');
         setSubmitState(form, false);
@@ -153,12 +155,21 @@
       }
 
       if (progWrap) progWrap.style.display = 'none';
-      showResult(resultEl, 'success',
-        collection.count() + ' file(s) uploaded successfully. Recipients will receive a download link by email.');
+
+      if (downloadUrl) {
+        showDownloadLink(resultEl, downloadUrl);
+      } else {
+        showResult(resultEl, 'success',
+          collection.count() + ' file(s) uploaded. Recipients will receive a download link by email.');
+      }
+
       form.reset();
       collection.clear();
       renderFileList(collection, listEl);
       setSubmitState(form, false);
+      // Reset delivery toggle back to email mode
+      var emailTab = document.querySelector('.delivery-tab[data-delivery="email"]');
+      if (emailTab) emailTab.click();
     });
   }
 
@@ -268,6 +279,39 @@
     el.className = 'alert alert-' + (type === 'error' ? 'error' : 'success') + ' mt-16';
     el.textContent = msg;
     el.style.display = '';
+  }
+
+  function showDownloadLink(el, url) {
+    if (!el) return;
+    el.className = 'alert alert-success mt-16';
+    el.style.display = '';
+    el.innerHTML =
+      '<div style="margin-bottom:8px;font-weight:500;">Upload complete — your download link:</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;">' +
+        '<input type="text" readonly value="' + escHtml(url) + '" ' +
+          'style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #bbf7d0;' +
+          'border-radius:5px;background:#f0fdf4;color:#166534;outline:none;">' +
+        '<button type="button" id="copy-link-btn" ' +
+          'style="padding:6px 12px;border:none;border-radius:5px;background:#166534;' +
+          'color:#fff;font-size:12px;cursor:pointer;white-space:nowrap;font-family:inherit;">Copy</button>' +
+      '</div>';
+    var btn = el.querySelector('#copy-link-btn');
+    if (btn) {
+      btn.addEventListener('click', function() {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(url).then(function() {
+            btn.textContent = 'Copied!';
+            setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+          });
+        } else {
+          var inp = el.querySelector('input');
+          inp.select();
+          document.execCommand('copy');
+          btn.textContent = 'Copied!';
+          setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
+        }
+      });
+    }
   }
 
   function setSubmitState(form, disabled) {
