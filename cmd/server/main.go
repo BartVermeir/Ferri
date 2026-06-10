@@ -46,19 +46,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── Timezone ───────────────────────────────────────────────────────────
-	tz := cfg.Server.Timezone
-	if tz == "" {
-		tz = "Europe/Brussels"
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		slog.Error("invalid timezone in config", "timezone", tz, "error", err)
-		os.Exit(1)
-	}
-	handler.InitTemplates(loc)
-	slog.Info("timezone set", "timezone", tz)
-
 	// ── Logger ─────────────────────────────────────────────────────────────
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -122,6 +109,9 @@ func main() {
 	// Public routes
 	r.Get("/health", handler.Health())
 	r.Handle("/static/*", http.StripPrefix("/static/", handler.Static()))
+	r.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/static/favicon.svg", http.StatusMovedPermanently)
+	})
 	// Serve uploaded logo from storage path
 	r.Handle("/static/logo/*", http.StripPrefix("/static/logo/", http.FileServer(http.Dir(cfg.Storage.Path+"/logo"))))
 	r.Get("/dl/{token}", handler.DownloadPage(cfg, stores))
