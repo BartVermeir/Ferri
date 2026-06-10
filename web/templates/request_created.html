@@ -39,9 +39,14 @@
 </script>
 <script>
 document.getElementById('copy-btn').addEventListener('click', function() {
+  var btn = document.getElementById('copy-btn');
   var url = document.getElementById('upload-url').textContent.trim();
   navigator.clipboard.writeText(url).then(function() {
-    document.getElementById('copy-btn').textContent = 'Copied!';
+    btn.textContent = 'Copied!';
+    setTimeout(function() { btn.textContent = 'Copy link'; }, 2000);
+  }).catch(function() {
+    btn.textContent = 'Copy failed';
+    setTimeout(function() { btn.textContent = 'Copy link'; }, 2000);
   });
 });
 </script>
