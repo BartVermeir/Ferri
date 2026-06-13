@@ -35,9 +35,10 @@ CREATE TABLE IF NOT EXISTS transfers (
                             -- active:   all files uploaded, link is live
                             -- expired:  past expires_at, expiry job has run
                             -- deleted:  admin deleted manually
-    expires_at      INTEGER NOT NULL,
-    activated_at    INTEGER,                        -- set when status → active
-    expired_at      INTEGER,                        -- set when status → expired
+    expires_at         INTEGER NOT NULL,
+    activated_at       INTEGER,                     -- set when status → active
+    expired_at         INTEGER,                     -- set when status → expired
+    notify_recipients  INTEGER NOT NULL DEFAULT 1,  -- 0 = link-only, skip notification emails
     created_at      INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
