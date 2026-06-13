@@ -81,10 +81,10 @@ Als iemand `web/static/` aanmaakt: `rm -rf web/static/` en opnieuw committen.
 
 ## Admin panel
 
-- URL: `http://172.16.10.136:8081/admin/login`
+- URL: `http://<server-ip>:8081/admin/login`
 - Token: staat in `/opt/ferri/.env` onder `ADMIN_TOKEN`
 - Extern bereikbaar via poort 8081 (reverse proxy → 8080 intern)
-- Diagnosepagina: `http://172.16.10.136:8081/admin/diag` (tijdelijk, nog te verwijderen)
+- Diagnosepagina: `http://<server-ip>:8081/admin/diag` (tijdelijk, nog te verwijderen)
 
 ---
 
@@ -364,7 +364,7 @@ Als ADMIN_TOKEN verandert, moet het SMB wachtwoord opnieuw ingesteld worden.
 
 ```bash
 # Als git pull faalt met auth error:
-git remote set-url origin https://BartVermeir:GITHUB_TOKEN@github.com/BartVermeir/Ferri.git
+git remote set-url origin https://<github-user>:<GITHUB_TOKEN>@github.com/<owner>/Ferri.git
 git pull
 ```
 

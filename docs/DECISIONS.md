@@ -8,7 +8,7 @@ This document is intended as a living record. When a decision is revisited or re
 
 ## Project context
 
-**Primary deployment:** De Mensen NV (post-production company, Antwerp)  
+**Product scope:** Generic, open-source, self-hosted file transfer tool
 **Product scope:** Generic, open-source, self-hosted file transfer tool  
 **Decision date:** 2026-05-16  
 **Status:** Initial architecture decisions
@@ -65,7 +65,7 @@ This document is intended as a living record. When a decision is revisited or re
 - The protocol is storage-agnostic: the TUS handler writes to any filesystem path.
 
 **Alternatives considered:**
-- **S3 multipart upload:** Requires S3-compatible storage. De Mensen uses NFS/ZFS. Introducing an S3 gateway (MinIO) adds complexity and a moving part without benefit.
+- **S3 multipart upload:** Requires S3-compatible storage. The target deployment uses NFS/ZFS. Introducing an S3 gateway (MinIO) adds complexity and a moving part without benefit.
 - **Custom chunking implementation:** Re-inventing TUS. Not justified when a mature open standard exists.
 - **Resumable.js / Flow.js:** Client-only chunking libraries, not a complete protocol. Server-side state management would need to be built from scratch.
 
@@ -94,7 +94,7 @@ This document is intended as a living record. When a decision is revisited or re
 
 **Rationale:**
 - Docker volume mounts make any storage backend (local disk, NFS, ZFS, SMB, CIFS) appear as a filesystem path inside the container.
-- De Mensen's Dell PowerScale/Isilon is accessed via NFS and will be mounted into the container at deploy time.
+- The storage backend (NFS, SMB, or local path) is mounted into the container at deploy time.
 - This approach has zero vendor lock-in and requires no storage-specific SDK or driver.
 - Future deployments can use any mountable storage without code changes.
 
@@ -186,7 +186,7 @@ This document is intended as a living record. When a decision is revisited or re
 - Revocation is trivial: delete or deactivate the token in the database.
 - Base58 encoding avoids ambiguous characters (0, O, I, l) and is URL-safe without percent-encoding.
 
-**URL structure (compatible with De Mensen existing structure):**
+**URL structure:**
 - Download: `/dl/<token>`
 - Upload request: `/ul/<token>`
 - Admin: `/admin`
@@ -199,14 +199,14 @@ This document is intended as a living record. When a decision is revisited or re
 
 ## DEC-011: Open source strategy
 
-**Decision:** The codebase is published as open source (MIT or Apache 2.0 license, TBD). All configuration values are externalized. No hardcoded references to De Mensen, their infrastructure, or their branding exist in the codebase.
+**Decision:** The codebase is published as open source (MIT or Apache 2.0 license, TBD). All configuration values are externalized. No hardcoded references to any specific organisation, infrastructure, or branding exist in the codebase.
 
 **Rationale:**
-- The software is generic by design. De Mensen's deployment is one instance of a general-purpose tool.
+- The software is generic by design. Any deployment is one instance of a general-purpose tool.
 - Hardcoded values would prevent other organizations from adopting the tool without forking.
 - Branding, domain names, color schemes, and company names are all runtime configuration.
 
-**What De Mensen-specific things live outside the repo:**
+**What deployment-specific things live outside the repo:**
 - `config.yaml` (their SMTP, IP ranges, domain, storage path)
 - Docker Compose override file
 - Their logo and brand assets (mounted as volumes or configured via admin UI)
