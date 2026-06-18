@@ -345,7 +345,7 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			if err != nil {
 				continue
 			}
-			entry, err := zw.Create(f.OriginalName)
+			entry, err := zw.Create(filepath.Base(f.OriginalName))
 			if err != nil {
 				src.Close()
 				continue

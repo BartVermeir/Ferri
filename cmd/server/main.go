@@ -101,9 +101,9 @@ func main() {
 	r := chi.NewRouter()
 
 	// Global middleware
-	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.RequestID)
 	r.Use(middleware.Recovery())
+	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.InjectSettings(stores.Settings))
 
 	// Public routes
@@ -129,7 +129,7 @@ func main() {
 
 	// IP-restricted routes (internal network only)
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.IPAllow(cfg.IPAllowlist))
+		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies))
 		r.Get("/", handler.SendPage(cfg, stores))
 		r.Post("/send", handler.SendCreate(cfg, stores))
 		r.Get("/request", handler.RequestPage(cfg, stores))
@@ -138,13 +138,14 @@ func main() {
 
 	// Admin routes (IP-restricted + session cookie)
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.IPAllow(cfg.IPAllowlist))
+		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies))
 		r.Get("/admin/login", handler.AdminLogin(cfg))
 		r.Post("/admin/login", handler.AdminLoginPost(cfg))
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.AdminAuth(cfg))
 			r.Get("/admin", handler.AdminDashboard(cfg, stores))
 			r.Post("/admin/cleanup", handler.AdminForceCleanup(cfg, scheduler))
+			r.Post("/admin/orphans/clean", handler.AdminOrphanClean(cfg, stores))
 			r.Get("/admin/diag", handler.AdminDiag(cfg, stores))
 			r.Get("/admin/transfers", handler.AdminTransfers(cfg, stores))
 			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores, storageMgr))
@@ -158,7 +159,7 @@ func main() {
 					r.Post("/admin/settings/logo/delete", handler.AdminLogoDelete(cfg, stores))
 					r.Post("/admin/settings/storage", handler.AdminStorageSave(cfg, stores, storageMgr))
 					r.Post("/admin/settings/storage/test", handler.AdminStorageTest(cfg, stores))
-					r.Post("/admin/logout", handler.AdminLogout())
+					r.Post("/admin/logout", handler.AdminLogout(cfg))
 		})
 	})
 

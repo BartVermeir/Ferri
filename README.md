@@ -33,8 +33,8 @@ Self-hosted file transfer tool. Send large files to external recipients, or requ
 ### 1 — Clone
 
 ```bash
-git clone https://github.com/your-org/ferri.git
-cd ferri
+git clone https://github.com/BartVermeir/Ferri.git
+cd Ferri
 ```
 
 ### 2 — Create secrets
@@ -56,7 +56,10 @@ SMTP_PASSWORD=<your SMTP relay password>
 
 ```bash
 cp config.example.yaml config.yaml
+cp litestream.example.yml litestream.yml
 ```
+
+`litestream.yml` is required — `docker-compose.yml` mounts it unconditionally. If you don't need database backups, edit the file and remove the `replicas:` block entirely. See `litestream.example.yml` for S3 and local-file replica options.
 
 Minimum required edits in `config.yaml`:
 
@@ -69,9 +72,26 @@ smtp:
   username: "your_smtp_username"
 ```
 
+If you're running behind a reverse proxy, also set:
+
+```yaml
+server:
+  trusted_proxies:
+    - "127.0.0.1/32"     # the IP of your proxy — prevents clients from spoofing X-Forwarded-For
+```
+
 See `config.example.yaml` for all options with annotations.
 
-### 4 — Build and run
+### 4 — Edit storage path and build
+
+Open `docker-compose.yml` and replace the storage volume with your own path:
+
+```yaml
+volumes:
+  - /your/storage/path:/data/storage    # ← change this
+```
+
+Then build and start:
 
 ```bash
 docker build -t ferri:latest .
@@ -105,7 +125,7 @@ From the admin panel you can configure branding, mail settings, and connect your
 |---|---|
 | `.env` | Secrets (ADMIN_TOKEN, SMTP_PASSWORD). Never commit this. |
 | `config.yaml` | All other configuration. Copy from `config.example.yaml`. |
-| `litestream.yml` | SQLite replication (optional). Copy from `litestream.example.yml`. |
+| `litestream.yml` | SQLite replication config. Copy from `litestream.example.yml`. Required — docker-compose mounts it. |
 | `docker-compose.yml` | Container setup. Edit the storage volume mount. |
 
 ---

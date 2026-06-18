@@ -72,6 +72,22 @@
       </div>
     </div>
 
+    {{if .OrphansDeleted}}
+    <div class="alert alert-success" style="margin-bottom:20px;">
+      Orphan cleanup complete — {{.OrphansDeleted}} file(s) removed from storage.
+    </div>
+    {{end}}
+
+    {{/* ── Tools ── */}}
+    <div style="margin-bottom:24px;">
+      <form method="POST" action="/admin/orphans/clean" style="display:inline;">
+        <button type="submit" class="btn btn-secondary btn-sm"
+          onclick="return confirm('Scan local storage for orphaned files (not referenced in the database) and delete them?')">
+          Clean orphan files
+        </button>
+      </form>
+    </div>
+
     {{/* ── Combined table ── */}}
     <div class="card">
       <div class="card-header">Transfers &amp; upload requests</div>
