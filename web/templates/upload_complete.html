@@ -10,26 +10,13 @@
   {{template "base-header" .}}
   <main>
     <div class="page-wrap">
-      <div class="card" style="text-align:center; padding:48px 32px;">
-        <div style="font-size:48px; margin-bottom:16px;">✓</div>
+      <div class="card card-centered">
+        <div class="display-icon">✓</div>
         <h1>Thank you</h1>
         <p class="text-muted mt-8">Your files have been received. You can close this window.</p>
       </div>
     </div>
   </main>
-
-<script>
-(function() {
-  var primary = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
-  if (!primary) return;
-  var hex = primary.replace('#','');
-  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
-  var r = parseInt(hex.substr(0,2),16)/255;
-  var g = parseInt(hex.substr(2,2),16)/255;
-  var b = parseInt(hex.substr(4,2),16)/255;
-  var luminance = 0.2126*r + 0.7152*g + 0.0722*b;
-  document.documentElement.style.setProperty('--primary-text', luminance > 0.5 ? '#000' : '#fff');
-})();
-</script>
+  {{template "primary-text-script" .}}
 </body>
 </html>{{end}}
