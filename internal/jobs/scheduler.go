@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/your-org/ferri/internal/config"
-	"github.com/your-org/ferri/internal/mail"
-	"github.com/your-org/ferri/internal/storage"
-	"github.com/your-org/ferri/internal/store"
+	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/mail"
+	"github.com/BartVermeir/Ferri/internal/storage"
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // Scheduler runs background jobs on configurable intervals.

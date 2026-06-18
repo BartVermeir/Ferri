@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/your-org/ferri/internal/token"
+	"github.com/BartVermeir/Ferri/internal/token"
 )
 
 type MailStore struct {

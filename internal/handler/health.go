@@ -5,7 +5,7 @@ import (
 	"io/fs"
 	"net/http"
 
-	"github.com/your-org/ferri/static"
+	"github.com/BartVermeir/Ferri/static"
 )
 
 // Health returns a handler for GET /health.

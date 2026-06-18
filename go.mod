@@ -1,4 +1,4 @@
-module github.com/your-org/ferri
+module github.com/BartVermeir/Ferri
 
 go 1.23
 

@@ -3,7 +3,7 @@ package store
 import (
 	"database/sql"
 
-	"github.com/your-org/ferri/internal/token"
+	"github.com/BartVermeir/Ferri/internal/token"
 )
 
 type DownloadStore struct {

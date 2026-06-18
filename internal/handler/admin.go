@@ -35,10 +35,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/your-org/ferri/internal/config"
-	appMiddleware "github.com/your-org/ferri/internal/middleware"
-	"github.com/your-org/ferri/internal/storage"
-	"github.com/your-org/ferri/internal/store"
+	"github.com/BartVermeir/Ferri/internal/config"
+	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/storage"
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // ── Login / Logout ────────────────────────────────────────────────────────────

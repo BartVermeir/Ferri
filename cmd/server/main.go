@@ -14,14 +14,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 
-	"github.com/your-org/ferri/internal/config"
-	"github.com/your-org/ferri/internal/db"
-	"github.com/your-org/ferri/internal/handler"
-	"github.com/your-org/ferri/internal/jobs"
-	"github.com/your-org/ferri/internal/middleware"
-	"github.com/your-org/ferri/internal/storage"
-	"github.com/your-org/ferri/internal/store"
-	ferritls "github.com/your-org/ferri/internal/tus"
+	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/db"
+	"github.com/BartVermeir/Ferri/internal/handler"
+	"github.com/BartVermeir/Ferri/internal/jobs"
+	"github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/storage"
+	"github.com/BartVermeir/Ferri/internal/store"
+	ferritls "github.com/BartVermeir/Ferri/internal/tus"
 )
 
 func main() {
