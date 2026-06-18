@@ -1,7 +1,11 @@
 package mail
 
-import "github.com/your-org/ferri/internal/store"
-import "fmt"
+import (
+	"fmt"
+	"html"
+
+	"github.com/your-org/ferri/internal/store"
+)
 
 // Wrap renders bodyHTML inside the standard Ferri mail layout.
 // Uses branding settings (primary color, company name) from the DB.
@@ -13,7 +17,7 @@ func Wrap(settings *store.Settings, bodyHTML string) string {
 			primary = settings.PrimaryColor
 		}
 		if settings.CompanyName != "" {
-			company = settings.CompanyName
+			company = html.EscapeString(settings.CompanyName)
 		}
 	}
 	return fmt.Sprintf(`<!DOCTYPE html>

@@ -22,6 +22,10 @@ type Config struct {
 	IPAllowlist []*net.IPNet `yaml:"-"`
 	RawAllowlist []string    `yaml:"ip_allowlist"`
 
+	// TrustedProxies is parsed from server.trusted_proxies.
+	// Only connections from these IPs may set X-Real-IP / X-Forwarded-For.
+	TrustedProxies []*net.IPNet `yaml:"-"`
+
 	SMTP   SMTPConfig   `yaml:"smtp"`
 	Admin  AdminConfig  `yaml:"admin"`
 
@@ -37,7 +41,8 @@ type ServerConfig struct {
 	BaseURL                 string   `yaml:"base_url"`
 	TrustedProxies          []string `yaml:"trusted_proxies"`
 	ShutdownTimeoutSeconds  int      `yaml:"shutdown_timeout_seconds"`
-	Timezone                string   `yaml:"timezone"` // IANA timezone, e.g. "Europe/Brussels"
+	Timezone                string   `yaml:"timezone"`       // IANA timezone, e.g. "Europe/Brussels"
+	SecureCookies           bool     `yaml:"secure_cookies"` // Set true when serving over HTTPS
 }
 
 type StorageConfig struct {
@@ -153,6 +158,13 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("invalid ip_allowlist entry %q: %w", cidr, err)
 		}
 		cfg.IPAllowlist = append(cfg.IPAllowlist, network)
+	}
+	for _, cidr := range cfg.Server.TrustedProxies {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted_proxies entry %q: %w", cidr, err)
+		}
+		cfg.TrustedProxies = append(cfg.TrustedProxies, network)
 	}
 
 	if err := cfg.validate(); err != nil {

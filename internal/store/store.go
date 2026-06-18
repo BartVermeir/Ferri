@@ -10,6 +10,7 @@ type Stores struct {
 	Requests  *RequestStore
 	Mail      *MailStore
 	Settings  *SettingsStore
+	Files     *FilesStore
 }
 
 // New creates a Stores from a single shared *sql.DB.
@@ -20,5 +21,6 @@ func New(db *sql.DB) *Stores {
 		Requests:  &RequestStore{db: db},
 		Mail:      &MailStore{db: db},
 		Settings:  NewSettingsStore(db),
+		Files:     &FilesStore{db: db},
 	}
 }

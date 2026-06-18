@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,15 +72,15 @@ func AdminLoginPost(cfg *config.Config) http.HandlerFunc {
 			return
 		}
 
-		appMiddleware.SetAdminCookie(w, cfg.Admin.Token, cfg.SessionTTL())
+		appMiddleware.SetAdminCookie(w, cfg.Admin.Token, cfg.SessionTTL(), cfg.Server.SecureCookies)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}
 }
 
 // AdminLogout handles POST /admin/logout.
-func AdminLogout() http.HandlerFunc {
+func AdminLogout(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		appMiddleware.ClearAdminCookie(w)
+		appMiddleware.ClearAdminCookie(w, cfg.Server.SecureCookies)
 		http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 	}
 }
@@ -89,11 +90,12 @@ func AdminLogout() http.HandlerFunc {
 // adminOverviewData holds everything the combined overview page needs.
 type adminOverviewData struct {
 	adminData
-	Transfers    []store.TransferSummary
-	Requests     []store.RequestSummary
-	FailedMails  []store.MailItem
-	TotalBytes   int64
-	PendingBytes int64
+	Transfers      []store.TransferSummary
+	Requests       []store.RequestSummary
+	FailedMails    []store.MailItem
+	TotalBytes     int64
+	PendingBytes   int64
+	OrphansDeleted int // set when redirected back after orphan cleanup
 }
 
 // AdminDashboard handles GET /admin — combined overview page.
@@ -133,13 +135,16 @@ func AdminDashboard(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		pendingR, _ := stores.Requests.SumPendingCleanupBytes()
 		pendingBytes := pendingT + pendingR
 
+		orphans, _ := strconv.Atoi(r.URL.Query().Get("orphans"))
+
 		renderPage(w, "admin/dashboard.html", adminOverviewData{
-			adminData:    adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
-			Transfers:    transfers,
-			Requests:     requests,
-			FailedMails:  failedMails,
-			TotalBytes:   totalBytes,
-			PendingBytes: pendingBytes,
+			adminData:      adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
+			Transfers:      transfers,
+			Requests:       requests,
+			FailedMails:    failedMails,
+			TotalBytes:     totalBytes,
+			PendingBytes:   pendingBytes,
+			OrphansDeleted: orphans,
 		})
 	}
 }
@@ -152,6 +157,81 @@ func AdminForceCleanup(cfg *config.Config, scheduler interface{ RunCleanupNow() 
 		go scheduler.RunCleanupNow() // run in background — page redirects immediately
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}
+}
+
+// AdminOrphanClean handles POST /admin/orphans/clean.
+// Scans local storage for files not referenced in the DB and deletes them.
+// Only works for local storage; returns 400 for SMB.
+func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		settings := appMiddleware.GetSettings(r)
+		if settings.StorageType == "smb" {
+			http.Error(w, "Orphan cleanup is only supported for local storage", http.StatusBadRequest)
+			return
+		}
+
+		known, err := stores.Files.AllTUSUploadIDs()
+		if err != nil {
+			slog.Error("orphan scan: query tus ids", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		entries, err := os.ReadDir(cfg.Storage.Path)
+		if err != nil {
+			slog.Error("orphan scan: read dir", "path", cfg.Storage.Path, "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		var deleted, kept int
+		for _, e := range entries {
+			if e.IsDir() || strings.HasSuffix(e.Name(), ".info") {
+				continue
+			}
+			name := e.Name()
+			if known[name] {
+				continue
+			}
+			// UUID not in known set. Check the .info file: request files have
+			// tus_upload_id cleared to NULL after upload completion, so their UUID
+			// won't appear in the DB but the transfer/request still exists.
+			if ref, _ := orphanInfoReferenced(cfg.Storage.Path, name, stores.Files); ref {
+				kept++
+				continue
+			}
+			if err := os.Remove(filepath.Join(cfg.Storage.Path, name)); err != nil {
+				slog.Warn("orphan clean: remove", "file", name, "error", err)
+				kept++
+			} else {
+				os.Remove(filepath.Join(cfg.Storage.Path, name+".info"))
+				deleted++
+			}
+		}
+
+		slog.Info("orphan cleanup done", "deleted", deleted, "kept_as_referenced", kept)
+		http.Redirect(w, r, fmt.Sprintf("/admin?orphans=%d", deleted), http.StatusSeeOther)
+	}
+}
+
+// orphanInfoReferenced reads the TUS .info file for name and checks whether its
+// embedded transfer_id or upload_request_token still exists in the DB.
+// Returns false (not referenced) if the .info file is missing or unparseable.
+func orphanInfoReferenced(storageRoot, name string, files *store.FilesStore) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(storageRoot, name+".info"))
+	if err != nil {
+		return false, nil
+	}
+	var info struct {
+		MetaData map[string]string `json:"MetaData"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		return false, nil
+	}
+	return files.TransferOrRequestExists(
+		info.MetaData["transfer_id"],
+		info.MetaData["upload_request_token"],
+	)
 }
 func AdminTransfers(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -412,7 +492,8 @@ func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 
 		// Validate extension
 		ext := strings.ToLower(filepath.Ext(header.Filename))
-		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".svg" && ext != ".webp" {
+		// SVG is excluded: browsers render SVG as HTML, enabling stored XSS via a malicious logo file.
+		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
 			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
 			return
 		}
@@ -458,7 +539,7 @@ func AdminLogoDelete(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 		}
 		// Remove files
 		logoDir := filepath.Join(cfg.Storage.Path, "logo")
-		for _, ext := range []string{".png", ".jpg", ".jpeg", ".svg", ".webp"} {
+		for _, ext := range []string{".png", ".jpg", ".jpeg", ".webp"} {
 			os.Remove(filepath.Join(logoDir, "logo"+ext))
 		}
 		http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)

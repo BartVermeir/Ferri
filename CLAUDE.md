@@ -387,6 +387,13 @@ git pull
 - [x] Link-only send modus: "Get a link" toggle, geen mail verstuurd
 - [x] Request expiry note toegevoegd op form
 
+### Afgewerkt (recent)
+- [x] Orphan file cleanup knop in admin — POST /admin/orphans/clean, local storage only
+      Veilig: checkt .info metadata voor request files waar tus_upload_id NULL is na voltooiing
+- [x] Admin diag endpoint — zit al achter AdminAuth + IPAllow middleware (was al beveiligd)
+- [x] Security headers middleware (X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+- [x] SVG uit logo upload verwijderd (XSS via inline SVG rendering)
+- [x] Admin cookie Secure configureerbaar via server.secure_cookies in config.yaml
+
 ### Nog te doen
-- [ ] Orphan file cleanup knop in admin (bestanden op SMB die niet in DB staan)
-- [ ] Admin diag endpoint verwijderen of beveiligen
+- (geen)

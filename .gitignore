@@ -2,6 +2,7 @@
 .env
 config.yaml
 litestream.yml
+docker-compose.local.yml
 
 # Build output
 /server

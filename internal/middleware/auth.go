@@ -33,31 +33,30 @@ func AdminAuth(cfg *config.Config) func(http.Handler) http.Handler {
 }
 
 // SetAdminCookie sets a signed session cookie after successful login.
-func SetAdminCookie(w http.ResponseWriter, token string, ttl time.Duration) {
+// secure should match server.secure_cookies in config — true for HTTPS deployments.
+func SetAdminCookie(w http.ResponseWriter, token string, ttl time.Duration, secure bool) {
 	value := signedCookieValue(token, ttl)
-	// Secure flag requires HTTPS — omit for HTTP deployments.
-	// In production behind a TLS reverse proxy this should be true.
-	// TODO: make this configurable via config.yaml (server.tls = true/false)
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
 		Value:    value,
 		Path:     "/admin",
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(ttl.Seconds()),
 	})
 }
 
 // ClearAdminCookie removes the admin session cookie.
-func ClearAdminCookie(w http.ResponseWriter) {
+// secure must match the value used when the cookie was set.
+func ClearAdminCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     adminCookieName,
 		Value:    "",
 		Path:     "/admin",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   false,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 }

@@ -457,7 +457,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 				continue
 			}
 
-			entry, err := zw.Create(f.OriginalName)
+			entry, err := zw.Create(filepath.Base(f.OriginalName))
 			if err != nil {
 				src.Close()
 				slog.Error("zip: create entry", "file_id", f.ID, "error", err)
