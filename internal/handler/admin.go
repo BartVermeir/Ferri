@@ -469,72 +469,7 @@ func renderAdminLogin(w http.ResponseWriter, errMsg string) {
 	if errMsg != "" {
 		w.WriteHeader(http.StatusUnauthorized)
 	}
-	// Login page uses minimal inline HTML (no settings available yet)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	errHTML := ""
-	if errMsg != "" {
-		errHTML = `<p style="color:red;margin-bottom:16px">` + errMsg + `</p>`
-	}
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Admin login</title><meta charset="utf-8">
-<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:system-ui,sans-serif;background:#f8f8f6;display:flex;align-items:center;justify-content:center;min-height:100vh}.card{background:#fff;border:1px solid #e8e8e4;border-radius:12px;padding:32px;width:340px}h1{font-size:20px;font-weight:500;margin-bottom:24px}label{display:block;font-size:13px;font-weight:500;color:#555;margin-bottom:4px}input{width:100%%;padding:9px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px;outline:none;margin-bottom:16px}.btn{width:100%%;padding:10px;border:none;border-radius:8px;background:#000;color:#fff;font-size:14px;font-weight:500;cursor:pointer}</style>
-</head>
-<body>
-<div class="card">
-  <h1>Admin login</h1>
-  %s
-  <form method="POST" action="/admin/login">
-    <label>Token</label>
-    <input type="password" name="token" autofocus required>
-    <button type="submit" class="btn">Login</button>
-  </form>
-</div>
-</body>
-</html>`, errHTML)
-}
-
-type dashboardStats struct {
-	ActiveTransfers int
-	ActiveRequests  int
-	PendingMails    int
-	FailedMails     int
-}
-
-func renderAdminDashboard(w http.ResponseWriter, settings *store.Settings, transfers []store.Transfer, failedMailCount int) {
-	active := 0
-	for _, t := range transfers {
-		if t.Status == "active" {
-			active++
-		}
-	}
-	// Show only recent 10
-	recent := transfers
-	if len(recent) > 10 {
-		recent = recent[:10]
-	}
-	renderPage(w, "admin/dashboard.html", struct {
-		adminData
-		Stats           dashboardStats
-		RecentTransfers []store.Transfer
-	}{
-		adminData: adminData{PageTitle: "Dashboard", ActiveNav: "dashboard", Settings: settings},
-		Stats: dashboardStats{
-			ActiveTransfers: active,
-			FailedMails:     failedMailCount,
-		},
-		RecentTransfers: recent,
-	})
-}
-
-func renderAdminTransfers(w http.ResponseWriter, settings *store.Settings, transfers []store.Transfer) {
-	renderPage(w, "admin/transfers.html", struct {
-		adminData
-		Transfers []store.Transfer
-	}{
-		adminData: adminData{PageTitle: "Transfers", ActiveNav: "transfers", Settings: settings},
-		Transfers: transfers,
-	})
+	renderPage(w, "admin/login.html", struct{ Error string }{Error: errMsg})
 }
 
 func renderAdminMail(w http.ResponseWriter, settings *store.Settings, mails []store.MailItem) {

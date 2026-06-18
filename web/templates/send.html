@@ -54,7 +54,7 @@
         <div class="mode-panel" id="panel-send">
           {{if .WelcomeMessage}}<p class="text-muted" style="margin-bottom:16px;">{{.WelcomeMessage}}</p>{{end}}
           <form id="send-form">
-            <label>Your name <span style="color:#aaa; font-weight:400;">(optional)</span></label>
+            <label>Your name <span class="label-hint">(optional)</span></label>
             <input type="text" name="sender_name" autocomplete="name">
             <label>Your email</label>
             <input type="email" name="sender_email" autocomplete="email" required>
