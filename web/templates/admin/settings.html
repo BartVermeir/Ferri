@@ -42,7 +42,7 @@
         <div class="card-body">
           <label>Company name</label>
           <input type="text" name="branding.company_name" value="{{.Settings.CompanyName}}">
-          <label>Logo URL <span style="color:#aaa;font-weight:400;">(or upload above)</span></label>
+          <label>Logo URL <span class="label-hint">(or upload above)</span></label>
           <input type="text" name="branding.logo_url" value="{{.Settings.LogoURL}}" placeholder="https://example.com/logo.png or /static/logo/logo.jpg">
           <div class="form-row">
             <div>
@@ -144,7 +144,7 @@
                   <input type="text" name="storage.smb_share" value="{{.Settings.SMBShare}}" placeholder="files">
                 </div>
               </div>
-              <label>Base path <span style="color:#aaa;font-weight:400;">(folder within the share, optional)</span></label>
+              <label>Base path <span class="label-hint">(folder within the share, optional)</span></label>
               <input type="text" name="storage.smb_base_path" value="{{.Settings.SMBBasePath}}" placeholder="ferri  or  uploads/ferri">
               <div class="form-row">
                 <div>
@@ -152,11 +152,11 @@
                   <input type="text" name="storage.smb_username" value="{{.Settings.SMBUsername}}" placeholder="ferri-user" autocomplete="off">
                 </div>
                 <div>
-                  <label>Domain <span style="color:#aaa;font-weight:400;">(optional)</span></label>
+                  <label>Domain <span class="label-hint">(optional)</span></label>
                   <input type="text" name="storage.smb_domain" value="{{.Settings.SMBDomain}}" placeholder="WORKGROUP">
                 </div>
               </div>
-              <label>Password <span style="color:#aaa;font-weight:400;">(leave blank to keep existing)</span></label>
+              <label>Password <span class="label-hint">(leave blank to keep existing)</span></label>
               <input type="password" name="storage.smb_password" placeholder="{{if .Settings.SMBPasswordEncrypted}}••••••••••••{{else}}enter password{{end}}" autocomplete="new-password">
 
               <div style="margin-top:16px;">
