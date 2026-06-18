@@ -21,8 +21,8 @@ import (
 
 	"github.com/jordan-wright/email"
 
-	"github.com/your-org/ferri/internal/config"
-	"github.com/your-org/ferri/internal/store"
+	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // Send sends a single mail queue item via SMTP.

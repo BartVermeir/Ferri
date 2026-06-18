@@ -10,8 +10,8 @@ import (
 
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 
-	"github.com/your-org/ferri/internal/config"
-	"github.com/your-org/ferri/internal/store"
+	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // Backend abstracts all file storage operations.

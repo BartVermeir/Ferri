@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/your-org/ferri/internal/store"
-	"github.com/your-org/ferri/static"
-	"github.com/your-org/ferri/web"
+	"github.com/BartVermeir/Ferri/internal/store"
+	"github.com/BartVermeir/Ferri/static"
+	"github.com/BartVermeir/Ferri/web"
 )
 
 var templates *template.Template

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"html"
 
-	"github.com/your-org/ferri/internal/store"
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // Wrap renders bodyHTML inside the standard Ferri mail layout.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/config"
 )
 
 const adminCookieName = "ferri_admin"

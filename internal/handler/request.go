@@ -21,9 +21,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/your-org/ferri/internal/config"
-	appMiddleware "github.com/your-org/ferri/internal/middleware"
-	"github.com/your-org/ferri/internal/store"
+	"github.com/BartVermeir/Ferri/internal/config"
+	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // ── Request form ──────────────────────────────────────────────────────────────
