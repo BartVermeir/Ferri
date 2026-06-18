@@ -36,8 +36,8 @@
     </div>
   </main>
   <script>window.FERRI_UPLOAD_TOKEN = "{{.Request.UploadToken}}";</script>
-  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@latest/dist/tus.min.js"></script>
-  <script src="/static/upload.js?v=1779206025"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tus-js-client@4.3.1/dist/tus.min.js" defer></script>
+  <script src="/static/upload.js?v={{uploadJSVer}}" defer></script>
 
   {{template "primary-text-script" .}}
 </body>

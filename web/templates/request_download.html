@@ -22,13 +22,13 @@
               <div class="file-row-name">{{.OriginalName}}</div>
               <div class="file-row-size">{{.SizeBytes | formatSize}}</div>
             </div>
-            <a href="{{$.DownloadBase}}/file/{{.ID}}" class="btn btn-primary btn-sm" style="text-decoration:none;">Download</a>
+            <a href="{{$.DownloadBase}}/file/{{.ID}}" class="btn btn-primary btn-sm">Download</a>
           </div>
           {{end}}
         </div>
         {{if gt (len .Files) 1}}
         <div class="card-footer-row">
-          <a href="{{$.DownloadBase}}/zip" class="btn btn-secondary" style="text-decoration:none;">↓ Download all as ZIP</a>
+          <a href="{{$.DownloadBase}}/zip" class="btn btn-secondary">↓ Download all as ZIP</a>
         </div>
         {{end}}
       </div>

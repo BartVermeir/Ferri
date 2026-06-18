@@ -2,11 +2,13 @@ package handler
 
 import (
 	"fmt"
+	"hash/fnv"
 	"html/template"
 	"net/http"
 	"time"
 
 	"github.com/your-org/ferri/internal/store"
+	"github.com/your-org/ferri/static"
 	"github.com/your-org/ferri/web"
 )
 
@@ -31,7 +33,19 @@ func init() {
 	buildTemplates()
 }
 
+// uploadJSVer is a short hash of upload.js, computed once at startup.
+// Used as a cache-busting query parameter in templates: /static/upload.js?v={{uploadJSVer}}
+var uploadJSVer string
+
 func buildTemplates() {
+	if data, err := static.FS.ReadFile("files/upload.js"); err == nil {
+		h := fnv.New32a()
+		h.Write(data)
+		uploadJSVer = fmt.Sprintf("%d", h.Sum32())
+	} else {
+		uploadJSVer = "0"
+	}
+
 	funcMap := template.FuncMap{
 		"formatDate": func(t time.Time) string {
 			return t.In(displayLocation).Format("2 Jan 2006 15:04")
@@ -48,6 +62,7 @@ func buildTemplates() {
 			}
 			return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 		},
+		"uploadJSVer": func() string { return uploadJSVer },
 	}
 
 	var err error
