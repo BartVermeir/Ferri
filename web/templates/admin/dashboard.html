@@ -20,7 +20,7 @@
     .size-label { font-size: 11px; color: #bbb; margin-left: 3px; }
     .mail-section { margin-top: 28px; }
     .empty-row td { color: #bbb; text-align: center; padding: 32px !important; font-size: 13px; }
-    .stat-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 28px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 28px; }
     .stat-card { background: #fff; border: 1px solid #e8e8e4; border-radius: 10px; padding: 16px 20px; }
     .stat-label { font-size: 11px; color: #999; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
     .stat-value { font-size: 26px; font-weight: 500; color: #1a1a1a; }
@@ -194,18 +194,6 @@
 
   </main>
 </div>
-<script>
-(function() {
-  var primary = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim();
-  if (!primary) return;
-  var hex = primary.replace('#','');
-  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
-  var r = parseInt(hex.substr(0,2),16)/255;
-  var g = parseInt(hex.substr(2,2),16)/255;
-  var b = parseInt(hex.substr(4,2),16)/255;
-  var luminance = 0.2126*r + 0.7152*g + 0.0722*b;
-  document.documentElement.style.setProperty('--primary-text', luminance > 0.5 ? '#000' : '#fff');
-})();
-</script>
+  {{template "primary-text-script" .}}
 </body>
 </html>{{end}}
