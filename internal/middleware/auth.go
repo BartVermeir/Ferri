@@ -42,7 +42,7 @@ func SetAdminCookie(w http.ResponseWriter, token string, ttl time.Duration, secu
 		Path:     "/admin",
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(ttl.Seconds()),
 	})
 }
@@ -57,7 +57,7 @@ func ClearAdminCookie(w http.ResponseWriter, secure bool) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 }
 

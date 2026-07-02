@@ -471,52 +471,6 @@ func (s *RequestStore) SumPendingCleanupBytes() (int64, error) {
 	return total, err
 }
 
-// DiagPendingFiles returns upload requests with files still pending cleanup.
-func (s *RequestStore) DiagPendingFiles() ([]struct {
-	RequestID  string
-	Status     string
-	ExpiredAt  sql.NullInt64
-	ExpiresAt  int64
-	FileCount  int
-	TotalBytes int64
-}, error) {
-	rows, err := s.db.Query(`
-		SELECT r.id, r.status, r.expired_at, r.expires_at,
-		       COUNT(f.id), COALESCE(SUM(f.size_bytes),0)
-		FROM upload_requests r
-		JOIN upload_request_files f ON f.upload_request_id = r.id AND f.status != 'deleted'
-		WHERE r.status IN ('expired','deleted','completed')
-		GROUP BY r.id
-		ORDER BY r.created_at DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []struct {
-		RequestID  string
-		Status     string
-		ExpiredAt  sql.NullInt64
-		ExpiresAt  int64
-		FileCount  int
-		TotalBytes int64
-	}
-	for rows.Next() {
-		var r struct {
-			RequestID  string
-			Status     string
-			ExpiredAt  sql.NullInt64
-			ExpiresAt  int64
-			FileCount  int
-			TotalBytes int64
-		}
-		if err := rows.Scan(&r.RequestID, &r.Status, &r.ExpiredAt, &r.ExpiresAt, &r.FileCount, &r.TotalBytes); err != nil {
-			return nil, err
-		}
-		result = append(result, r)
-	}
-	return result, rows.Err()
-}
-
 // MarkFilesDeleted marks all files of an upload request as deleted in the DB.
 // Call AFTER physical file deletion.
 func (s *RequestStore) MarkFilesDeleted(requestID string) error {

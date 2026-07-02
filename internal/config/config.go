@@ -184,6 +184,13 @@ func (c *Config) validate() error {
 	if c.Admin.Token == "" {
 		return fmt.Errorf("admin token is required (set ADMIN_TOKEN env var)")
 	}
+	// The admin token is the root secret: login credential, HMAC key for session
+	// cookies, and (via Argon2id) the key material for the SMB password. Enforce a
+	// minimum length so a weak token can't undermine all three. Generate with
+	// `openssl rand -base64 32`.
+	if len(c.Admin.Token) < 32 {
+		return fmt.Errorf("admin token must be at least 32 characters (got %d); generate with `openssl rand -base64 32`", len(c.Admin.Token))
+	}
 
 	// yaml.v3 decodes missing keys as zero values, overriding our defaults.
 	// A zero interval causes time.NewTicker(0) to panic at startup.

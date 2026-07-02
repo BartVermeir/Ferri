@@ -103,8 +103,12 @@ func main() {
 	// Global middleware
 	r.Use(chimiddleware.RequestID)
 	r.Use(middleware.Recovery())
-	r.Use(middleware.SecurityHeaders())
+	r.Use(middleware.SecurityHeaders(cfg.Server.SecureCookies))
 	r.Use(middleware.InjectSettings(stores.Settings))
+
+	// Brute-force limiter for credential submissions: 10 attempts per minute,
+	// keyed per (client IP, path) — so per-token for password pages, per-IP for login.
+	authLimiter := middleware.NewRateLimiter(10, time.Minute, cfg.TrustedProxies)
 
 	// Public routes
 	r.Get("/health", handler.Health())
@@ -115,11 +119,11 @@ func main() {
 	// Serve uploaded logo from storage path
 	r.Handle("/static/logo/*", http.StripPrefix("/static/logo/", http.FileServer(http.Dir(cfg.Storage.Path+"/logo"))))
 	r.Get("/dl/{token}", handler.DownloadPage(cfg, stores))
-	r.Post("/dl/{token}", handler.DownloadPassword(cfg, stores))
+	r.With(authLimiter.Middleware).Post("/dl/{token}", handler.DownloadPassword(cfg, stores))
 	r.Get("/dl/{token}/file/{fileID}", handler.DownloadFile(cfg, stores, storageMgr))
 	r.Get("/dl/{token}/zip", handler.DownloadZIP(cfg, stores, storageMgr))
 	r.Get("/ul/{token}", handler.UploadPage(cfg, stores))
-	r.Post("/ul/{token}", handler.UploadPassword(cfg, stores))
+	r.With(authLimiter.Middleware).Post("/ul/{token}", handler.UploadPassword(cfg, stores))
 	r.Post("/ul/{token}/complete", handler.UploadComplete(cfg, stores))
 	r.Get("/ul/{token}/files", handler.RequestDownloadPage(cfg, stores))
 	r.Get("/ul/{token}/file/{fileID}", handler.RequestDownloadFile(cfg, stores, storageMgr))
@@ -130,6 +134,7 @@ func main() {
 	// IP-restricted routes (internal network only)
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies))
+		r.Use(middleware.CSRFProtect(cfg.Server.BaseURL))
 		r.Get("/", handler.SendPage(cfg, stores))
 		r.Post("/send", handler.SendCreate(cfg, stores))
 		r.Get("/request", handler.RequestPage(cfg, stores))
@@ -139,14 +144,14 @@ func main() {
 	// Admin routes (IP-restricted + session cookie)
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies))
+		r.Use(middleware.CSRFProtect(cfg.Server.BaseURL))
 		r.Get("/admin/login", handler.AdminLogin(cfg))
-		r.Post("/admin/login", handler.AdminLoginPost(cfg))
+		r.With(authLimiter.Middleware).Post("/admin/login", handler.AdminLoginPost(cfg))
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.AdminAuth(cfg))
 			r.Get("/admin", handler.AdminDashboard(cfg, stores))
 			r.Post("/admin/cleanup", handler.AdminForceCleanup(cfg, scheduler))
 			r.Post("/admin/orphans/clean", handler.AdminOrphanClean(cfg, stores))
-			r.Get("/admin/diag", handler.AdminDiag(cfg, stores))
 			r.Get("/admin/transfers", handler.AdminTransfers(cfg, stores))
 			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores, storageMgr))
 			r.Post("/admin/requests/{id}/delete", handler.AdminRequestDelete(cfg, stores, storageMgr))
