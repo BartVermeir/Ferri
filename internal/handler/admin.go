@@ -27,6 +27,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -78,6 +79,13 @@ func AdminLoginPost(cfg *config.Config) http.HandlerFunc {
 }
 
 // AdminLogout handles POST /admin/logout.
+//
+// Sessions are stateless HMAC cookies (no server-side store), so logout clears
+// the browser's cookie but cannot invalidate a cookie value captured elsewhere;
+// such a cookie remains valid until its embedded expiry (server.session_ttl_hours,
+// default 8h). To revoke ALL sessions immediately, rotate ADMIN_TOKEN — this
+// changes the HMAC signing key so every existing cookie fails validation. This
+// is an accepted trade-off for the deployment's threat model (see SECURITY_AUDIT.md L1).
 func AdminLogout(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		appMiddleware.ClearAdminCookie(w, cfg.Server.SecureCookies)
@@ -612,8 +620,7 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		// Only update password if a new one was provided (empty = keep existing).
 		newPassword := r.FormValue("storage.smb_password")
 		if newPassword != "" {
-			key := storage.DeriveKey(cfg.Admin.Token)
-			encrypted, err := storage.Encrypt(key, newPassword)
+			encrypted, err := storage.Encrypt(cfg.Admin.Token, newPassword)
 			if err != nil {
 				slog.Error("admin storage: encrypt password", "error", err)
 				http.Redirect(w, r, "/admin/settings?storage_error=encrypt+failed", http.StatusSeeOther)
@@ -635,7 +642,7 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		newBackend, err := storage.FromSettings(settings, cfg, cfg.Admin.Token)
 		if err != nil {
 			slog.Error("admin storage: reload backend", "error", err)
-			http.Redirect(w, r, "/admin/settings?storage_error="+err.Error(), http.StatusSeeOther)
+			http.Redirect(w, r, "/admin/settings?storage_error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 			return
 		}
 		mgr.Swap(newBackend)
@@ -662,8 +669,7 @@ func AdminStorageTest(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 		if password == "" {
 			settings := stores.Settings.Get()
 			if settings.SMBPasswordEncrypted != "" {
-				key := storage.DeriveKey(cfg.Admin.Token)
-				decrypted, err := storage.Decrypt(key, settings.SMBPasswordEncrypted)
+				decrypted, err := storage.Decrypt(cfg.Admin.Token, settings.SMBPasswordEncrypted)
 				if err == nil {
 					password = decrypted
 				}
@@ -701,52 +707,4 @@ func AdminStorageTest(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
-}
-
-
-// AdminDiag handles GET /admin/diag — temporary diagnostic endpoint.
-func AdminDiag(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		now := time.Now().Unix()
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintf(w, "now=%d\n\n", now)
-
-		// Transfers
-		trows, err := stores.Transfers.DiagPendingFiles()
-		if err != nil {
-			fmt.Fprintf(w, "transfers error: %v\n", err)
-		} else {
-			fmt.Fprintf(w, "=== TRANSFERS (%d) ===\n", len(trows))
-			fmt.Fprintf(w, "%-52s %-10s %-12s %-12s %s %s\n",
-				"transfer_id", "status", "expired_at", "expires_at", "files", "bytes")
-			for _, row := range trows {
-				expiredAt := "NULL"
-				if row.ExpiredAt.Valid {
-					expiredAt = fmt.Sprintf("%d", row.ExpiredAt.Int64)
-				}
-				fmt.Fprintf(w, "%-52s %-10s %-12s %-12d %d %d\n",
-					row.TransferID, row.Status, expiredAt, row.ExpiresAt, row.FileCount, row.TotalBytes)
-			}
-		}
-
-		fmt.Fprintf(w, "\n")
-
-		// Requests
-		rrows, err := stores.Requests.DiagPendingFiles()
-		if err != nil {
-			fmt.Fprintf(w, "requests error: %v\n", err)
-		} else {
-			fmt.Fprintf(w, "=== REQUESTS (%d) ===\n", len(rrows))
-			fmt.Fprintf(w, "%-52s %-10s %-12s %-12s %s %s\n",
-				"request_id", "status", "expired_at", "expires_at", "files", "bytes")
-			for _, row := range rrows {
-				expiredAt := "NULL"
-				if row.ExpiredAt.Valid {
-					expiredAt = fmt.Sprintf("%d", row.ExpiredAt.Int64)
-				}
-				fmt.Fprintf(w, "%-52s %-10s %-12s %-12d %d %d\n",
-					row.RequestID, row.Status, expiredAt, row.ExpiresAt, row.FileCount, row.TotalBytes)
-			}
-		}
-	}
 }

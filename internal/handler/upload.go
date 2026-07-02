@@ -123,7 +123,7 @@ func UploadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			Value:    req.PasswordHash.String,
 			Path:     "/ul/" + tok,
 			HttpOnly: true,
-			Secure:   true,
+			Secure:   cfg.Server.SecureCookies,
 			SameSite: http.SameSiteStrictMode,
 		})
 
@@ -178,7 +178,8 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		slog.Info("upload request completed", "request_id", req.ID, "token", tok)
+		// Do not log the token — it is a bearer secret granting file access.
+		slog.Info("upload request completed", "request_id", req.ID)
 
 		// Enqueue notification mail to requester
 		if settings.MailFromAddress != "" {
@@ -254,6 +255,13 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 			return
 		}
 
+		// A password-protected request gates file access too — the token alone
+		// must not reveal uploaded files. Match the upload-page password check.
+		if req.PasswordHash.Valid && !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+			renderUploadPasswordPage(w, tok, settings, "")
+			return
+		}
+
 		files, err := stores.Requests.GetFiles(req.ID)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -283,6 +291,12 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 		req, err := stores.Requests.GetByUploadTokenAny(tok)
 		if err != nil || req == nil {
 			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+
+		// Enforce the request password before serving any file bytes.
+		if req.PasswordHash.Valid && !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+			http.Redirect(w, r, "/ul/"+tok+"/files", http.StatusSeeOther)
 			return
 		}
 
@@ -325,6 +339,12 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			return
 		}
 
+		// Enforce the request password before serving the ZIP.
+		if req.PasswordHash.Valid && !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+			http.Redirect(w, r, "/ul/"+tok+"/files", http.StatusSeeOther)
+			return
+		}
+
 		files, err := stores.Requests.GetFiles(req.ID)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -337,20 +357,27 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 		zw := zip.NewWriter(w)
 		defer zw.Close()
 
+		seen := map[string]int{}
 		for _, f := range files {
 			src, err := mgr.Open(f.StoragePath)
 			if err != nil && f.TUSUploadID.Valid && f.TUSUploadID.String != "" {
 				src, err = mgr.Open(f.TUSUploadID.String)
 			}
 			if err != nil {
+				slog.Error("request zip: open file", "file_id", f.ID, "error", err)
 				continue
 			}
-			entry, err := zw.Create(filepath.Base(f.OriginalName))
+			entry, err := zw.Create(uniqueZipName(seen, f.OriginalName))
 			if err != nil {
 				src.Close()
+				slog.Error("request zip: create entry", "file_id", f.ID, "error", err)
 				continue
 			}
-			io.Copy(entry, src)
+			if _, err := io.Copy(entry, src); err != nil {
+				src.Close()
+				slog.Error("request zip: copy file", "file_id", f.ID, "error", err)
+				continue
+			}
 			src.Close()
 		}
 	}

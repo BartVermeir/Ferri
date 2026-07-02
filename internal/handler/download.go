@@ -18,9 +18,9 @@ import (
 	"archive/zip"
 	"crypto/subtle"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -32,6 +32,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/mail"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
@@ -126,7 +127,7 @@ func DownloadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 			Value:    transfer.PasswordHash.String,
 			Path:     "/dl/" + tok,
 			HttpOnly: true,
-			Secure:   true,
+			Secure:   cfg.Server.SecureCookies,
 			SameSite: http.SameSiteStrictMode,
 		})
 
@@ -198,16 +199,9 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 
 		// Record download event — in a transaction with recipient counter update.
 		// Do this before streaming so the event is recorded even if the client
-		// disconnects mid-download.
-		ip := r.Header.Get("X-Real-IP")
-		if ip == "" {
-			// r.RemoteAddr is "host:port" — strip the port before storing.
-			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-				ip = host
-			} else {
-				ip = r.RemoteAddr
-			}
-		}
+		// disconnects mid-download. Use the trusted-proxy-aware client IP so a
+		// direct client cannot forge the audit-log source via X-Real-IP.
+		ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
 		ua := r.Header.Get("User-Agent")
 
 		if _, err := stores.Downloads.RecordDownload(
@@ -220,7 +214,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		// Enqueue download notification mail if enabled
 		if settings.NotifyOnDownload && settings.MailFromAddress != "" {
 			subject := fmt.Sprintf("File downloaded: %s", targetFile.OriginalName)
-			bodyHTML := buildDownloadNotifyHTML(transfer, recipient.Email, targetFile.OriginalName)
+			bodyHTML := mail.Wrap(settings, buildDownloadNotifyHTML(transfer, recipient.Email, targetFile.OriginalName))
 			bodyText := buildDownloadNotifyText(transfer, recipient.Email, targetFile.OriginalName)
 			if err := stores.Mail.Enqueue(nil, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
 				logDownloadError("enqueue download notification", err, fileID)
@@ -363,8 +357,11 @@ func renderNotFound(w http.ResponseWriter, settings *store.Settings) {
 // ── Mail body builders ────────────────────────────────────────────────────────
 
 func buildDownloadNotifyHTML(t *store.Transfer, recipientEmail, filename string) string {
-	return fmt.Sprintf(`<p><strong>%s</strong> downloaded <strong>%s</strong> from your transfer <em>%s</em>.</p>`,
-		recipientEmail, filename, t.Title)
+	// All three values are attacker-influenced (filename comes from client TUS
+	// metadata), so they MUST be HTML-escaped before interpolation. The caller
+	// wraps this fragment via mail.Wrap for the standard layout.
+	return fmt.Sprintf(`<p style="margin:0;font-size:15px;color:#333;"><strong>%s</strong> downloaded <strong>%s</strong> from your transfer <em>%s</em>.</p>`,
+		html.EscapeString(recipientEmail), html.EscapeString(filename), html.EscapeString(t.Title))
 }
 
 func buildDownloadNotifyText(t *store.Transfer, recipientEmail, filename string) string {
@@ -401,14 +398,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 
 		// Record a download event for each file in the ZIP — before streaming
 		// so events are captured even if the client disconnects mid-download.
-		ip := r.Header.Get("X-Real-IP")
-		if ip == "" {
-			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-				ip = host
-			} else {
-				ip = r.RemoteAddr
-			}
-		}
+		ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
 		ua := r.Header.Get("User-Agent")
 
 		for _, f := range files {
@@ -447,6 +437,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		zw := zip.NewWriter(w)
 		defer zw.Close()
 
+		seen := map[string]int{}
 		for _, f := range files {
 			src, err := mgr.Open(f.StoragePath)
 			if err != nil && f.TUSUploadID.Valid {
@@ -457,7 +448,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 				continue
 			}
 
-			entry, err := zw.Create(filepath.Base(f.OriginalName))
+			entry, err := zw.Create(uniqueZipName(seen, f.OriginalName))
 			if err != nil {
 				src.Close()
 				slog.Error("zip: create entry", "file_id", f.ID, "error", err)
@@ -475,4 +466,27 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 
 func logDownloadError(op string, err error, fileID string) {
 	slog.Error("download handler: "+op, "file_id", fileID, "error", err)
+}
+
+// uniqueZipName returns a ZIP entry name that is unique within the archive,
+// appending " (1)", " (2)", … before the extension when a base name repeats.
+// Without this, two files sharing a base name (e.g. two "report.pdf" from
+// different folders) produce duplicate entries that most unzip tools silently
+// overwrite. seen tracks assigned names across the archive.
+func uniqueZipName(seen map[string]int, original string) string {
+	base := filepath.Base(original)
+	if seen[base] == 0 {
+		seen[base] = 1
+		return base
+	}
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for i := seen[base]; ; i++ {
+		candidate := fmt.Sprintf("%s (%d)%s", stem, i, ext)
+		if seen[candidate] == 0 {
+			seen[candidate] = 1
+			seen[base] = i + 1
+			return candidate
+		}
+	}
 }

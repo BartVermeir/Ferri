@@ -141,11 +141,17 @@ func isConnectionError(err error) bool {
 }
 
 // smbPath returns the full path on the share for a given relative path.
+// path.Clean with a leading slash collapses any "." / ".." segments and cannot
+// escape above root, so the result always stays within BasePath — a defensive
+// invariant against path traversal regardless of the caller.
 func (b *SMBBackend) smbPath(relPath string) string {
 	base := strings.Trim(b.cfg.BasePath, "/")
-	rel := strings.TrimPrefix(relPath, "/")
+	rel := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(relPath, "/")), "/")
 	if base == "" {
 		return rel
+	}
+	if rel == "" {
+		return base
 	}
 	return base + "/" + rel
 }

@@ -170,8 +170,7 @@ func FromSettings(settings *store.Settings, cfg *config.Config, adminToken strin
 		}
 		password := ""
 		if settings.SMBPasswordEncrypted != "" {
-			key := DeriveKey(adminToken)
-			decrypted, err := Decrypt(key, settings.SMBPasswordEncrypted)
+			decrypted, err := Decrypt(adminToken, settings.SMBPasswordEncrypted)
 			if err != nil {
 				return nil, fmt.Errorf("decrypt SMB password: %w", err)
 			}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tus/tusd/v2/pkg/filestore"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
@@ -24,13 +25,26 @@ func NewLocalBackend(root string) *LocalBackend {
 	return &LocalBackend{root: root, store: fs}
 }
 
-func (b *LocalBackend) abs(path string) string {
-	return filepath.Join(b.root, filepath.FromSlash(path))
+// abs resolves a relative storage path to an absolute one and enforces that it
+// stays within the backend root. filepath.Join already collapses ".." segments;
+// the prefix check rejects any path that would still escape root — a defensive
+// invariant so no future caller can introduce path traversal, even though all
+// current paths are server-generated.
+func (b *LocalBackend) abs(path string) (string, error) {
+	clean := filepath.Join(b.root, filepath.FromSlash(path))
+	if clean != b.root && !strings.HasPrefix(clean, b.root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("invalid storage path %q: escapes root", path)
+	}
+	return clean, nil
 }
 
 // Open opens a file for reading.
 func (b *LocalBackend) Open(path string) (io.ReadSeekCloser, error) {
-	f, err := os.Open(b.abs(path))
+	abs, err := b.abs(path)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(abs)
 	if err != nil {
 		return nil, err
 	}
@@ -39,30 +53,44 @@ func (b *LocalBackend) Open(path string) (io.ReadSeekCloser, error) {
 
 // Stat returns FileInfo for the given relative path.
 func (b *LocalBackend) Stat(path string) (os.FileInfo, error) {
-	return os.Stat(b.abs(path))
+	abs, err := b.abs(path)
+	if err != nil {
+		return nil, err
+	}
+	return os.Stat(abs)
 }
 
 // Remove deletes a single file. Returns nil if the file does not exist.
 func (b *LocalBackend) Remove(path string) error {
-	err := os.Remove(b.abs(path))
-	if os.IsNotExist(err) {
-		return nil
+	abs, err := b.abs(path)
+	if err != nil {
+		return err
 	}
-	return err
+	if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // RemoveAll deletes a directory and all its contents.
 func (b *LocalBackend) RemoveAll(path string) error {
-	err := os.RemoveAll(b.abs(path))
-	if os.IsNotExist(err) {
-		return nil
+	abs, err := b.abs(path)
+	if err != nil {
+		return err
 	}
-	return err
+	if err := os.RemoveAll(abs); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // MkdirAll creates a directory path and all parents.
 func (b *LocalBackend) MkdirAll(path string) error {
-	return os.MkdirAll(b.abs(path), 0o755)
+	abs, err := b.abs(path)
+	if err != nil {
+		return err
+	}
+	return os.MkdirAll(abs, 0o755)
 }
 
 // TUSStore returns the tusd.DataStore for this backend.
