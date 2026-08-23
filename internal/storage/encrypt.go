@@ -8,13 +8,29 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+
+	"golang.org/x/crypto/hkdf"
 )
 
-// DeriveKey derives a 32-byte AES-256 key from the admin token using SHA-256.
-// This means no extra env var is needed: the admin token (already required) is the root secret.
+// deriveKeyInfo provides domain separation so this key can never collide with
+// a key derived from the same admin token for a different purpose.
+const deriveKeyInfo = "ferri-smb-password-key-v1"
+
+// DeriveKey derives a 32-byte AES-256 key from the admin token using HKDF-SHA256.
+// This means no extra env var is needed: the admin token (already required, and
+// itself a 256-bit random value per deployment docs) is the root secret. HKDF
+// rather than a bare hash is used for proper domain separation between any
+// future keys derived from the same root secret.
 func DeriveKey(adminToken string) []byte {
-	h := sha256.Sum256([]byte(adminToken))
-	return h[:]
+	key := make([]byte, 32)
+	kdf := hkdf.New(sha256.New, []byte(adminToken), nil, []byte(deriveKeyInfo))
+	if _, err := io.ReadFull(kdf, key); err != nil {
+		// Only fails if requested output exceeds HKDF's max size (255*hash size),
+		// which 32 bytes never does — kept as a hard failure rather than a silent
+		// weak fallback.
+		panic("storage: hkdf key derivation failed: " + err.Error())
+	}
+	return key
 }
 
 // Encrypt encrypts plaintext using AES-256-GCM.
