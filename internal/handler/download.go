@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -199,15 +198,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		// Record download event — in a transaction with recipient counter update.
 		// Do this before streaming so the event is recorded even if the client
 		// disconnects mid-download.
-		ip := r.Header.Get("X-Real-IP")
-		if ip == "" {
-			// r.RemoteAddr is "host:port" — strip the port before storing.
-			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-				ip = host
-			} else {
-				ip = r.RemoteAddr
-			}
-		}
+		ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
 		ua := r.Header.Get("User-Agent")
 
 		if _, err := stores.Downloads.RecordDownload(
@@ -401,14 +392,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 
 		// Record a download event for each file in the ZIP — before streaming
 		// so events are captured even if the client disconnects mid-download.
-		ip := r.Header.Get("X-Real-IP")
-		if ip == "" {
-			if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-				ip = host
-			} else {
-				ip = r.RemoteAddr
-			}
-		}
+		ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
 		ua := r.Header.Get("User-Agent")
 
 		for _, f := range files {

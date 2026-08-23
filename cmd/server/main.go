@@ -130,6 +130,7 @@ func main() {
 	// IP-restricted routes (internal network only)
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies))
+		r.Use(middleware.CSRFOriginCheck(cfg.Server.BaseURL))
 		r.Get("/", handler.SendPage(cfg, stores))
 		r.Post("/send", handler.SendCreate(cfg, stores))
 		r.Get("/request", handler.RequestPage(cfg, stores))

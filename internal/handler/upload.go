@@ -254,6 +254,14 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 			return
 		}
 
+		// Password check — must match the same gate as GET /ul/:token.
+		if req.PasswordHash.Valid {
+			if !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+				renderUploadPasswordPage(w, tok, settings, "")
+				return
+			}
+		}
+
 		files, err := stores.Requests.GetFiles(req.ID)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -284,6 +292,14 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 		if err != nil || req == nil {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return
+		}
+
+		// Password check — redirect to the request page which will render the password form.
+		if req.PasswordHash.Valid {
+			if !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+				http.Redirect(w, r, "/ul/"+tok, http.StatusSeeOther)
+				return
+			}
 		}
 
 		// Read file fresh from DB to get latest tus_upload_id
@@ -323,6 +339,14 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 		if err != nil || req == nil {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return
+		}
+
+		// Password check — redirect to the request page which will render the password form.
+		if req.PasswordHash.Valid {
+			if !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+				http.Redirect(w, r, "/ul/"+tok, http.StatusSeeOther)
+				return
+			}
 		}
 
 		files, err := stores.Requests.GetFiles(req.ID)
