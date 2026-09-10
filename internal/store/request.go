@@ -352,10 +352,15 @@ func (s *RequestStore) GetFileIDByTUSID(tusUploadID string) (string, error) {
 }
 
 // SetFileComplete marks an upload_request_files row as complete with final size.
+//
+// tus_upload_id is deliberately KEPT (mirrors TransferStore.SetFileComplete): on
+// the SMB backend the file lives flat at <base>/<tus_upload_id> and storage_path
+// (requests/<id>/<file_id>) does not exist, so the download and cleanup paths
+// need tus_upload_id to locate the actual file.
 func (s *RequestStore) SetFileComplete(fileID string, sizeBytes int64) error {
 	_, err := s.db.Exec(`
 		UPDATE upload_request_files
-		SET status = 'complete', size_bytes = ?, tus_upload_id = NULL
+		SET status = 'complete', size_bytes = ?
 		WHERE id = ?`,
 		sizeBytes, fileID,
 	)

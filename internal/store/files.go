@@ -32,8 +32,8 @@ func (s *FilesStore) AllTUSUploadIDs() (map[string]bool, error) {
 }
 
 // TransferOrRequestExists reports whether the given transfer ID or upload request token
-// still has a DB record. Used to verify TUS .info file references for completed request
-// files where tus_upload_id has been cleared to NULL after upload completion.
+// still has a DB record. Used by the orphan scan to verify a TUS .info file whose UUID
+// is not in the DB (an abandoned upload, or a legacy row) before deleting the file.
 func (s *FilesStore) TransferOrRequestExists(transferID, requestToken string) (bool, error) {
 	if transferID != "" {
 		var n int

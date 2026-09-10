@@ -67,6 +67,14 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			renderHomePage(w, cfg, settings, "request", "Valid email address is required.")
 			return
 		}
+		if len(title) > maxTitleLen {
+			renderHomePage(w, cfg, settings, "request", "Title is too long.")
+			return
+		}
+		if len(message) > maxMessageLen {
+			renderHomePage(w, cfg, settings, "request", "Message is too long.")
+			return
+		}
 
 		expiryHours, err := strconv.Atoi(expiryStr)
 		if err != nil || !isValidExpiryOption(expiryHours, cfg.ExpiryOptions) {

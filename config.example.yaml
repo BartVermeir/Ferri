@@ -3,8 +3,8 @@ server:
   port: 8080
   base_url: "https://send.example.com"   # Full public URL. Used in mail links. No trailing slash.
   timezone: "Europe/Brussels"             # IANA timezone for date display. Handles DST automatically.
-  trusted_proxies:                        # CIDRs of reverse proxies allowed to set X-Real-IP / X-Forwarded-For.
-    - "172.16.0.0/12"                     # Only add your actual proxy IPs. Wrong entries let clients spoof their IP.
+  trusted_proxies:                        # Exact IPs of your reverse proxy/proxies, allowed to set X-Real-IP / X-Forwarded-For.
+    - "10.0.0.5/32"                       # Use /32 for a single host. A wide range here lets ANY host in it spoof its source IP.
   secure_cookies: false                  # Set true when running behind HTTPS. Marks admin session cookie Secure.
   shutdown_timeout_seconds: 300          # Must match stop_grace_period in docker-compose.yml
 

@@ -271,7 +271,8 @@ func (s *TransferStore) UpdateTUSActivity(fileID string) error {
 func (s *TransferStore) GetExpired() ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
-		       password_hash, status, expires_at, activated_at, expired_at, created_at
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients
 		FROM transfers
 		WHERE status = 'active' AND expires_at < unixepoch()`,
 	)
@@ -299,7 +300,8 @@ func (s *TransferStore) SetExpired(transferID string) error {
 func (s *TransferStore) GetForCleanup(graceHours int) ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
-		       password_hash, status, expires_at, activated_at, expired_at, created_at
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients
 		FROM transfers
 		WHERE (
 		        status = 'deleted'
@@ -389,7 +391,8 @@ func (s *TransferStore) MarkFileDeleted(fileID string) error {
 func (s *TransferStore) ListActive(limit int) ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
-		       password_hash, status, expires_at, activated_at, expired_at, created_at
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients
 		FROM transfers
 		WHERE status IN ('pending','active')
 		ORDER BY created_at DESC
@@ -406,7 +409,8 @@ func (s *TransferStore) ListActive(limit int) ([]Transfer, error) {
 func (s *TransferStore) ListAll(limit int) ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
-		       password_hash, status, expires_at, activated_at, expired_at, created_at
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients
 		FROM transfers
 		ORDER BY created_at DESC
 		LIMIT ?`, limit,
@@ -585,20 +589,24 @@ func (s *TransferStore) filesByTransferID(transferID string) ([]File, error) {
 // scanTransfers scans rows from the transfers table.
 // expires_at and created_at are INTEGER (Unix epoch) in SQLite — scan into int64,
 // then convert to time.Time. Scanning directly into time.Time would fail at runtime.
+// The column list must match the queries in GetExpired / GetForCleanup /
+// ListActive / ListAll, including the trailing notify_recipients.
 func scanTransfers(rows *sql.Rows) ([]Transfer, error) {
 	var list []Transfer
 	for rows.Next() {
 		var t Transfer
 		var expiresAt, createdAt int64
+		var notifyRecipients int
 		if err := rows.Scan(
 			&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
 			&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
-			&t.ExpiredAt, &createdAt,
+			&t.ExpiredAt, &createdAt, &notifyRecipients,
 		); err != nil {
 			return nil, err
 		}
 		t.ExpiresAt = time.Unix(expiresAt, 0)
 		t.CreatedAt = time.Unix(createdAt, 0)
+		t.NotifyRecipients = notifyRecipients != 0
 		list = append(list, t)
 	}
 	return list, rows.Err()

@@ -11,13 +11,22 @@ kennis die Claude anders telkens opnieuw moet uitzoeken.
 # 1. Bouwen — VANUIT /opt/ferri/src
 cd /opt/ferri/src
 git pull
-docker build -t ferri:latest .
+VERSION=$(git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD)
+docker build -t ferri:$VERSION -t ferri:latest .
 
-# 2. Opstarten — VANUIT /opt/ferri (niet src!)
+# 2. docker-compose.yml pinnen op de nieuwe versie (alleen bij een release-tag)
+#    Zet in /opt/ferri/docker-compose.yml:  image: ferri:<VERSION>
+#    en commit die wijziging in de repo, zodat de gedeployde versie traceerbaar is.
+
+# 3. Opstarten — VANUIT /opt/ferri (niet src!)
 cd /opt/ferri
 docker compose down && docker compose up -d
 docker compose logs --tail=20 -f
 ```
+
+**Release taggen:** `git tag vX.Y.Z && git push --tags` vóór stap 1, dan pikt
+`git describe` de tag op en pint `docker-compose.yml` op `ferri:vX.Y.Z`.
+**Rollback:** zet de `image:`-regel terug op de vorige tag en `docker compose up -d`.
 
 **NOOIT** `docker compose` uitvoeren vanuit `/opt/ferri/src`.
 Die map heeft geen `.env`, geen echte `config.yaml` en geen `litestream.yml`.

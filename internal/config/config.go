@@ -43,6 +43,11 @@ type ServerConfig struct {
 	ShutdownTimeoutSeconds  int      `yaml:"shutdown_timeout_seconds"`
 	Timezone                string   `yaml:"timezone"`       // IANA timezone, e.g. "Europe/Brussels"
 	SecureCookies           bool     `yaml:"secure_cookies"` // Set true when serving over HTTPS
+
+	// Location is Timezone parsed into a *time.Location, resolved once in validate().
+	// Used for all date formatting (web templates via handler.InitTemplates, and the
+	// expiry-summary mail) so the timezone is loaded in exactly one place.
+	Location *time.Location `yaml:"-"`
 }
 
 type StorageConfig struct {
@@ -196,6 +201,18 @@ func (c *Config) validate() error {
 	// A zero interval causes time.NewTicker(0) to panic at startup.
 	// Re-apply defaults for any job interval that ended up as zero.
 	d := Defaults()
+
+	// Resolve the display timezone once. An empty string means the config
+	// omitted it, so fall back to the compiled-in default rather than to UTC.
+	if c.Server.Timezone == "" {
+		c.Server.Timezone = d.Server.Timezone
+	}
+	loc, err := time.LoadLocation(c.Server.Timezone)
+	if err != nil {
+		return fmt.Errorf("invalid server.timezone %q: %w", c.Server.Timezone, err)
+	}
+	c.Server.Location = loc
+
 	if c.Jobs.MailIntervalMinutes <= 0 {
 		c.Jobs.MailIntervalMinutes = d.Jobs.MailIntervalMinutes
 	}

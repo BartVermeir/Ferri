@@ -275,7 +275,7 @@ VERSION=$(git describe --tags --always)
 # 1. Pull the latest distroless image
 docker pull gcr.io/distroless/static-debian12:latest
 
-# 2. Rebuild the application image — the build stage uses golang:1.23-alpine
+# 2. Rebuild the application image — the build stage uses golang:1.26-alpine
 #    Check for a newer Go version if needed
 docker build --no-cache -t ferri:${VERSION}-rebase .
 
@@ -286,7 +286,7 @@ docker images ferri
 # 4. Deploy using the standard update procedure (§2)
 ```
 
-Go version updates (e.g. 1.23 → 1.24) require changing the `FROM golang:1.23-alpine` line in the Dockerfile and rebuilding. Check the Go release notes for any breaking changes in the standard library before upgrading.
+Go version updates (e.g. 1.26 → 1.27) require changing the `FROM golang:1.26-alpine` line in the Dockerfile (and the `go` directive in `go.mod`) and rebuilding. Check the Go release notes for any breaking changes in the standard library before upgrading. Run `govulncheck ./...` after upgrading.
 
 ---
 

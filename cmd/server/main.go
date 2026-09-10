@@ -52,6 +52,11 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	// ── Templates ──────────────────────────────────────────────────────────
+	// Bind the template date formatter to the configured timezone. Without
+	// this call formatDate stays on UTC regardless of server.timezone.
+	handler.InitTemplates(cfg.Server.Location)
+
 	// ── Database ───────────────────────────────────────────────────────────
 	database, err := db.Open(cfg.DB.Path)
 	if err != nil {
@@ -111,13 +116,13 @@ func main() {
 	authLimiter := middleware.NewRateLimiter(10, time.Minute, cfg.TrustedProxies)
 
 	// Public routes
-	r.Get("/health", handler.Health())
+	r.Get("/health", handler.Health(database))
 	r.Handle("/static/*", http.StripPrefix("/static/", handler.Static()))
 	r.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/static/favicon.svg", http.StatusMovedPermanently)
 	})
-	// Serve uploaded logo from storage path
-	r.Handle("/static/logo/*", http.StripPrefix("/static/logo/", http.FileServer(http.Dir(cfg.Storage.Path+"/logo"))))
+	// Serve the uploaded logo from local disk (no directory listing).
+	r.Handle("/static/logo/*", http.StripPrefix("/static/logo/", handler.LogoFileServer(cfg.Storage.Path+"/logo")))
 	r.Get("/dl/{token}", handler.DownloadPage(cfg, stores))
 	r.With(authLimiter.Middleware).Post("/dl/{token}", handler.DownloadPassword(cfg, stores))
 	r.Get("/dl/{token}/file/{fileID}", handler.DownloadFile(cfg, stores, storageMgr))

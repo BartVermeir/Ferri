@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -39,9 +40,9 @@ func NewScheduler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 func (s *Scheduler) Start() {
 	s.startOnce.Do(func() {
 		s.wg.Add(3)
-		go s.runLoop(time.Duration(s.cfg.Jobs.MailIntervalMinutes)*time.Minute, s.runMailJob)
-		go s.runLoop(time.Duration(s.cfg.Jobs.ExpiryIntervalMinutes)*time.Minute, s.runExpiryJob)
-		go s.runLoop(time.Duration(s.cfg.Jobs.CleanupIntervalHours)*time.Hour, func() { s.runCleanupJob() })
+		go s.runLoop("mail", time.Duration(s.cfg.Jobs.MailIntervalMinutes)*time.Minute, s.runMailJob)
+		go s.runLoop("expiry", time.Duration(s.cfg.Jobs.ExpiryIntervalMinutes)*time.Minute, s.runExpiryJob)
+		go s.runLoop("cleanup", time.Duration(s.cfg.Jobs.CleanupIntervalHours)*time.Hour, func() { s.runCleanupJob() })
 	})
 }
 
@@ -52,7 +53,7 @@ func (s *Scheduler) Stop() {
 	s.wg.Wait()
 }
 
-func (s *Scheduler) runLoop(interval time.Duration, fn func()) {
+func (s *Scheduler) runLoop(name string, interval time.Duration, fn func()) {
 	defer s.wg.Done()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -61,9 +62,23 @@ func (s *Scheduler) runLoop(interval time.Duration, fn func()) {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			fn()
+			runJob(name, fn)
 		}
 	}
+}
+
+// runJob executes one job tick, recovering from a panic so a single bad run is
+// logged instead of taking down the process. The container entrypoint is
+// `litestream replicate -exec /ferri`, so an unrecovered job panic exits the
+// whole container and Docker restarts it straight into the same panic on the
+// next tick.
+func runJob(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("job panic recovered", "job", name, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	fn()
 }
 
 // ── Mail job ──────────────────────────────────────────────────────────────────
@@ -160,11 +175,9 @@ func (s *Scheduler) enqueueExpirySummary(transferID, senderEmail, title string) 
 
 	settings := s.stores.Settings.Get()
 
-	loc := time.UTC
-	if s.cfg.Server.Timezone != "" {
-		if l, err := time.LoadLocation(s.cfg.Server.Timezone); err == nil {
-			loc = l
-		}
+	loc := s.cfg.Server.Location
+	if loc == nil {
+		loc = time.UTC
 	}
 
 	subject := "Transfer expired: " + title
