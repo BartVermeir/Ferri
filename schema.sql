@@ -77,7 +77,9 @@ CREATE TABLE IF NOT EXISTS files (
                                                     -- e.g. "transfers/<transfer_id>/<file_id>"
     size_bytes           INTEGER NOT NULL DEFAULT 0,
     mime_type            TEXT,                      -- detected server-side, not trusted from client
-    tus_upload_id        TEXT    UNIQUE,            -- NULL after upload completes
+    tus_upload_id        TEXT    UNIQUE,            -- tusd upload id; retained after completion
+                                                    -- (the flat file lives at <storage_root>/<tus_upload_id>,
+                                                    --  which is the only way to locate it on the SMB backend)
     tus_last_activity_at INTEGER,                   -- epoch of last TUS PATCH; NULL before first chunk
     status               TEXT    NOT NULL DEFAULT 'uploading'
                                  CHECK (status IN ('uploading','complete','deleted')),
@@ -195,7 +197,7 @@ CREATE TABLE IF NOT EXISTS upload_request_files (
     storage_path         TEXT    NOT NULL,
     size_bytes           INTEGER NOT NULL DEFAULT 0,
     mime_type            TEXT,
-    tus_upload_id        TEXT    UNIQUE,
+    tus_upload_id        TEXT    UNIQUE,            -- retained after completion, same as files.tus_upload_id
     tus_last_activity_at INTEGER,
     status               TEXT    NOT NULL DEFAULT 'uploading'
                                  CHECK (status IN ('uploading','complete','deleted')),

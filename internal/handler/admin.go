@@ -30,6 +30,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -201,9 +202,10 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 			if known[name] {
 				continue
 			}
-			// UUID not in known set. Check the .info file: request files have
-			// tus_upload_id cleared to NULL after upload completion, so their UUID
-			// won't appear in the DB but the transfer/request still exists.
+			// UUID not in known set. Fall back to the .info file: it may belong to
+			// an abandoned upload whose row was never written, or a legacy request
+			// file uploaded before tus_upload_id was retained on completion. Keep it
+			// if its .info still references a live transfer/request.
 			if ref, _ := orphanInfoReferenced(cfg.Storage.Path, name, stores.Files); ref {
 				kept++
 				continue
@@ -419,6 +421,46 @@ func AdminSettings(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	}
 }
 
+// hexColorRe matches a CSS hex colour (#rgb, #rrggbb, #rrggbbaa).
+var hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{3,8}$`)
+
+// allowedFonts is the server-side mirror of the font-family <select> in
+// admin/settings.html. Anything outside this set is rejected so a crafted POST
+// cannot inject an arbitrary font-family value into the public CSS.
+var allowedFonts = map[string]bool{
+	"":                                    true,
+	"'Georgia', serif":                    true,
+	"'Helvetica Neue', Arial, sans-serif": true,
+}
+
+// validateBranding checks the free-form branding inputs against strict formats
+// (defense-in-depth — these settings are admin-only but land unescaped in
+// public CSS / <img src>). Returns "" when acceptable, else a user-facing message.
+func validateBranding(vals map[string]string) string {
+	for _, key := range []string{"branding.primary_color", "branding.accent_color", "branding.bg_color"} {
+		if v := strings.TrimSpace(vals[key]); v != "" && !hexColorRe.MatchString(v) {
+			return fmt.Sprintf("Invalid colour for '%s' — must be a hex value like #1a2b3c.", key)
+		}
+	}
+	if !allowedFonts[strings.TrimSpace(vals["branding.font_family"])] {
+		return "Invalid font family — choose one of the listed options."
+	}
+	if l := strings.TrimSpace(vals["branding.logo_url"]); l != "" && !validLogoURL(l) {
+		return "Invalid logo URL — use a relative path (/static/...) or an https:// URL."
+	}
+	return ""
+}
+
+// validLogoURL allows a site-relative path (single leading slash, not
+// protocol-relative) or an absolute https:// URL with a host.
+func validLogoURL(s string) bool {
+	if strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "//") {
+		return true
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != ""
+}
+
 // AdminSettingsSave handles POST /admin/settings.
 // Saves each setting key individually. Only known keys are accepted.
 func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
@@ -458,6 +500,12 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 			"mail.expiry_summary":     checkboxVal("notify.expiry_summary"),
 		}
 
+		if msg := validateBranding(allowed); msg != "" {
+			settings := appMiddleware.GetSettings(r)
+			renderAdminSettings(w, settings, msg, false, "")
+			return
+		}
+
 		// Settings are saved individually. If one fails, earlier saves are not
 		// rolled back — a partial update is possible. For independent key-value
 		// branding/UI settings this is acceptable; a retry saves all 12 again.
@@ -484,7 +532,12 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 // ── Template rendering placeholders ──────────────────────────────────────────
 
 
-// AdminLogoUpload handles POST /admin/settings/logo
+// AdminLogoUpload handles POST /admin/settings/logo.
+//
+// The logo is written to <storage.path>/logo on the LOCAL filesystem via os.*,
+// not through the storage.Manager — this is deliberate. The logo is small,
+// public branding, not user data, and keeping it local avoids a round-trip to
+// the SMB share on every page render. It is served by handler.LogoFileServer.
 func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(5 << 20); err != nil {

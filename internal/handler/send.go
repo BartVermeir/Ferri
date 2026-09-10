@@ -34,6 +34,15 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
+// Input bounds shared by the send and request forms. These are sanity limits to
+// keep one POST from creating an unbounded number of recipient / mail_queue rows
+// or storing megabytes of free text — not business rules.
+const (
+	maxRecipients = 100
+	maxTitleLen   = 200
+	maxMessageLen = 5000
+)
+
 // ── Send form ─────────────────────────────────────────────────────────────────
 
 // homePageData is the template data for the combined send/request page.
@@ -108,6 +117,14 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			jsonError(w, "Valid sender email is required", http.StatusBadRequest)
 			return
 		}
+		if len(title) > maxTitleLen {
+			jsonError(w, fmt.Sprintf("Title is too long (max %d characters)", maxTitleLen), http.StatusBadRequest)
+			return
+		}
+		if len(message) > maxMessageLen {
+			jsonError(w, fmt.Sprintf("Message is too long (max %d characters)", maxMessageLen), http.StatusBadRequest)
+			return
+		}
 
 		// Parse and validate expiry hours against configured options
 		expiryHours, err := strconv.Atoi(expiryStr)
@@ -126,6 +143,10 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			recipients = parseRecipients(recipientsRaw)
 			if len(recipients) == 0 {
 				jsonError(w, "At least one recipient is required", http.StatusBadRequest)
+				return
+			}
+			if len(recipients) > maxRecipients {
+				jsonError(w, fmt.Sprintf("Too many recipients (max %d)", maxRecipients), http.StatusBadRequest)
 				return
 			}
 			for _, r := range recipients {

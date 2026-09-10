@@ -1,8 +1,10 @@
 services:
   app:
-    # Use an explicit version tag in production — never 'latest'.
-    # See update-guide.md for the update procedure.
-    image: ferri:latest
+    # Pinned to an explicit release tag — never 'latest' — so the deployed
+    # version is visible in git history and a rollback is just reverting this
+    # line. Bump it on every release (see the deployment procedure in CLAUDE.md
+    # and update-guide.md).
+    image: ferri:v1.1.0
     restart: unless-stopped
     user: "1000:1000"
     read_only: true                      # Container filesystem is read-only (hardened)

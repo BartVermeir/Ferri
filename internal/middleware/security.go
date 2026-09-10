@@ -2,14 +2,14 @@ package middleware
 
 import "net/http"
 
-// contentSecurityPolicy is intentionally permissive on inline styles/scripts
-// because every page ships inline <style> and <script> blocks, and the public
-// upload/send pages load the TUS client from jsDelivr. It still meaningfully
-// hardens the app: object/base/frame-ancestors are locked down and only that one
-// external script host is allowed. Tighten to nonces + 'self' if the inline
-// blocks and the CDN dependency are removed.
+// contentSecurityPolicy still allows 'unsafe-inline' for scripts and styles
+// because every page ships inline <style> and a few small inline <script> blocks.
+// The TUS client is now vendored (static/files/tus.min.js) so no external script
+// host is permitted at all — script-src is 'self' only. object/base/frame-ancestors
+// are locked down. Next step: move the remaining inline <script> blocks to files
+// (or add per-request nonces) and drop 'unsafe-inline' from script-src.
 const contentSecurityPolicy = "default-src 'self'; " +
-	"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; " +
+	"script-src 'self' 'unsafe-inline'; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: https:; " +
 	"font-src 'self' data:; " +

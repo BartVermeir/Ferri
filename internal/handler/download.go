@@ -412,7 +412,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		// Enqueue a single notification mail for the ZIP download if enabled
 		if settings.NotifyOnDownload && settings.MailFromAddress != "" {
 			subject := fmt.Sprintf("All files downloaded (ZIP): %s", transfer.Title)
-			bodyHTML := buildDownloadNotifyHTML(transfer, recipient.Email, "all files (ZIP)")
+			bodyHTML := mail.Wrap(settings, buildDownloadNotifyHTML(transfer, recipient.Email, "all files (ZIP)"))
 			bodyText := buildDownloadNotifyText(transfer, recipient.Email, "all files (ZIP)")
 			if err := stores.Mail.Enqueue(nil, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("zip: enqueue download notification", "error", err)

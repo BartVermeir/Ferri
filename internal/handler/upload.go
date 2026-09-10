@@ -31,6 +31,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/mail"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
@@ -184,7 +185,7 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// Enqueue notification mail to requester
 		if settings.MailFromAddress != "" {
 			subject := fmt.Sprintf("Files received: %s", req.Title)
-			bodyHTML := buildUploadCompleteHTML(req, cfg.Server.BaseURL)
+			bodyHTML := mail.Wrap(settings, buildUploadCompleteHTML(req, cfg.Server.BaseURL))
 			bodyText := buildUploadCompleteText(req, cfg.Server.BaseURL)
 			if err := stores.Mail.Enqueue(nil, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("upload complete: enqueue mail", "to", req.RequesterEmail, "error", err)
