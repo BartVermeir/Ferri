@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 
 	tusd "github.com/tus/tusd/v2/pkg/handler"
@@ -185,7 +186,14 @@ func FromSettings(settings *store.Settings, cfg *config.Config, adminToken strin
 			Domain:   settings.SMBDomain,
 		})
 	default:
-		return NewLocalBackend(cfg.Storage.Path), nil
+		path := settings.LocalPath
+		if path == "" {
+			path = cfg.Storage.Path
+		}
+		if !filepath.IsAbs(path) {
+			return nil, fmt.Errorf("local storage path must be absolute, got %q", path)
+		}
+		return NewLocalBackend(path), nil
 	}
 }
 

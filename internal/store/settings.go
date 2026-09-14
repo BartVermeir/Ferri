@@ -25,7 +25,10 @@ type Settings struct {
 
 	// Storage settings
 	// StorageType is "local" (default) or "smb".
-	StorageType          string
+	StorageType string
+	// LocalPath overrides config.yaml's storage.path when set. Empty means
+	// "use the config.yaml default".
+	LocalPath            string
 	SMBHost              string
 	SMBShare             string
 	SMBBasePath          string
@@ -136,6 +139,7 @@ func (s *SettingsStore) load() (*Settings, error) {
 		ExpirySummary:     kv["mail.expiry_summary"] != "false",
 
 		StorageType:          orDefault(kv["storage.type"], "local"),
+		LocalPath:            kv["storage.local_path"],
 		SMBHost:              kv["storage.smb_host"],
 		SMBShare:             kv["storage.smb_share"],
 		SMBBasePath:          kv["storage.smb_base_path"],

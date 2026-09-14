@@ -179,6 +179,11 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 			return
 		}
 
+		storagePath := settings.LocalPath
+		if storagePath == "" {
+			storagePath = cfg.Storage.Path
+		}
+
 		known, err := stores.Files.AllTUSUploadIDs()
 		if err != nil {
 			slog.Error("orphan scan: query tus ids", "error", err)
@@ -186,9 +191,9 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 			return
 		}
 
-		entries, err := os.ReadDir(cfg.Storage.Path)
+		entries, err := os.ReadDir(storagePath)
 		if err != nil {
-			slog.Error("orphan scan: read dir", "path", cfg.Storage.Path, "error", err)
+			slog.Error("orphan scan: read dir", "path", storagePath, "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -206,15 +211,15 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 			// an abandoned upload whose row was never written, or a legacy request
 			// file uploaded before tus_upload_id was retained on completion. Keep it
 			// if its .info still references a live transfer/request.
-			if ref, _ := orphanInfoReferenced(cfg.Storage.Path, name, stores.Files); ref {
+			if ref, _ := orphanInfoReferenced(storagePath, name, stores.Files); ref {
 				kept++
 				continue
 			}
-			if err := os.Remove(filepath.Join(cfg.Storage.Path, name)); err != nil {
+			if err := os.Remove(filepath.Join(storagePath, name)); err != nil {
 				slog.Warn("orphan clean: remove", "file", name, "error", err)
 				kept++
 			} else {
-				os.Remove(filepath.Join(cfg.Storage.Path, name+".info"))
+				os.Remove(filepath.Join(storagePath, name+".info"))
 				deleted++
 			}
 		}
@@ -417,7 +422,7 @@ func AdminSettings(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		settings := appMiddleware.GetSettings(r)
 		storageSaved := r.URL.Query().Get("storage_saved") == "1"
 		storageError := r.URL.Query().Get("storage_error")
-		renderAdminSettings(w, settings, "", storageSaved, storageError)
+		renderAdminSettings(w, cfg, settings, "", storageSaved, storageError)
 	}
 }
 
@@ -467,7 +472,7 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, settings, "Invalid form data.", false, "")
+			renderAdminSettings(w, cfg, settings, "Invalid form data.", false, "")
 			return
 		}
 
@@ -502,7 +507,7 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 
 		if msg := validateBranding(allowed); msg != "" {
 			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, settings, msg, false, "")
+			renderAdminSettings(w, cfg, settings, msg, false, "")
 			return
 		}
 
@@ -520,7 +525,7 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 
 		if saveErr != "" {
 			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, settings, saveErr, false, "")
+			renderAdminSettings(w, cfg, settings, saveErr, false, "")
 			return
 		}
 
@@ -624,19 +629,21 @@ func renderAdminMail(w http.ResponseWriter, settings *store.Settings, mails []st
 	})
 }
 
-func renderAdminSettings(w http.ResponseWriter, settings *store.Settings, errMsg string, storageSaved bool, storageError string) {
+func renderAdminSettings(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string, storageSaved bool, storageError string) {
 	saved := errMsg == "saved"
 	if saved {
 		errMsg = ""
 	}
 	renderPage(w, "admin/settings.html", struct {
 		adminData
+		Cfg          *config.Config
 		Saved        bool
 		Error        string
 		StorageSaved bool
 		StorageError string
 	}{
 		adminData:    adminData{PageTitle: "Settings", ActiveNav: "settings", Settings: settings},
+		Cfg:          cfg,
 		Saved:        saved,
 		Error:        errMsg,
 		StorageSaved: storageSaved,
@@ -661,8 +668,17 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 			storageType = "local"
 		}
 
+		if storageType == "local" {
+			localPath := strings.TrimSpace(r.FormValue("storage.local_path"))
+			if localPath != "" && !filepath.IsAbs(localPath) {
+				http.Redirect(w, r, "/admin/settings?storage_error=local+path+must+be+absolute", http.StatusSeeOther)
+				return
+			}
+		}
+
 		saves := map[string]string{
 			"storage.type":          storageType,
+			"storage.local_path":    strings.TrimSpace(r.FormValue("storage.local_path")),
 			"storage.smb_host":      strings.TrimSpace(r.FormValue("storage.smb_host")),
 			"storage.smb_share":     strings.TrimSpace(r.FormValue("storage.smb_share")),
 			"storage.smb_base_path": strings.TrimSpace(r.FormValue("storage.smb_base_path")),
@@ -711,6 +727,27 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 func AdminStorageTest(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// r.FormValue handles both url-encoded and multipart automatically.
+		storageType := r.FormValue("storage.type")
+
+		if storageType == "local" {
+			path := strings.TrimSpace(r.FormValue("storage.local_path"))
+			if path == "" {
+				path = cfg.Storage.Path
+			}
+			if !filepath.IsAbs(path) {
+				writeJSON(w, map[string]any{"ok": false, "error": "path must be absolute"})
+				return
+			}
+			b := storage.NewLocalBackend(path)
+			defer b.Close()
+			if err := b.TestConnection(); err != nil {
+				writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+				return
+			}
+			writeJSON(w, map[string]any{"ok": true})
+			return
+		}
+
 		host := strings.TrimSpace(r.FormValue("storage.smb_host"))
 		share := strings.TrimSpace(r.FormValue("storage.smb_share"))
 		basePath := strings.TrimSpace(r.FormValue("storage.smb_base_path"))
