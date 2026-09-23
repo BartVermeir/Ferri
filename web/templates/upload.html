@@ -6,7 +6,7 @@
   <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
   {{template "base-css" .}}
 </head>
-<body>
+<body data-upload-token="{{.Request.UploadToken}}">
   {{template "base-header" .}}
   <main>
     <div class="page-wrap">
@@ -35,7 +35,7 @@
       </div>
     </div>
   </main>
-  <script>window.FERRI_UPLOAD_TOKEN = "{{.Request.UploadToken}}";</script>
+  <script src="/static/upload-init.js" defer></script>
   <script src="/static/tus.min.js" defer></script>
   <script src="/static/upload.js?v={{uploadJSVer}}" defer></script>
 

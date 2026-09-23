@@ -2,14 +2,14 @@ package middleware
 
 import "net/http"
 
-// contentSecurityPolicy still allows 'unsafe-inline' for scripts and styles
-// because every page ships inline <style> and a few small inline <script> blocks.
-// The TUS client is now vendored (static/files/tus.min.js) so no external script
-// host is permitted at all — script-src is 'self' only. object/base/frame-ancestors
-// are locked down. Next step: move the remaining inline <script> blocks to files
-// (or add per-request nonces) and drop 'unsafe-inline' from script-src.
+// contentSecurityPolicy allows 'unsafe-inline' for styles only — every page
+// ships inline <style> blocks. All <script> tags are now external (the TUS
+// client is vendored in static/files/tus.min.js, and the handful of former
+// inline scripts moved to static/files/*.js), so script-src is 'self' with
+// no 'unsafe-inline' and no external script host at all. object/base/
+// frame-ancestors are locked down too.
 const contentSecurityPolicy = "default-src 'self'; " +
-	"script-src 'self' 'unsafe-inline'; " +
+	"script-src 'self'; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: https:; " +
 	"font-src 'self' data:; " +

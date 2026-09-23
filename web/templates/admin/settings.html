@@ -117,14 +117,12 @@
             <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px;">
               <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;">
                 <input type="radio" name="storage.type" value="local"
-                  {{if or (eq .Settings.StorageType "") (eq .Settings.StorageType "local")}}checked{{end}}
-                  onchange="toggleSMB(this.value)">
+                  {{if or (eq .Settings.StorageType "") (eq .Settings.StorageType "local")}}checked{{end}}>
                 <span><strong>Local filesystem</strong> — files stored on a folder inside this server/VM</span>
               </label>
               <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;">
                 <input type="radio" name="storage.type" value="smb"
-                  {{if eq .Settings.StorageType "smb"}}checked{{end}}
-                  onchange="toggleSMB(this.value)">
+                  {{if eq .Settings.StorageType "smb"}}checked{{end}}>
                 <span><strong>SMB / CIFS share</strong> — files stored directly on a network share (no OS mount needed)</span>
               </label>
             </div>
@@ -138,14 +136,14 @@
               <input type="text" name="storage.local_path" value="{{.Settings.LocalPath}}" placeholder="{{.Cfg.Storage.Path}}">
 
               <div style="margin-top:16px;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="testConnection()">Test connection</button>
+                <button type="button" class="btn btn-secondary btn-sm test-connection-btn">Test connection</button>
                 <span id="local-test-result" style="margin-left:12px;font-size:13px;"></span>
               </div>
             </div>
 
             <div id="smb-fields" style="{{if ne .Settings.StorageType "smb"}}display:none;{{end}}border-top:1px solid #e8e8e4;padding-top:20px;">
               <p style="font-size:13px;color:#888;margin:0 0 16px;">
-                Connect directly to an SMB2/CIFS share (e.g. Windows Server, Samba, Synology, TrueNAS).
+                Connect directly to an SMB share (auto-negotiates SMB2 through SMB 3.1.1, e.g. Windows Server, Samba, Synology, TrueNAS).
                 Credentials are encrypted at rest using your admin token as the key.
               </p>
               <div class="form-row">
@@ -174,7 +172,7 @@
               <input type="password" name="storage.smb_password" placeholder="{{if .Settings.SMBPasswordEncrypted}}••••••••••••{{else}}enter password{{end}}" autocomplete="new-password">
 
               <div style="margin-top:16px;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="testConnection()">Test connection</button>
+                <button type="button" class="btn btn-secondary btn-sm test-connection-btn">Test connection</button>
                 <span id="test-result" style="margin-left:12px;font-size:13px;"></span>
               </div>
             </div>
@@ -191,39 +189,7 @@
   </main>
 </div>
 
-<script>
-function toggleSMB(val) {
-  document.getElementById('smb-fields').style.display = val === 'smb' ? 'block' : 'none';
-  document.getElementById('local-fields').style.display = val === 'smb' ? 'none' : 'block';
-}
-
-function testConnection() {
-  const form = document.getElementById('storage-form');
-  const type = form.querySelector('input[name="storage.type"]:checked').value;
-  const result = document.getElementById(type === 'smb' ? 'test-result' : 'local-test-result');
-  result.style.color = '#888';
-  result.textContent = 'Testing…';
-
-  const body = new URLSearchParams();
-  new FormData(form).forEach((v, k) => body.append(k, v));
-
-  fetch('/admin/settings/storage/test', { method: 'POST', body: body })
-    .then(r => r.json())
-    .then(d => {
-      if (d.ok) {
-        result.style.color = 'green';
-        result.textContent = '✓ Connection successful';
-      } else {
-        result.style.color = '#c00';
-        result.textContent = '✗ ' + (d.error || 'Connection failed');
-      }
-    })
-    .catch(() => {
-      result.style.color = '#c00';
-      result.textContent = '✗ Request failed';
-    });
-}
-</script>
+<script src="/static/admin-settings.js" defer></script>
 {{template "primary-text-script" .}}
 </body>
 </html>{{end}}

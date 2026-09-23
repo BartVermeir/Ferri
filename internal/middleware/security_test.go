@@ -19,6 +19,14 @@ func TestSecurityHeadersCSP(t *testing.T) {
 	if !strings.Contains(csp, "script-src 'self'") {
 		t.Errorf("script-src is not 'self'-based: %q", csp)
 	}
+	// All inline <script> blocks have been moved to static/files/*.js, so
+	// script-src must be exactly 'self' — no 'unsafe-inline' allowance left.
+	if !strings.Contains(csp, "script-src 'self';") {
+		t.Errorf("script-src is not exactly 'self': %q", csp)
+	}
+	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
+		t.Errorf("script-src still allows 'unsafe-inline': %q", csp)
+	}
 	// The TUS client is vendored — no external script host may be allowed.
 	for _, host := range []string{"jsdelivr", "unpkg", "https://cdn", "http://"} {
 		if strings.Contains(csp, host) {

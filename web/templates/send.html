@@ -39,7 +39,7 @@
     .delivery-tab.active { background:#fff; color:#1a1a1a; box-shadow:0 1px 2px rgba(0,0,0,0.1); }
   </style>
 </head>
-<body>
+<body data-mode="{{.Mode}}">
   {{template "base-header" .}}
   <main>
     <div class="page-wrap">
@@ -130,62 +130,7 @@
 
   <script src="/static/tus.min.js" defer></script>
   <script src="/static/upload.js?v={{uploadJSVer}}" defer></script>
-  <script>
-  (function() {
-    var initialMode = '{{ if eq .Mode "request" }}request{{ else }}send{{ end }}';
-
-    function switchMode(mode) {
-      document.querySelectorAll('.mode-tab').forEach(function(t) {
-        t.classList.toggle('active', t.dataset.mode === mode);
-      });
-      document.querySelectorAll('.mode-panel').forEach(function(p) {
-        p.classList.toggle('active', p.id === 'panel-' + mode);
-      });
-    }
-
-    document.querySelectorAll('.mode-tab').forEach(function(tab) {
-      tab.addEventListener('click', function() {
-        switchMode(this.dataset.mode);
-      });
-    });
-
-    switchMode(initialMode);
-
-    // Remove ?mode= from URL so refreshing always returns to the send tab
-    if (window.history && window.history.replaceState) {
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-  })();
-
-  // Delivery mode toggle (send panel)
-  (function() {
-    var recipientsSection = document.getElementById('recipients-section');
-    var recipientsField   = document.getElementById('recipients');
-    var linkOnlyInput     = document.getElementById('link_only');
-    var submitBtn         = document.getElementById('submit-btn');
-
-    document.querySelectorAll('.delivery-tab').forEach(function(tab) {
-      tab.addEventListener('click', function() {
-        var mode = this.dataset.delivery;
-        document.querySelectorAll('.delivery-tab').forEach(function(t) {
-          t.classList.toggle('active', t.dataset.delivery === mode);
-        });
-        if (mode === 'link') {
-          recipientsSection.style.display = 'none';
-          recipientsField.required = false;
-          linkOnlyInput.value = '1';
-          submitBtn.textContent = 'Upload & get link';
-        } else {
-          recipientsSection.style.display = '';
-          recipientsField.required = true;
-          linkOnlyInput.value = '0';
-          submitBtn.textContent = 'Send files';
-        }
-      });
-    });
-  })();
-
-  </script>
+  <script src="/static/send.js" defer></script>
   {{template "primary-text-script" .}}
 </body>
 </html>{{end}}

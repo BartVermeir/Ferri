@@ -60,7 +60,7 @@
         {{if .PendingBytes}}
         <form method="POST" action="/admin/cleanup" style="margin-top:10px;">
           <button type="submit" class="btn btn-secondary btn-sm"
-            onclick="return confirm('Run cleanup now? This removes all expired files immediately, bypassing the grace period.')">
+            data-confirm="Run cleanup now? This removes all expired files immediately, bypassing the grace period.">
             Clean up now
           </button>
         </form>
@@ -82,7 +82,7 @@
     <div style="margin-bottom:24px;">
       <form method="POST" action="/admin/orphans/clean" style="display:inline;">
         <button type="submit" class="btn btn-secondary btn-sm"
-          onclick="return confirm('Scan local storage for orphaned files (not referenced in the database) and delete them?')">
+          data-confirm="Scan local storage for orphaned files (not referenced in the database) and delete them?">
           Clean orphan files
         </button>
       </form>
@@ -129,7 +129,7 @@
             <td>
               <form method="POST" action="/admin/transfers/{{.ID}}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm"
-                  onclick="return confirm('Delete this transfer and all its files? This cannot be undone.')">
+                  data-confirm="Delete this transfer and all its files? This cannot be undone.">
                   Delete
                 </button>
               </form>
@@ -157,7 +157,7 @@
             <td>
               <form method="POST" action="/admin/requests/{{.ID}}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm"
-                  onclick="return confirm('Delete this upload request and all its files? This cannot be undone.')">
+                  data-confirm="Delete this upload request and all its files? This cannot be undone.">
                   Delete
                 </button>
               </form>
@@ -210,6 +210,7 @@
 
   </main>
 </div>
+  <script src="/static/admin-dashboard.js" defer></script>
   {{template "primary-text-script" .}}
 </body>
 </html>{{end}}

@@ -359,6 +359,7 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 		defer zw.Close()
 
 		seen := map[string]int{}
+		buf := make([]byte, zipCopyBufSize)
 		for _, f := range files {
 			src, err := mgr.Open(f.StoragePath)
 			if err != nil && f.TUSUploadID.Valid && f.TUSUploadID.String != "" {
@@ -374,7 +375,7 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 				slog.Error("request zip: create entry", "file_id", f.ID, "error", err)
 				continue
 			}
-			if _, err := io.Copy(entry, src); err != nil {
+			if _, err := io.CopyBuffer(entry, src, buf); err != nil {
 				src.Close()
 				slog.Error("request zip: copy file", "file_id", f.ID, "error", err)
 				continue

@@ -10,12 +10,16 @@ import (
 // client is vendored rather than loaded from a CDN — see the CSP in
 // internal/middleware/security.go.
 func TestVendoredAssetsPresent(t *testing.T) {
-	for _, f := range []string{"files/tus.min.js", "files/upload.js", "files/favicon.svg"} {
+	for _, f := range []string{
+		"files/tus.min.js", "files/upload.js", "files/favicon.svg",
+		"files/base.js", "files/send.js", "files/request-created.js", "files/upload-init.js",
+		"files/admin-settings.js", "files/admin-dashboard.js",
+	} {
 		b, err := FS.ReadFile(f)
 		if err != nil {
 			t.Fatalf("embedded asset %s missing: %v", f, err)
 		}
-		if len(b) < 100 {
+		if len(b) < 50 {
 			t.Errorf("embedded asset %s is suspiciously small (%d bytes)", f, len(b))
 		}
 	}

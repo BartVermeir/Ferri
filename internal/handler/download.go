@@ -38,6 +38,11 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
+// zipCopyBufSize matches the SMB2/3 payload ceiling so ZIP assembly reads
+// from SMB-backed storage in large chunks instead of io.Copy's default 32KB
+// (which would cap every SMB read below what the negotiated dialect allows).
+const zipCopyBufSize = 1 << 20 // 1MB
+
 // downloadPasswordCookie is a short-lived cookie that unlocks a password-protected
 // download page for the duration of the browser session. It contains the bcrypt
 // hash of the transfer's password so we can validate it without a DB lookup on
@@ -438,6 +443,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		defer zw.Close()
 
 		seen := map[string]int{}
+		buf := make([]byte, zipCopyBufSize)
 		for _, f := range files {
 			src, err := mgr.Open(f.StoragePath)
 			if err != nil && f.TUSUploadID.Valid {
@@ -454,7 +460,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 				slog.Error("zip: create entry", "file_id", f.ID, "error", err)
 				continue
 			}
-			if _, err := io.Copy(entry, src); err != nil {
+			if _, err := io.CopyBuffer(entry, src, buf); err != nil {
 				src.Close()
 				slog.Error("zip: copy file", "file_id", f.ID, "error", err)
 				continue

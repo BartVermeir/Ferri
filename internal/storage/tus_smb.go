@@ -102,6 +102,12 @@ func (u *smbUpload) GetInfo(ctx context.Context) (tusd.FileInfo, error) {
 	return u.info, nil
 }
 
+// writeBufSize matches the SMB2/3 payload ceiling (see go-smb2's
+// winMaxPayloadSize): copying in smaller chunks (io.Copy's default is 32KB)
+// would split each buffer across far more SMB WRITE round-trips than the
+// negotiated dialect allows, throttling throughput on large transfers.
+const writeBufSize = 1 << 20 // 1MB
+
 // WriteChunk appends src to the data file starting at offset.
 // TUS guarantees sequential chunks, so appending is always correct.
 func (u *smbUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error) {
@@ -112,7 +118,8 @@ func (u *smbUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader)
 	}
 	defer f.Close()
 
-	n, err := io.Copy(f, src)
+	buf := make([]byte, writeBufSize)
+	n, err := io.CopyBuffer(f, src, buf)
 	u.info.Offset += n
 	return n, err
 }
