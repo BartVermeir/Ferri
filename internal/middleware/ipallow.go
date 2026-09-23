@@ -16,7 +16,7 @@ import (
 func IPAllow(allowlist []*net.IPNet, trustedProxies []*net.IPNet) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := clientIP(r, trustedProxies)
+			ip := ClientIP(r, trustedProxies)
 			parsed := net.ParseIP(ip)
 			if parsed == nil {
 				slog.Warn("ip allowlist: could not parse client IP", "raw", ip)
@@ -40,14 +40,9 @@ func IPAllow(allowlist []*net.IPNet, trustedProxies []*net.IPNet) func(http.Hand
 // ClientIP returns the real client IP using the same trusted-proxy logic as the
 // IP allowlist. Use this anywhere a client IP is recorded (e.g. audit logs) so a
 // direct client cannot spoof it via X-Real-IP / X-Forwarded-For headers.
-func ClientIP(r *http.Request, trustedProxies []*net.IPNet) string {
-	return clientIP(r, trustedProxies)
-}
-
-// clientIP returns the real client IP.
 // It only trusts X-Real-IP / X-Forwarded-For when the direct TCP connection
 // (r.RemoteAddr) comes from a known trusted proxy. Otherwise RemoteAddr is used.
-func clientIP(r *http.Request, trustedProxies []*net.IPNet) string {
+func ClientIP(r *http.Request, trustedProxies []*net.IPNet) string {
 	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		remoteHost = r.RemoteAddr

@@ -51,7 +51,7 @@ func NewRateLimiter(max int, interval time.Duration, trustedProxies []*net.IPNet
 // with chi's r.With(limiter.Middleware).Post(...) so GET page renders are unaffected.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := clientIP(r, rl.proxies) + "|" + r.URL.Path
+		key := ClientIP(r, rl.proxies) + "|" + r.URL.Path
 		if !rl.allow(key) {
 			slog.Warn("rate limit: request throttled", "path", r.URL.Path)
 			w.Header().Set("Retry-After", strconv.Itoa(int(rl.interval.Seconds())))

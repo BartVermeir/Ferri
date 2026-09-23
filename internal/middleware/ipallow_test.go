@@ -61,7 +61,7 @@ func TestClientIP(t *testing.T) {
 			for k, v := range tt.headers {
 				r.Header.Set(k, v)
 			}
-			if got := clientIP(r, trusted); got != tt.want {
+			if got := ClientIP(r, trusted); got != tt.want {
 				t.Fatalf("clientIP = %q, want %q", got, tt.want)
 			}
 		})
@@ -72,7 +72,7 @@ func TestClientIPNoTrustedProxies(t *testing.T) {
 	r, _ := http.NewRequest("GET", "/", nil)
 	r.RemoteAddr = "10.9.9.9:443"
 	r.Header.Set("X-Real-IP", "1.2.3.4")
-	if got := clientIP(r, nil); got != "10.9.9.9" {
+	if got := ClientIP(r, nil); got != "10.9.9.9" {
 		t.Fatalf("with no trusted proxies, headers must be ignored; got %q", got)
 	}
 }
