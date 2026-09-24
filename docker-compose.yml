@@ -1,10 +1,10 @@
 services:
   app:
-    # Pinned to an explicit release tag — never 'latest' — so the deployed
-    # version is visible in git history and a rollback is just reverting this
-    # line. Bump it on every release (see the deployment procedure in CLAUDE.md
-    # and update-guide.md).
-    image: ferri:v1.1.0
+    # Template only. The live copy is /opt/ferri/docker-compose.yml, whose
+    # image tag scripts/deploy.sh pins to the deployed release — never
+    # 'latest'. This repo copy is never edited on the server, so it stays
+    # identical to GitHub. The running version is shown at the bottom of /admin.
+    image: ferri:vX.Y.Z
     restart: unless-stopped
     user: "1000:1000"
     read_only: true                      # Container filesystem is read-only (hardened)
