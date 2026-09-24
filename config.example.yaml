@@ -15,6 +15,8 @@ db:
   path: "/data/app.db"                   # SQLite database file inside the container.
 
 ip_allowlist:                            # Only these CIDR ranges can create transfers / requests.
+                                         # NEVER list a trusted proxy here: if trusted_proxies is wrong, every visitor
+                                         # is seen as the proxy's IP and would be let in. The app warns at startup.
   - "10.0.0.0/8"                         # Adjust to your internal network ranges.
   - "192.168.0.0/16"
 

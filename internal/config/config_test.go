@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -86,5 +87,41 @@ func TestValidateZeroJobIntervalsGetDefaults(t *testing.T) {
 	}
 	if c.Limits.MaxUploadBytes != d.Limits.MaxUploadBytes {
 		t.Fatalf("zero MaxUploadBytes not defaulted: got %d", c.Limits.MaxUploadBytes)
+	}
+}
+
+func TestProxiesInAllowlist(t *testing.T) {
+	cidrs := func(in ...string) []*net.IPNet {
+		var out []*net.IPNet
+		for _, c := range in {
+			_, n, err := net.ParseCIDR(c)
+			if err != nil {
+				t.Fatalf("ParseCIDR(%q): %v", c, err)
+			}
+			out = append(out, n)
+		}
+		return out
+	}
+
+	tests := []struct {
+		name    string
+		proxies []string
+		allow   []string
+		want    int
+	}{
+		{"proxy exactly allowlisted", []string{"172.31.0.1/32"}, []string{"192.168.0.0/16", "172.31.0.1/32"}, 1},
+		{"proxy inside allowlisted range", []string{"172.31.0.1/32"}, []string{"172.16.0.0/12"}, 1},
+		{"no overlap", []string{"172.31.0.1/32"}, []string{"172.20.0.0/16", "192.168.100.0/24"}, 0},
+		{"no proxies", nil, []string{"10.0.0.0/8"}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validConfig()
+			c.TrustedProxies = cidrs(tt.proxies...)
+			c.IPAllowlist = cidrs(tt.allow...)
+			if got := c.ProxiesInAllowlist(); len(got) != tt.want {
+				t.Fatalf("ProxiesInAllowlist() = %v, want %d entries", got, tt.want)
+			}
+		})
 	}
 }

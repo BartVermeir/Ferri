@@ -76,3 +76,28 @@ func TestClientIPNoTrustedProxies(t *testing.T) {
 		t.Fatalf("with no trusted proxies, headers must be ignored; got %q", got)
 	}
 }
+
+func TestIPAllowBlockedUsesDeniedHandler(t *testing.T) {
+	allow := []*net.IPNet{mustCIDR(t, "10.0.0.0/8")}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	denied := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	h := IPAllow(allow, nil, denied)(next)
+
+	tests := []struct {
+		remoteAddr string
+		want       int
+	}{
+		{"10.1.2.3:1234", http.StatusOK},
+		{"203.0.113.9:1234", http.StatusTeapot},
+		{"garbage", http.StatusTeapot},
+	}
+	for _, tt := range tests {
+		r, _ := http.NewRequest("GET", "/", nil)
+		r.RemoteAddr = tt.remoteAddr
+		rw := &statusRecorder{}
+		h.ServeHTTP(rw, r)
+		if rw.code != tt.want {
+			t.Fatalf("%s: got %d, want %d", tt.remoteAddr, rw.code, tt.want)
+		}
+	}
+}

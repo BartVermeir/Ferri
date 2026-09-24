@@ -179,6 +179,23 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// ProxiesInAllowlist returns the trusted_proxies entries that overlap an
+// ip_allowlist range. Such an overlap is dangerous: when the proxy forwards a
+// request without X-Real-IP / X-Forwarded-For, the app sees the proxy's own IP,
+// which is then allowlisted — so every external visitor gets in.
+func (c *Config) ProxiesInAllowlist() []string {
+	var out []string
+	for _, p := range c.TrustedProxies {
+		for _, a := range c.IPAllowlist {
+			if a.Contains(p.IP) || p.Contains(a.IP) {
+				out = append(out, p.String())
+				break
+			}
+		}
+	}
+	return out
+}
+
 func (c *Config) validate() error {
 	if c.Server.BaseURL == "" {
 		return fmt.Errorf("server.base_url is required")

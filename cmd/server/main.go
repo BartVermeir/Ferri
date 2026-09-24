@@ -62,6 +62,11 @@ func main() {
 	handler.InitTemplates(cfg.Server.Location)
 	handler.SetVersion(Version)
 
+	if overlap := cfg.ProxiesInAllowlist(); len(overlap) > 0 {
+		slog.Warn("trusted_proxies overlap ip_allowlist: a request forwarded without X-Real-IP would be treated as internal — remove the proxy IP from ip_allowlist",
+			"proxies", overlap)
+	}
+
 	// ── Database ───────────────────────────────────────────────────────────
 	database, err := db.Open(cfg.DB.Path)
 	if err != nil {
@@ -142,8 +147,9 @@ func main() {
 	r.Mount("/tus", http.StripPrefix("/tus", tusHandler))
 
 	// IP-restricted routes (internal network only)
+	forbidden := handler.Forbidden()
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies))
+		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies, forbidden))
 		r.Use(middleware.CSRFProtect(cfg.Server.BaseURL))
 		r.Get("/", handler.SendPage(cfg, stores))
 		r.Post("/send", handler.SendCreate(cfg, stores))
@@ -153,7 +159,7 @@ func main() {
 
 	// Admin routes (IP-restricted + session cookie)
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies))
+		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies, forbidden))
 		r.Use(middleware.CSRFProtect(cfg.Server.BaseURL))
 		r.Get("/admin/login", handler.AdminLogin(cfg))
 		r.With(authLimiter.Middleware).Post("/admin/login", handler.AdminLoginPost(cfg))
