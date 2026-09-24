@@ -37,6 +37,19 @@ func init() {
 // Used as a cache-busting query parameter in templates: /static/upload.js?v={{uploadJSVer}}
 var uploadJSVer string
 
+// appVersion is set once at startup via SetVersion, from the binary's
+// build-time version (see cmd/server/main.go). Defaults to "dev" for
+// `go run`/local builds that skip -ldflags.
+var appVersion = "dev"
+
+// SetVersion records the build-time version string for display in admin
+// templates. Call once during startup, before serving requests.
+func SetVersion(v string) {
+	if v != "" {
+		appVersion = v
+	}
+}
+
 func buildTemplates() {
 	if data, err := static.FS.ReadFile("files/upload.js"); err == nil {
 		h := fnv.New32a()
@@ -63,6 +76,7 @@ func buildTemplates() {
 			return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 		},
 		"uploadJSVer": func() string { return uploadJSVer },
+		"appVersion":  func() string { return appVersion },
 	}
 
 	var err error

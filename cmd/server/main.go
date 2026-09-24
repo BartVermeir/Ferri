@@ -24,6 +24,10 @@ import (
 	ferritls "github.com/BartVermeir/Ferri/internal/tus"
 )
 
+// Version is set at build time via -ldflags "-X main.Version=...".
+// Defaults to "dev" for local `go run`/`go build` without that flag.
+var Version = "dev"
+
 func main() {
 	// ── Flags ──────────────────────────────────────────────────────────────
 	healthCheck := flag.Bool("health", false, "perform health check and exit")
@@ -56,6 +60,7 @@ func main() {
 	// Bind the template date formatter to the configured timezone. Without
 	// this call formatDate stays on UTC regardless of server.timezone.
 	handler.InitTemplates(cfg.Server.Location)
+	handler.SetVersion(Version)
 
 	// ── Database ───────────────────────────────────────────────────────────
 	database, err := db.Open(cfg.DB.Path)

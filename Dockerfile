@@ -3,6 +3,11 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
+# VERSION should be the exact `git describe --tags` output for this build
+# (the deploy script sets it automatically) — this is what shows up in the
+# admin panel footer, so a running container's version is always visible.
+ARG VERSION=dev
+
 # Download dependencies first (cached layer).
 # go.sum must be populated by running 'go mod tidy' before building.
 # An empty go.sum will cause 'go mod download' to fail.
@@ -12,7 +17,7 @@ RUN go mod download
 # Build the binary
 # CGO_ENABLED=0 required for modernc/sqlite (pure Go, no C dependency)
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /ferri ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.Version=${VERSION}" -o /ferri ./cmd/server
 
 # Create the /data directory owned by UID 1000.
 # This is copied into the runtime image and then into the named volume on first
