@@ -32,8 +32,8 @@ import (
 	"net/http"
 	"path"
 
-	"github.com/tus/tusd/v2/pkg/memorylocker"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
+	"github.com/tus/tusd/v2/pkg/memorylocker"
 
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
@@ -83,13 +83,14 @@ func NewHandler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) 
 	locker.UseIn(composer)
 
 	tusConfig := tusd.Config{
-		BasePath:              "/tus/",
-		StoreComposer:         composer,
-		MaxSize:               cfg.Limits.MaxUploadBytes,
-		DisableDownload:       true,
-		DisableTermination:    true,  // disable DELETE — not needed, cleanup job handles it
-		NotifyCompleteUploads: true,
-		NotifyCreatedUploads:  true,
+		BasePath:                "/tus/",
+		StoreComposer:           composer,
+		MaxSize:                 cfg.Limits.MaxUploadBytes,
+		DisableDownload:         true,
+		DisableTermination:      true, // disable DELETE — not needed, cleanup job handles it
+		NotifyCompleteUploads:   true,
+		NotifyCreatedUploads:    true,
+		RespectForwardedHeaders: true, // trust nginx's X-Forwarded-Proto so upload URLs are https://, not http://
 		PreUploadCreateCallback: func(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.FileInfoChanges, error) {
 			return h.preUploadCreate(hook)
 		},
