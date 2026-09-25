@@ -83,10 +83,11 @@ func AdminLoginPost(cfg *config.Config) http.HandlerFunc {
 //
 // Sessions are stateless HMAC cookies (no server-side store), so logout clears
 // the browser's cookie but cannot invalidate a cookie value captured elsewhere;
-// such a cookie remains valid until its embedded expiry (server.session_ttl_hours,
-// default 8h). To revoke ALL sessions immediately, rotate ADMIN_TOKEN — this
-// changes the HMAC signing key so every existing cookie fails validation. This
-// is an accepted trade-off for the deployment's threat model.
+// such a cookie remains valid until its embedded expiry (admin.session_ttl_hours,
+// default 8h). To revoke ALL sessions immediately, rotate ADMIN_TOKEN — the
+// signing key is derived from it, so every existing cookie fails validation.
+// Accepted trade-off: the admin panel is reachable from the internal network
+// only, and a server-side session store would add state for little gain.
 func AdminLogout(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		appMiddleware.ClearAdminCookie(w, cfg.Server.SecureCookies)
@@ -183,6 +184,11 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 		if storagePath == "" {
 			storagePath = cfg.Storage.Path
 		}
+		if pathContainsDB(storagePath, cfg.DB.Path) {
+			slog.Error("orphan scan refused: storage path contains the database", "path", storagePath, "db", cfg.DB.Path)
+			http.Error(w, "Refused: the storage path contains the database.", http.StatusBadRequest)
+			return
+		}
 
 		known, err := stores.Files.AllTUSUploadIDs()
 		if err != nil {
@@ -204,7 +210,10 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 				continue
 			}
 			name := e.Name()
-			if known[name] {
+			// Only what looks like a TUS upload is ever a candidate: anything
+			// else in the folder (a database, a probe file) is not ours to
+			// delete (audit L8).
+			if known[name] || !isTUSUploadID(name) {
 				continue
 			}
 			// UUID not in known set. Fall back to the .info file: it may belong to
@@ -243,10 +252,36 @@ func orphanInfoReferenced(storageRoot, name string, files *store.FilesStore) (bo
 	if err := json.Unmarshal(data, &info); err != nil {
 		return false, nil
 	}
+	// The TUS handler replaces the client's metadata with transfer_id or
+	// request_id; upload_request_token only occurs in old .info files. Looking
+	// for the token alone never matched a request file (audit L8).
 	return files.TransferOrRequestExists(
 		info.MetaData["transfer_id"],
+		info.MetaData["request_id"],
 		info.MetaData["upload_request_token"],
 	)
+}
+
+// tusIDPattern matches the upload IDs our TUS stores create: 32 hex digits
+// (tusd's filestore) or a UUID (the SMB store).
+var tusIDPattern = regexp.MustCompile(`^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+
+func isTUSUploadID(name string) bool { return tusIDPattern.MatchString(name) }
+
+// pathContainsDB reports whether the database file lies in dir or below it.
+// Such a storage path is refused: orphan cleanup would treat the database as
+// an unknown file (audit L8).
+func pathContainsDB(dir, dbPath string) bool {
+	if dir == "" || dbPath == "" || dbPath == ":memory:" {
+		return false
+	}
+	absDir, err1 := filepath.Abs(dir)
+	absDB, err2 := filepath.Abs(dbPath)
+	if err1 != nil || err2 != nil {
+		return true // cannot tell: refuse
+	}
+	rel, err := filepath.Rel(absDir, filepath.Dir(absDB))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 func AdminTransfers(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +335,65 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 
 		slog.Info("admin: transfer hard-deleted", "id", id)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	}
+}
+
+// AdminTransferFiles handles GET /admin/transfers/{id}/files: the transfer's
+// complete files, for an admin to look at. Downloads from here go through
+// AdminTransferFile and are not recorded. The dashboard used to link each
+// recipient's own download link, so an admin checking a transfer showed up
+// as that recipient downloading it and mailed the sender (audit L6).
+func AdminTransferFiles(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t, err := stores.Transfers.GetByID(chi.URLParam(r, "id"))
+		if err != nil || t == nil {
+			http.NotFound(w, r)
+			return
+		}
+		files, err := stores.Transfers.GetFilesByTransferID(t.ID)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		var complete []store.File
+		for _, f := range files {
+			if f.Status == "complete" {
+				complete = append(complete, f)
+			}
+		}
+		renderPage(w, "admin/transfer_files.html", struct {
+			adminData
+			Transfer *store.Transfer
+			Files    []store.File
+		}{
+			adminData: adminData{PageTitle: "Transfer files", ActiveNav: "dashboard", Settings: appMiddleware.GetSettings(r)},
+			Transfer:  t,
+			Files:     complete,
+		})
+	}
+}
+
+// AdminTransferFile handles GET /admin/transfers/{id}/file/{fileID}: serves
+// one file without recording a download or notifying anyone.
+func AdminTransferFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		f, err := stores.Transfers.GetFileByID(chi.URLParam(r, "fileID"))
+		if err != nil || f == nil || f.TransferID != chi.URLParam(r, "id") || f.Status != "complete" {
+			http.NotFound(w, r)
+			return
+		}
+		src, err := mgr.Open(f.StoragePath)
+		if err != nil && f.TUSUploadID.Valid && f.TUSUploadID.String != "" {
+			src, err = mgr.Open(f.TUSUploadID.String)
+		}
+		if err != nil {
+			slog.Error("admin: open file", "file_id", f.ID, "error", err)
+			http.Error(w, "File not found on storage", http.StatusNotFound)
+			return
+		}
+		defer src.Close()
+		w.Header().Set("Content-Disposition", buildContentDisposition(f.OriginalName))
+		http.ServeContent(w, r, f.OriginalName, time.Time{}, src)
 	}
 }
 
@@ -526,7 +620,6 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 
 // ── Template rendering placeholders ──────────────────────────────────────────
 
-
 // AdminLogoUpload handles POST /admin/settings/logo.
 //
 // The logo is written to <storage.path>/logo on the LOCAL filesystem via os.*,
@@ -662,6 +755,10 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 			localPath := strings.TrimSpace(r.FormValue("storage.local_path"))
 			if localPath != "" && !filepath.IsAbs(localPath) {
 				http.Redirect(w, r, "/admin/settings?storage_error=local+path+must+be+absolute", http.StatusSeeOther)
+				return
+			}
+			if pathContainsDB(localPath, cfg.DB.Path) {
+				http.Redirect(w, r, "/admin/settings?storage_error="+url.QueryEscape("the storage folder must not contain the database ("+cfg.DB.Path+")"), http.StatusSeeOther)
 				return
 			}
 		}

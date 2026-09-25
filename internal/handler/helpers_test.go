@@ -9,8 +9,8 @@ import (
 
 func TestValidateBranding(t *testing.T) {
 	tests := []struct {
-		name  string
-		vals  map[string]string
+		name   string
+		vals   map[string]string
 		wantOK bool
 	}{
 		{"empty map", map[string]string{}, true},

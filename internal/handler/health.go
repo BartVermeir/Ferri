@@ -32,7 +32,7 @@ func Health(db *sql.DB) http.HandlerFunc {
 	}
 }
 
-// Static returns a handler that serves embedded static files from web/static/.
+// Static returns a handler that serves embedded static files from static/files/.
 // Files are embedded at compile time via the static package — no runtime
 // filesystem dependency. The binary is fully self-contained.
 func Static() http.Handler {

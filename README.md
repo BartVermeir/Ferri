@@ -94,7 +94,9 @@ volumes:
 Then build and start:
 
 ```bash
-docker build -t ferri:latest .
+VERSION=$(git describe --tags --always)
+docker build --build-arg VERSION="$VERSION" -t "ferri:$VERSION" .
+sed -i "s#image: ferri:.*#image: ferri:$VERSION#" docker-compose.yml   # the template says ferri:vX.Y.Z
 docker compose up -d
 ```
 

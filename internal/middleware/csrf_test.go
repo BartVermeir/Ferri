@@ -75,6 +75,6 @@ type statusRecorder struct {
 	code int
 }
 
-func (s *statusRecorder) Header() http.Header        { return http.Header{} }
+func (s *statusRecorder) Header() http.Header         { return http.Header{} }
 func (s *statusRecorder) Write(b []byte) (int, error) { return len(b), nil }
 func (s *statusRecorder) WriteHeader(code int)        { s.code = code }

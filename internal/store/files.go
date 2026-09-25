@@ -34,10 +34,20 @@ func (s *FilesStore) AllTUSUploadIDs() (map[string]bool, error) {
 	return ids, rows.Err()
 }
 
-// TransferOrRequestExists reports whether the given transfer ID or upload request token
-// still has a DB record. Used by the orphan scan to verify a TUS .info file whose UUID
-// is not in the DB (an abandoned upload, or a legacy row) before deleting the file.
-func (s *FilesStore) TransferOrRequestExists(transferID, requestToken string) (bool, error) {
+// TransferOrRequestExists reports whether the given transfer ID, upload request ID
+// or (legacy .info files) upload request token still has a DB record. Used by the
+// orphan scan to verify a TUS .info file whose UUID is not in the DB (an abandoned
+// upload, or a legacy row) before deleting the file.
+func (s *FilesStore) TransferOrRequestExists(transferID, requestID, requestToken string) (bool, error) {
+	if requestID != "" {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM upload_requests WHERE id = ?`, requestID).Scan(&n); err != nil {
+			return false, err
+		}
+		if n > 0 {
+			return true, nil
+		}
+	}
 	if transferID != "" {
 		var n int
 		if err := s.db.QueryRow(`SELECT COUNT(*) FROM transfers WHERE id = ?`, transferID).Scan(&n); err != nil {

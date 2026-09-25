@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 	"time"
@@ -47,5 +50,22 @@ func TestSessionCookieMalformed(t *testing.T) {
 		if validateSessionCookie(bad, sessSecret) {
 			t.Fatalf("malformed cookie %q passed validation", bad)
 		}
+	}
+}
+
+// Audit L10: the session MAC key is derived from the admin token; a cookie
+// signed with the raw token (the old scheme) is not accepted.
+func TestSessionCookie_KeyIsDerived(t *testing.T) {
+	token := strings.Repeat("t", 32)
+	good := signedCookieValue(token, time.Hour)
+	if !validateSessionCookie(good, token) {
+		t.Fatal("a fresh session cookie is rejected")
+	}
+	parts := strings.SplitN(good, ":", 3)
+	raw := hmac.New(sha256.New, []byte(token))
+	raw.Write([]byte(parts[0] + ":" + parts[1]))
+	old := parts[0] + ":" + parts[1] + ":" + hex.EncodeToString(raw.Sum(nil))
+	if validateSessionCookie(old, token) {
+		t.Fatal("a cookie signed with the raw admin token is accepted")
 	}
 }

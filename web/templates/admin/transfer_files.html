@@ -1,0 +1,39 @@
+{{define "admin/transfer_files.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>{{if .Transfer.Title}}{{.Transfer.Title}}{{else}}Untitled transfer{{end}}</h1></div>
+    <p style="margin:0 0 16px; font-size:13px; color:#666;">
+      From {{.Transfer.SenderEmail}} · {{.Transfer.Status}} · expires {{.Transfer.ExpiresAt | formatDate}}.
+      Downloads here are not counted as recipient downloads and send no mail.
+    </p>
+    <div class="card">
+      <table>
+        <thead><tr><th>File</th><th>Size</th><th></th></tr></thead>
+        <tbody>
+          {{range .Files}}
+          <tr>
+            <td style="word-break:break-all;">{{.OriginalName}}</td>
+            <td style="white-space:nowrap;">{{.SizeBytes | formatSize}}</td>
+            <td style="text-align:right;"><a class="btn btn-sm" href="/admin/transfers/{{$.Transfer.ID}}/file/{{.ID}}">Download</a></td>
+          </tr>
+          {{else}}
+          <tr class="empty-row"><td colspan="3">No complete files</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px;"><a href="/admin">← Overview</a></p>
+  </main>
+</div>
+  {{template "primary-text-script" .}}
+</body>
+</html>{{end}}

@@ -17,7 +17,6 @@ package handler
 import (
 	"archive/zip"
 	"database/sql"
-	"crypto/subtle"
 	"fmt"
 	"html"
 	"io"
@@ -44,12 +43,9 @@ import (
 // (which would cap every SMB read below what the negotiated dialect allows).
 const zipCopyBufSize = 1 << 20 // 1MB
 
-// downloadPasswordCookie is a short-lived cookie that unlocks a password-protected
-// download page for the duration of the browser session. It contains the bcrypt
-// hash of the transfer's password so we can validate it without a DB lookup on
-// every file request. The cookie is HttpOnly and Secure; it is not signed because
-// the bcrypt hash itself is the secret — knowing the hash gives no advantage
-// over knowing the password.
+// downloadPasswordCookie unlocks a password-protected download page for the
+// browser session, at most passwordCookieTTL. Its value is signed, see
+// passcookie.go. HttpOnly, and Secure when server.secure_cookies is set.
 const downloadPasswordCookie = "ferri_dl_auth"
 
 // downloadNotifyWindow: at most one download notification per recipient and
@@ -90,7 +86,7 @@ func DownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// Redirecting to ?auth=1 and then checking the query param creates a loop:
 		// DownloadPage → redirect → DownloadPage → redirect → ...
 		if transfer.PasswordHash.Valid {
-			if !downloadPasswordValid(r, transfer.PasswordHash.String) {
+			if !downloadPasswordValid(cfg, r, transfer.PasswordHash.String) {
 				renderPasswordPage(w, tok, settings, "")
 				return
 			}
@@ -140,12 +136,11 @@ func DownloadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 			return
 		}
 
-		// Set a session cookie containing the bcrypt hash.
-		// The hash is the secret: possessing it proves you know the password.
-		// The cookie expires with the browser session (no MaxAge).
+		// A signed session cookie (passcookie.go); the server rejects it
+		// after passwordCookieTTL even if the browser keeps it.
 		http.SetCookie(w, &http.Cookie{
 			Name:     downloadPasswordCookie + "_" + tok,
-			Value:    transfer.PasswordHash.String,
+			Value:    passwordCookieValue(cfg, "dl", tok, transfer.PasswordHash.String, time.Now()),
 			Path:     "/dl/" + tok,
 			HttpOnly: true,
 			Secure:   cfg.Server.SecureCookies,
@@ -178,7 +173,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 
 		// Password check — redirect to download page which will render the password form.
 		if transfer.PasswordHash.Valid {
-			if !downloadPasswordValid(r, transfer.PasswordHash.String) {
+			if !downloadPasswordValid(cfg, r, transfer.PasswordHash.String) {
 				http.Redirect(w, r, "/dl/"+tok, http.StatusSeeOther)
 				return
 			}
@@ -203,13 +198,6 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		f, err := mgr.Open(targetFile.StoragePath)
 		if err != nil && targetFile.TUSUploadID.Valid {
 			f, err = mgr.Open(targetFile.TUSUploadID.String)
-		}
-		// Local-only legacy fallback: scan .info files (pre-bugfix uploads).
-		if err != nil && mgr.Type() == "local" {
-			if found := findFileInStorage(cfg.Storage.Path, targetFile.ID); found != "" {
-				rel, _ := filepath.Rel(cfg.Storage.Path, found)
-				f, err = mgr.Open(rel)
-			}
 		}
 		if err != nil {
 			slog.Error("download: open file", "file_id", fileID, "error", err)
@@ -339,17 +327,14 @@ func rfc5987Encode(s string) string {
 // ── Password cookie ───────────────────────────────────────────────────────────
 
 // downloadPasswordValid checks whether the request has a valid password cookie
-// for the given bcrypt hash. Uses subtle.ConstantTimeCompare to prevent
-// timing attacks on the cookie value comparison.
-func downloadPasswordValid(r *http.Request, bcryptHash string) bool {
-	cookieName := downloadPasswordCookie + "_" + chi.URLParam(r, "token")
-	cookie, err := r.Cookie(cookieName)
+// for this link and the transfer's current password.
+func downloadPasswordValid(cfg *config.Config, r *http.Request, bcryptHash string) bool {
+	tok := chi.URLParam(r, "token")
+	cookie, err := r.Cookie(downloadPasswordCookie + "_" + tok)
 	if err != nil {
 		return false
 	}
-	// Compare the stored bcrypt hash (from the cookie) with the transfer's bcrypt hash.
-	// Both are bcrypt hashes — they must be identical (same round of hashing).
-	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(bcryptHash)) == 1
+	return passwordCookieValid(cfg, "dl", tok, bcryptHash, cookie.Value, time.Now())
 }
 
 // ── Template rendering placeholders ──────────────────────────────────────────
@@ -493,7 +478,6 @@ func buildDownloadNotifyText(n downloadNoticeData) string {
 
 // ── Logging helper ────────────────────────────────────────────────────────────
 
-
 // DownloadZIP handles GET /dl/:token/zip.
 // Streams all files in the transfer as a ZIP archive.
 func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
@@ -512,7 +496,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		}
 
 		if transfer.PasswordHash.Valid {
-			if !downloadPasswordValid(r, transfer.PasswordHash.String) {
+			if !downloadPasswordValid(cfg, r, transfer.PasswordHash.String) {
 				http.Redirect(w, r, "/dl/"+tok, http.StatusSeeOther)
 				return
 			}

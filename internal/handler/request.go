@@ -45,6 +45,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		settings := appMiddleware.GetSettings(r)
 
+		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 		if err := r.ParseForm(); err != nil {
 			renderHomePage(w, cfg, settings, "request", "Invalid form data.")
 			return
@@ -61,6 +62,10 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		if requesterName == "" {
 			renderHomePage(w, cfg, settings, "request", "Your name is required.")
+			return
+		}
+		if len(requesterName) > maxNameLen {
+			renderHomePage(w, cfg, settings, "request", "Your name is too long.")
 			return
 		}
 		if !isValidEmail(requesterEmail) {
@@ -138,12 +143,6 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 }
 
 // ── Template rendering ────────────────────────────────────────────────────────
-
-// renderRequestPage renders the combined page with the request tab active.
-// Kept for any future callers; delegates to renderHomePage.
-func renderRequestPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	renderHomePage(w, cfg, settings, "request", errMsg)
-}
 
 // renderRequestResult shows both links: the upload link for the external
 // party, and the requester's own view link. They differ on purpose (audit M1).

@@ -37,6 +37,8 @@ func newAdminRouter(cfg *config.Config, stores *store.Stores, mgr *storage.Manag
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.AdminAuth(cfg))
 		r.Get("/admin", AdminDashboard(cfg, stores))
+		r.Get("/admin/transfers/{id}/files", AdminTransferFiles(cfg, stores))
+		r.Get("/admin/transfers/{id}/file/{fileID}", AdminTransferFile(cfg, stores, mgr))
 		r.Post("/admin/transfers/{id}/delete", AdminTransferDelete(cfg, stores, mgr, jobs.NewScheduler(cfg, stores, mgr)))
 		r.Post("/admin/requests/{id}/delete", AdminRequestDelete(cfg, stores, mgr))
 		r.Post("/admin/logout", AdminLogout(cfg))
@@ -390,5 +392,57 @@ func TestAdminDelete_SendsSummaryForLiveTransferOnly(t *testing.T) {
 	del(off)
 	if n := len(summaries()); n != 1 {
 		t.Fatalf("with expiry summaries switched off: %d summaries, want still 1", n)
+	}
+}
+
+// Audit L6: the dashboard linked each recipient's own download link, so an
+// admin checking a transfer counted as that recipient downloading (and mailed
+// the sender). Now the dashboard has no recipient links, and the admin's own
+// file page serves files without recording anything.
+func TestAdminTransferFiles_DownloadIsNotARecipientDownload(t *testing.T) {
+	cfg := newTestConfig()
+	d := newTestDB(t)
+	stores := store.New(d)
+	mgr, root := newTestManager(t)
+	r := newAdminRouter(cfg, stores, mgr)
+	cookie := adminSessionCookie(t, cfg)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	_, fileID, _, content := mustCreateActiveTransfer(t, stores, root, "")
+	f, err := stores.Transfers.GetFileByID(fileID)
+	if err != nil || f == nil {
+		t.Fatal(err)
+	}
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		return rr
+	}
+
+	dash := get("/admin").Body.String()
+	if strings.Contains(dash, "/dl/") {
+		t.Fatal("dashboard still links a recipient download link")
+	}
+	if !strings.Contains(dash, "/admin/transfers/"+f.TransferID+"/files") {
+		t.Fatal("dashboard has no link to the transfer's files")
+	}
+	if page := get("/admin/transfers/" + f.TransferID + "/files").Body.String(); !strings.Contains(page, "test.txt") {
+		t.Fatalf("files page does not list the file:\n%s", page)
+	}
+	rr := get("/admin/transfers/" + f.TransferID + "/file/" + fileID)
+	if rr.Code != http.StatusOK || rr.Body.String() != string(content) {
+		t.Fatalf("admin download: status %d, body %q", rr.Code, rr.Body.String())
+	}
+	var events, mails int
+	d.QueryRow(`SELECT COUNT(*) FROM download_events`).Scan(&events)
+	d.QueryRow(`SELECT COUNT(*) FROM mail_queue WHERE subject LIKE 'Downloaded:%'`).Scan(&mails)
+	if events != 0 || mails != 0 {
+		t.Fatalf("admin download recorded %d events and queued %d mails, want 0 and 0", events, mails)
+	}
+	if rr := get("/admin/transfers/other/file/" + fileID); rr.Code != http.StatusNotFound {
+		t.Fatalf("file served under another transfer's id: status %d", rr.Code)
 	}
 }

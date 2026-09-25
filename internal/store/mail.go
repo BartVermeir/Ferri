@@ -154,13 +154,6 @@ func (s *MailStore) PruneSent(retentionDays int) (int64, error) {
 	return result.RowsAffected()
 }
 
-// CountFailed returns the number of permanently failed mails.
-func (s *MailStore) CountFailed() (int, error) {
-	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM mail_queue WHERE status = 'failed'`).Scan(&count)
-	return count, err
-}
-
 // ListFailed returns failed mails for the admin UI.
 func (s *MailStore) ListFailed(limit int) ([]MailItem, error) {
 	rows, err := s.db.Query(`

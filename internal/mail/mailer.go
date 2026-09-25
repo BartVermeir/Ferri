@@ -16,9 +16,11 @@ package mail
 // see mailer_test.go for a regression test of that property.
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"strings"
+	"time"
 
 	gomail "github.com/wneessen/go-mail"
 
@@ -27,36 +29,70 @@ import (
 	"github.com/BartVermeir/Ferri/internal/token"
 )
 
-// Send sends a single mail queue item via SMTP.
-// Called by the mail job after fetching pending items from the queue.
-// Returns an error if the send fails — the caller records the failure
-// and schedules a retry with exponential backoff.
-func Send(cfg *config.Config, settings *store.Settings, item store.MailItem) error {
-	fromAddress := settings.MailFromAddress
-	fromName := settings.MailFromName
+// Sender sends mail queue items over one SMTP connection, opened on the
+// first mail and reused for the rest of the batch. One connection per mail
+// (connect, TLS, login, send, quit) capped the queue at about 600 mails an
+// hour (audit O5). After a failed send the connection is dropped and the
+// next mail opens a fresh one, so one bad mail cannot poison the others.
+// Not safe for concurrent use; Close when the batch is done.
+type Sender struct {
+	cfg         *config.Config
+	fromName    string
+	fromAddress string
+	client      *gomail.Client // nil until the first mail, and after a failure
+	dials       int            // connections opened, for tests
+}
 
-	// Runtime settings override config defaults
-	if fromAddress == "" {
-		fromAddress = cfg.SMTP.FromAddress
+// NewSender prepares a Sender. Runtime settings override the config's
+// from name and address.
+func NewSender(cfg *config.Config, settings *store.Settings) *Sender {
+	s := &Sender{cfg: cfg, fromAddress: settings.MailFromAddress, fromName: settings.MailFromName}
+	if s.fromAddress == "" {
+		s.fromAddress = cfg.SMTP.FromAddress
 	}
-	if fromName == "" {
-		fromName = cfg.SMTP.FromName
+	if s.fromName == "" {
+		s.fromName = cfg.SMTP.FromName
 	}
-	if fromAddress == "" {
+	return s
+}
+
+// Send sends one item. Returns an error if the send fails — the caller
+// records the failure and schedules a retry with exponential backoff.
+func (s *Sender) Send(item store.MailItem) error {
+	if s.fromAddress == "" {
 		return fmt.Errorf("mail: from_address not configured")
 	}
-
-	msg, err := buildMessage(fromName, fromAddress, item)
+	msg, err := buildMessage(s.fromName, s.fromAddress, item)
 	if err != nil {
 		return fmt.Errorf("mail: build message: %w", err)
 	}
-
-	client, err := newClient(cfg)
-	if err != nil {
-		return fmt.Errorf("mail: create client: %w", err)
+	if s.client == nil {
+		client, err := newClient(s.cfg)
+		if err != nil {
+			return fmt.Errorf("mail: create client: %w", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = client.DialWithContext(ctx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("mail: connect: %w", err)
+		}
+		s.client = client
+		s.dials++
 	}
+	if err := s.client.Send(msg); err != nil {
+		s.Close()
+		return err
+	}
+	return nil
+}
 
-	return client.DialAndSend(msg)
+// Close ends the SMTP session, if one is open.
+func (s *Sender) Close() {
+	if s.client != nil {
+		_ = s.client.Close()
+		s.client = nil
+	}
 }
 
 // buildMessage constructs the MIME message for a mail queue item.

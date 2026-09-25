@@ -1,10 +1,13 @@
 package config
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -19,15 +22,20 @@ type Config struct {
 
 	// IPAllowlist is parsed from ip_allowlist CIDR ranges.
 	// Used by the IPAllow middleware to restrict transfer creation.
-	IPAllowlist []*net.IPNet `yaml:"-"`
-	RawAllowlist []string    `yaml:"ip_allowlist"`
+	IPAllowlist  []*net.IPNet `yaml:"-"`
+	RawAllowlist []string     `yaml:"ip_allowlist"`
+
+	// UnknownKeys lists config.yaml keys Ferri does not know, with their
+	// line ("line 5: field trusted_proxy not found in type ..."). Filled by
+	// Load, logged as a WARN at startup (audit L2).
+	UnknownKeys []string `yaml:"-"`
 
 	// TrustedProxies is parsed from server.trusted_proxies.
 	// Only connections from these IPs may set X-Real-IP / X-Forwarded-For.
 	TrustedProxies []*net.IPNet `yaml:"-"`
 
-	SMTP   SMTPConfig   `yaml:"smtp"`
-	Admin  AdminConfig  `yaml:"admin"`
+	SMTP  SMTPConfig  `yaml:"smtp"`
+	Admin AdminConfig `yaml:"admin"`
 
 	ExpiryOptions []ExpiryOption `yaml:"expiry_options"`
 
@@ -36,13 +44,13 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host                    string   `yaml:"host"`
-	Port                    int      `yaml:"port"`
-	BaseURL                 string   `yaml:"base_url"`
-	TrustedProxies          []string `yaml:"trusted_proxies"`
-	ShutdownTimeoutSeconds  int      `yaml:"shutdown_timeout_seconds"`
-	Timezone                string   `yaml:"timezone"`       // IANA timezone, e.g. "Europe/Amsterdam"
-	SecureCookies           bool     `yaml:"secure_cookies"` // Set true when serving over HTTPS
+	Host                   string   `yaml:"host"`
+	Port                   int      `yaml:"port"`
+	BaseURL                string   `yaml:"base_url"`
+	TrustedProxies         []string `yaml:"trusted_proxies"`
+	ShutdownTimeoutSeconds int      `yaml:"shutdown_timeout_seconds"`
+	Timezone               string   `yaml:"timezone"`       // IANA timezone, e.g. "Europe/Amsterdam"
+	SecureCookies          bool     `yaml:"secure_cookies"` // Set true when serving over HTTPS
 
 	// Location is Timezone parsed into a *time.Location, resolved once in validate().
 	// Used for all date formatting (web templates via handler.InitTemplates, and the
@@ -63,14 +71,14 @@ type SMTPConfig struct {
 	Port        int    `yaml:"port"`
 	Username    string `yaml:"username"`
 	Password    string `yaml:"password"` // overridden by SMTP_PASSWORD env var
-	TLS         string `yaml:"tls"`       // starttls | tls | none
+	TLS         string `yaml:"tls"`      // starttls | tls | none
 	FromAddress string `yaml:"from_address"`
 	FromName    string `yaml:"from_name"`
 }
 
 type AdminConfig struct {
-	Token          string `yaml:"token"`         // overridden by ADMIN_TOKEN env var
-	SessionTTLHours int   `yaml:"session_ttl_hours"`
+	Token           string `yaml:"token"` // overridden by ADMIN_TOKEN env var
+	SessionTTLHours int    `yaml:"session_ttl_hours"`
 }
 
 type ExpiryOption struct {
@@ -79,20 +87,20 @@ type ExpiryOption struct {
 }
 
 type LimitsConfig struct {
-	MaxUploadBytes       int64 `yaml:"max_upload_bytes"`
-	MaxFilesPerTransfer  int   `yaml:"max_files_per_transfer"`
+	MaxUploadBytes      int64 `yaml:"max_upload_bytes"`
+	MaxFilesPerTransfer int   `yaml:"max_files_per_transfer"`
 	// MinFreeBytes: a new upload is refused when it would leave less than
 	// this free on the storage. Hard stop: a full share breaks every upload.
 	MinFreeBytes int64 `yaml:"min_free_bytes"`
 }
 
 type JobsConfig struct {
-	ExpiryIntervalMinutes  int `yaml:"expiry_interval_minutes"`
-	CleanupGraceHours      int `yaml:"cleanup_grace_hours"`
-	MailIntervalMinutes    int `yaml:"mail_interval_minutes"`
-	StallTimeoutHours      int `yaml:"stall_timeout_hours"`
-	CleanupIntervalHours   int `yaml:"cleanup_interval_hours"`
-	MailRetentionDays      int `yaml:"mail_retention_days"`
+	ExpiryIntervalMinutes int `yaml:"expiry_interval_minutes"`
+	CleanupGraceHours     int `yaml:"cleanup_grace_hours"`
+	MailIntervalMinutes   int `yaml:"mail_interval_minutes"`
+	StallTimeoutHours     int `yaml:"stall_timeout_hours"`
+	CleanupIntervalHours  int `yaml:"cleanup_interval_hours"`
+	MailRetentionDays     int `yaml:"mail_retention_days"`
 }
 
 // Defaults returns a Config with all default values pre-filled.
@@ -141,15 +149,15 @@ func Load(path string) (*Config, error) {
 	cfg := Defaults()
 
 	if path != "" {
-		f, err := os.Open(path)
+		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("open config: %w", err)
 		}
-		defer f.Close()
 
-		if err := yaml.NewDecoder(f).Decode(cfg); err != nil {
+		if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(cfg); err != nil {
 			return nil, fmt.Errorf("parse config: %w", err)
 		}
+		cfg.UnknownKeys = unknownKeys(data)
 	}
 
 	// Environment variable overrides for secrets
@@ -181,6 +189,26 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// unknownKeys decodes the config a second time with unknown fields refused,
+// and returns yaml's message for each one. A typo like "trusted_proxy:" was
+// silently dropped; this names it. Only a warning, not an error: refusing to
+// start would take Ferri down on a deploy over an old or misspelled key.
+func unknownKeys(data []byte) []string {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	var te *yaml.TypeError
+	if err := dec.Decode(Defaults()); !errors.As(err, &te) {
+		return nil
+	}
+	var out []string
+	for _, msg := range te.Errors {
+		if strings.Contains(msg, "not found in type") {
+			out = append(out, msg)
+		}
+	}
+	return out
 }
 
 // ProxiesInAllowlist returns the trusted_proxies entries that overlap an

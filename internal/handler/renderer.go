@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -89,12 +91,20 @@ func buildTemplates() {
 	}
 }
 
-// renderPage renders a named template with the given data.
+// renderPage renders a named template with the given data. It renders into a
+// buffer first: a template that fails halfway used to leave half a page with
+// "Template error: <Go error>" under it, sent with the status already
+// written (audit L5). Now the visitor gets a plain 500 and the error goes to
+// the log.
 func renderPage(w http.ResponseWriter, name string, data any) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := templates.ExecuteTemplate(w, name, data); err != nil {
-		http.Error(w, "Template error: "+err.Error(), http.StatusInternalServerError)
+	var buf bytes.Buffer
+	if err := templates.ExecuteTemplate(&buf, name, data); err != nil {
+		slog.Error("render template", "template", name, "error", err)
+		http.Error(w, "Something went wrong on our side. Please try again later.", http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = buf.WriteTo(w)
 }
 
 // baseData contains fields common to all public pages.

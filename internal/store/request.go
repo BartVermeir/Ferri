@@ -22,15 +22,15 @@ type UploadRequest struct {
 	UploadToken    string
 	// ViewToken opens the requester's view of received files. NULL for
 	// requests from before migration 005; use ViewPathToken, not this field.
-	ViewToken      sql.NullString
-	PasswordHash   sql.NullString
-	MaxFiles       sql.NullInt64
-	MaxTotalBytes  sql.NullInt64
-	Status         string
-	ExpiresAt      time.Time
-	CompletedAt    sql.NullInt64
-	ExpiredAt      sql.NullInt64
-	CreatedAt      time.Time
+	ViewToken     sql.NullString
+	PasswordHash  sql.NullString
+	MaxFiles      sql.NullInt64
+	MaxTotalBytes sql.NullInt64
+	Status        string
+	ExpiresAt     time.Time
+	CompletedAt   sql.NullInt64
+	ExpiredAt     sql.NullInt64
+	CreatedAt     time.Time
 }
 
 // ViewPathToken is the token for the requester's routes (/ul/<token>/files).
@@ -45,16 +45,16 @@ func (r UploadRequest) ViewPathToken() string {
 
 // UploadRequestFile represents a row in upload_request_files.
 type UploadRequestFile struct {
-	ID               string
-	UploadRequestID  string
-	OriginalName     string
-	StoragePath      string
-	SizeBytes        int64
-	MimeType         sql.NullString
-	TUSUploadID      sql.NullString
-	TUSLastActivity  sql.NullInt64
-	Status           string
-	CreatedAt        time.Time
+	ID              string
+	UploadRequestID string
+	OriginalName    string
+	StoragePath     string
+	SizeBytes       int64
+	MimeType        sql.NullString
+	TUSUploadID     sql.NullString
+	TUSLastActivity sql.NullInt64
+	Status          string
+	CreatedAt       time.Time
 }
 
 // CreateRequestInput holds all data to create an upload request.
@@ -135,7 +135,6 @@ func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
 	r.CreatedAt = time.Unix(createdAt, 0)
 	return &r, nil
 }
-
 
 // GetLiveByUploadToken looks up a request by its upload token when it is open
 // or completed and not expired. The upload page uses it to tell "you already
@@ -330,25 +329,6 @@ func (s *RequestStore) MarkFileDeleted(fileID string) error {
 	_, err := s.db.Exec(`UPDATE upload_request_files SET status = 'deleted' WHERE id = ?`, fileID)
 	return err
 }
-
-// TryComplete atomically sets upload_request to 'completed' if all its files are complete.
-func (s *RequestStore) TryComplete(requestID string) (bool, error) {
-	result, err := s.db.Exec(`
-		UPDATE upload_requests
-		SET status = 'completed', completed_at = unixepoch()
-		WHERE id = ?
-		  AND status = 'open'
-		  AND (SELECT COUNT(*) FROM upload_request_files
-		       WHERE upload_request_id = ? AND status != 'complete') = 0`,
-		requestID, requestID,
-	)
-	if err != nil {
-		return false, err
-	}
-	n, _ := result.RowsAffected()
-	return n == 1, nil
-}
-
 
 // CreateFileRow inserts a new upload_request_files row from the TUS callback.
 

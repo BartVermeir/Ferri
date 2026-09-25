@@ -20,8 +20,6 @@ import (
 	"html"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -62,7 +60,7 @@ func UploadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		}
 
 		if req.PasswordHash.Valid {
-			if !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+			if !uploadPasswordValid(cfg, r, tok, req.PasswordHash.String) {
 				renderUploadPasswordPage(w, tok, settings, "")
 				return
 			}
@@ -150,7 +148,7 @@ func RequestFilesPassword(cfg *config.Config, stores *store.Stores) http.Handler
 func setUploadPasswordCookie(w http.ResponseWriter, cfg *config.Config, tok, bcryptHash string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     uploadPasswordCookie + "_" + tok,
-		Value:    bcryptHash,
+		Value:    passwordCookieValue(cfg, "ul", tok, bcryptHash, time.Now()),
 		Path:     "/ul/" + tok,
 		HttpOnly: true,
 		Secure:   cfg.Server.SecureCookies,
@@ -179,7 +177,7 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		// Password check — must have authenticated before completing
 		if req.PasswordHash.Valid {
-			if !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+			if !uploadPasswordValid(cfg, r, tok, req.PasswordHash.String) {
 				http.Redirect(w, r, "/ul/"+tok, http.StatusSeeOther)
 				return
 			}
@@ -284,25 +282,14 @@ func waitForRequestFiles(ctx context.Context, requests *store.RequestStore, requ
 
 // ── Password cookie ───────────────────────────────────────────────────────────
 
-func uploadPasswordValid(r *http.Request, tok, bcryptHash string) bool {
+// uploadPasswordValid checks the signed password cookie (passcookie.go) for
+// this link and the request's current password.
+func uploadPasswordValid(cfg *config.Config, r *http.Request, tok, bcryptHash string) bool {
 	cookie, err := r.Cookie(uploadPasswordCookie + "_" + tok)
 	if err != nil {
 		return false
 	}
-	return len(cookie.Value) == len(bcryptHash) &&
-		bcryptHashEqual(cookie.Value, bcryptHash)
-}
-
-// bcryptHashEqual compares two bcrypt hashes in constant time.
-func bcryptHashEqual(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var diff byte
-	for i := 0; i < len(a); i++ {
-		diff |= a[i] ^ b[i]
-	}
-	return diff == 0
+	return passwordCookieValid(cfg, "ul", tok, bcryptHash, cookie.Value, time.Now())
 }
 
 // ── Mail body builders ────────────────────────────────────────────────────────
@@ -374,7 +361,6 @@ func buildUploadCompleteText(u uploadCompleteMail) string {
 
 // ── Template rendering placeholders ──────────────────────────────────────────
 
-
 // RequestDownloadPage handles GET /ul/:token/files — shows uploaded files for requester.
 func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -389,7 +375,7 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 
 		// A password-protected request gates file access too — the token alone
 		// must not reveal uploaded files. Match the upload-page password check.
-		if req.PasswordHash.Valid && !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+		if req.PasswordHash.Valid && !uploadPasswordValid(cfg, r, tok, req.PasswordHash.String) {
 			renderUploadPasswordPage(w, tok, settings, "")
 			return
 		}
@@ -427,7 +413,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 		}
 
 		// Enforce the request password before serving any file bytes.
-		if req.PasswordHash.Valid && !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+		if req.PasswordHash.Valid && !uploadPasswordValid(cfg, r, tok, req.PasswordHash.String) {
 			http.Redirect(w, r, "/ul/"+tok+"/files", http.StatusSeeOther)
 			return
 		}
@@ -442,12 +428,6 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 		f, err := mgr.Open(target.StoragePath)
 		if err != nil && target.TUSUploadID.Valid && target.TUSUploadID.String != "" {
 			f, err = mgr.Open(target.TUSUploadID.String)
-		}
-		if err != nil && mgr.Type() == "local" {
-			if found := findFileInStorage(cfg.Storage.Path, target.ID); found != "" {
-				rel, _ := filepath.Rel(cfg.Storage.Path, found)
-				f, err = mgr.Open(rel)
-			}
 		}
 		if err != nil {
 			http.Error(w, "File not found", http.StatusNotFound)
@@ -472,7 +452,7 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 		}
 
 		// Enforce the request password before serving the ZIP.
-		if req.PasswordHash.Valid && !uploadPasswordValid(r, tok, req.PasswordHash.String) {
+		if req.PasswordHash.Valid && !uploadPasswordValid(cfg, r, tok, req.PasswordHash.String) {
 			http.Redirect(w, r, "/ul/"+tok+"/files", http.StatusSeeOther)
 			return
 		}
@@ -506,34 +486,6 @@ func completeRequestFiles(files []store.UploadRequestFile) []store.UploadRequest
 		}
 	}
 	return out
-}
-
-
-// findFileInStorage tries to find a file by scanning tusd .info files in the storage root.
-// This is a fallback for when tus_upload_id is not stored in the DB.
-func findFileInStorage(storagePath, ferriFileID string) string {
-	entries, err := os.ReadDir(storagePath)
-	if err != nil {
-		return ""
-	}
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".info") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(storagePath, e.Name()))
-		if err != nil {
-			continue
-		}
-		if strings.Contains(string(data), ferriFileID) {
-			// Found it — return the path without .info extension
-			base := strings.TrimSuffix(e.Name(), ".info")
-			candidate := filepath.Join(storagePath, base)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-		}
-	}
-	return ""
 }
 
 func renderUploadPage(w http.ResponseWriter, cfg *config.Config, tok string, req *store.UploadRequest, settings *store.Settings) {

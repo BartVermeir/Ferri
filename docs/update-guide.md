@@ -97,57 +97,43 @@ The application is a Go binary built into a Docker image. Updating means buildin
 
 ### Full update procedure
 
+A release is tagged and pushed on the development machine; the server only
+pulls. `scripts/deploy.sh` does the rest and derives the image tag and the
+compose pin from the same git tag, so the two cannot drift apart.
+
 ```bash
-# 1. Pull the latest code
-cd /opt/ferri   # or wherever you cloned the repo
+# On the development machine: tag and push the release
+git tag vX.Y.Z && git push origin <branch> && git push origin vX.Y.Z
+
+# On the server, from the git checkout inside the deploy directory
+# (the directory that holds .env, config.yaml, litestream.yml and the live
+# docker-compose.yml; the checkout is its src/ subdirectory)
+cat ../.env                       # must show ADMIN_TOKEN and SMTP_PASSWORD
 git fetch --tags
-git log --oneline HEAD..origin/main | head -10   # see what changed
-git pull origin main
-
-# 2. Review the changelog before building
-# Check CHANGELOG.md or git log for breaking changes,
-# new config keys, or schema migrations.
-head -50 CHANGELOG.md
-
-# 3. Build the new image with an explicit version tag
-#    Use the git tag or today's date — never 'latest' in production
-VERSION=$(git describe --tags --always)
-docker build -t ferri:${VERSION} .
-echo "Built: ferri:${VERSION}"
-
-# 4. Update docker-compose.yml to use the new tag
-sed -i "s|image: ferri:.*|image: ferri:${VERSION}|" docker-compose.yml
-CHANGED=$(grep -c "image: ferri:${VERSION}" docker-compose.yml)
-echo "Updated ${CHANGED} image reference(s) — expected 1"
-grep "image:" docker-compose.yml   # confirm the change
-# If CHANGED > 1, multiple services matched. Edit docker-compose.yml manually
-# to ensure only the 'app' service image was updated.
-
-# 5. Stop the current container gracefully
-#    If stop_grace_period is set, Docker waits that long for active connections.
-docker compose stop
-echo "Container stopped at $(date)"
-
-# 6. Start with the new image
-docker compose up -d
-
-# 7. Wait for healthy status, then show recent logs
-echo "Waiting for container to become healthy..."
-for i in $(seq 1 12); do
-    sleep 5
-    STATUS=$(docker compose ps --format "{{.Health}}" 2>/dev/null | head -1)
-    if [ "$STATUS" = "healthy" ]; then
-        echo "Container healthy after $((i * 5)) seconds"
-        break
-    fi
-    if [ $i -eq 12 ]; then
-        echo "WARNING: container did not become healthy within 60 seconds"
-        break
-    fi
-    echo "  Still waiting... ($((i * 5))s elapsed, status: ${STATUS:-starting})"
-done
-docker compose logs --tail=30
+scripts/deploy.sh
 ```
+
+What `scripts/deploy.sh` does:
+
+1. `git pull`, then refuses to continue unless HEAD is exactly a tag.
+2. `docker build --pull` with that tag baked in (`-ldflags -X main.Version=...`;
+   shown at the bottom of the admin panel). `--pull` fetches the base images
+   fresh, so security fixes in the runtime image arrive on every deploy.
+3. If the running app received upload chunks in the last 10 minutes, it asks
+   "Restart now anyway? [y/N]". No leaves everything as it was. `FORCE=1
+   scripts/deploy.sh` skips the question. Browsers retry for about 8.5
+   minutes and resume loose files where they stopped (DEC-037).
+4. Pins the new tag in the **live** `docker-compose.yml` (one directory up;
+   the repository's copy is only a template and is never touched).
+5. `docker compose down` and `up -d` from the deploy directory, then shows the
+   last log lines.
+
+**Check after every deploy:** the version at the bottom of `/admin` is the
+tag you just deployed.
+
+**What changed:** there is no changelog file. Read the commit messages
+(`git log --oneline <previous-tag>..<new-tag>`) and `docs/DECISIONS.md` for
+new config keys or behaviour. Migrations run automatically at startup (§3).
 
 ### Post-update verification
 
@@ -213,6 +199,7 @@ sqlite3 /var/lib/docker/volumes/filetransfer_app_db/_data/app.db \
 - Never rename a migration file that has been applied. The tracker uses the filename.
 - Migrations must be idempotent where possible — use `IF NOT EXISTS`, `IF EXISTS`, `INSERT OR IGNORE`.
 - Test every migration against a copy of the production database before shipping.
+- Only add: columns (nullable or with a default), tables, indexes. Never drop or rename. The previous version must keep running on the new schema, or an application rollback (§8) breaks.
 
 ---
 
@@ -383,34 +370,26 @@ docker compose logs --tail=20
 
 ### Application rollback
 
-If the new version is broken and needs to be reverted:
+If the new version is broken and needs to be reverted: the previous image is
+still on disk (`docker images ferri`). Point the live compose file back at it.
 
 ```bash
-# 1. Stop the broken container
-docker compose stop
+# In the deploy directory (not the git checkout)
+# 1. Set the image line of the app service to the previous tag, e.g.
+#    image: ferri:v1.4.2
+nano docker-compose.yml
 
-# 2. Revert docker-compose.yml to the previous image tag
-git diff docker-compose.yml   # see exactly what the update changed
-# If this shows output: the new tag is uncommitted — git checkout -- will restore the old tag.
-# If this shows NO output: the new tag was already committed before the update.
-#   In that case, git checkout -- does nothing. Use instead:
-#   git show HEAD~1:docker-compose.yml > docker-compose.yml
-
-# Revert only docker-compose.yml to its last committed state.
-# Using '--' only touches this one file, leaving any other uncommitted
-# changes (e.g. config.yaml edits) untouched.
-git checkout -- docker-compose.yml
-
-# Or simply edit manually and set the known-good image tag:
-# image: ferri:1.0.0
-
-# 3. Start with the old image
+# 2. Start with the old image
 docker compose up -d
 
-# 4. Verify the old version is running and healthy
+# 3. Verify: healthy, and /admin shows the old version
 docker compose ps
 curl -s https://send.example.com/health
 ```
+
+A migration that already ran stays applied. Migrations only add columns,
+tables and indexes (§3, rules), so the previous version runs on the newer
+schema.
 
 **Keep old Docker images.** Do not prune images immediately after an update:
 

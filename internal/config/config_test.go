@@ -2,6 +2,8 @@ package config
 
 import (
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -123,5 +125,39 @@ func TestProxiesInAllowlist(t *testing.T) {
 				t.Fatalf("ProxiesInAllowlist() = %v, want %d entries", got, tt.want)
 			}
 		})
+	}
+}
+
+// Audit L2: a misspelled key used to vanish without a trace. Load now names
+// it, with its line, and still loads the rest.
+func TestLoad_NamesUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	yml := "server:\n  base_url: \"https://files.example.com\"\n  trusted_proxy: [\"10.0.0.1/32\"]\nlimitz:\n  max_files_per_transfer: 10\n" +
+		"smtp:\n  host: smtp.example.com\nadmin:\n  token: \"" + strings.Repeat("x", 32) + "\"\n"
+	if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.BaseURL != "https://files.example.com" {
+		t.Errorf("known key not loaded: base_url = %q", cfg.Server.BaseURL)
+	}
+	got := strings.Join(cfg.UnknownKeys, "\n")
+	for _, want := range []string{"line 3: field trusted_proxy not found", "line 4: field limitz not found"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("unknown keys %q miss %q", cfg.UnknownKeys, want)
+		}
+	}
+}
+
+func TestExampleConfigHasNoUnknownKeys(t *testing.T) {
+	data, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys := unknownKeys(data); len(keys) > 0 {
+		t.Fatalf("config.example.yaml has keys Ferri does not know: %q", keys)
 	}
 }

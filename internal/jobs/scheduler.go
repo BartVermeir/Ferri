@@ -23,6 +23,9 @@ type Scheduler struct {
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	startOnce sync.Once // guards against Start() being called more than once
+	// cleanupMu keeps one cleanup run at a time: "Force cleanup" in the
+	// admin could otherwise overlap the scheduled run (audit L9).
+	cleanupMu sync.Mutex
 }
 
 // NewScheduler creates a Scheduler. Call Start() to begin running jobs.
@@ -83,21 +86,46 @@ func runJob(name string, fn func()) {
 
 // ── Mail job ──────────────────────────────────────────────────────────────────
 
-// runMailJob processes up to 20 pending mails per run.
+// Mail job batches: mailBatchSize per fetch, and while a batch comes back
+// full, up to mailBatchesPerRun of them in one run: at most 100 mails per
+// run (every 2 minutes by default), all over one SMTP connection (audit O5).
+const (
+	mailBatchSize     = 20
+	mailBatchesPerRun = 5
+)
+
+// runMailJob sends pending mails, see the batch constants above.
 // Sends via SMTP and updates status. Retries on failure with exponential backoff.
 // See architecture.md §10 (Mail job) for the full specification.
 func (s *Scheduler) runMailJob() {
-	items, err := s.stores.Mail.FetchPending(20)
-	if err != nil {
-		slog.Error("mail job: fetch pending", "error", err)
-		return
+	// Load settings once per run — provides runtime from_address and from_name.
+	sender := mail.NewSender(s.cfg, s.stores.Settings.Get())
+	defer sender.Close()
+
+	for batch := 0; batch < mailBatchesPerRun; batch++ {
+		items, err := s.stores.Mail.FetchPending(mailBatchSize)
+		if err != nil {
+			slog.Error("mail job: fetch pending", "error", err)
+			break
+		}
+		s.sendBatch(sender, items)
+		if len(items) < mailBatchSize {
+			break
+		}
 	}
 
-	// Load settings once per batch — provides runtime from_address and from_name.
-	settings := s.stores.Settings.Get()
+	// Prune old sent mails
+	n, err := s.stores.Mail.PruneSent(s.cfg.Jobs.MailRetentionDays)
+	if err != nil {
+		slog.Error("mail job: prune sent", "error", err)
+	} else if n > 0 {
+		slog.Info("mail job: pruned sent mails", "count", n)
+	}
+}
 
+func (s *Scheduler) sendBatch(sender *mail.Sender, items []store.MailItem) {
 	for _, item := range items {
-		if err := sendMail(s.cfg, settings, item); err != nil {
+		if err := sender.Send(item); err != nil {
 			slog.Warn("mail job: send failed",
 				"id", item.ID, "to", item.ToAddress,
 				"attempt", item.Attempts+1, "error", err)
@@ -110,14 +138,6 @@ func (s *Scheduler) runMailJob() {
 				slog.Error("mail job: mark sent", "id", item.ID, "error", err)
 			}
 		}
-	}
-
-	// Prune old sent mails
-	n, err := s.stores.Mail.PruneSent(s.cfg.Jobs.MailRetentionDays)
-	if err != nil {
-		slog.Error("mail job: prune sent", "error", err)
-	} else if n > 0 {
-		slog.Info("mail job: pruned sent mails", "count", n)
 	}
 }
 
@@ -244,6 +264,9 @@ func (s *Scheduler) RunCleanupNow() {
 // runCleanupJob deletes files from storage for expired transfers past the grace period,
 // and cleans up stalled uploads.
 func (s *Scheduler) runCleanupJob(graceHours ...int) {
+	s.cleanupMu.Lock()
+	defer s.cleanupMu.Unlock()
+
 	grace := s.cfg.Jobs.CleanupGraceHours
 	if len(graceHours) > 0 {
 		grace = graceHours[0]
@@ -430,13 +453,6 @@ func (s *Scheduler) purgeLeftovers() {
 }
 
 // ── Mail sending ─────────────────────────────────────────────────────────────
-
-// sendMail sends a single mail_queue item via SMTP.
-// Delegates to internal/mail for SMTP connection and MIME construction.
-// The settings cache provides the runtime from_address and from_name.
-func sendMail(cfg *config.Config, settings *store.Settings, item store.MailItem) error {
-	return mail.Send(cfg, settings, item)
-}
 
 // ── Expiry summary builders ───────────────────────────────────────────────────
 

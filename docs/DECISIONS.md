@@ -88,21 +88,19 @@ This document is intended as a living record. When a decision is revisited or re
 
 ---
 
-## DEC-005: Storage — Filesystem path abstraction
+## DEC-005: Storage — local folder or SMB share, behind one interface
 
-**Decision:** The application writes files to a single configurable `STORAGE_PATH`. The application has no knowledge of the underlying storage technology.
+**Decision:** Files live either in a local folder or on an SMB share. Both implement one `storage.Backend` interface (open, stat, remove, a tusd data store, free space). A `storage.Manager` holds the active backend and can swap it at runtime: the admin chooses local or SMB under Settings → Storage, without a restart. Uploads are stored flat (`<root>/<tus_upload_id>` plus `.info`) on both.
 
 **Rationale:**
-- Docker volume mounts make any storage backend (local disk, NFS, ZFS, SMB, CIFS) appear as a filesystem path inside the container.
-- The storage backend (NFS, SMB, or local path) is mounted into the container at deploy time.
-- This approach has zero vendor lock-in and requires no storage-specific SDK or driver.
-- Future deployments can use any mountable storage without code changes.
+- A local folder covers a local disk and anything the host mounts (NFS, ZFS, a CIFS mount).
+- The SMB backend (go-smb2, negotiates up to SMB 3.1.1) talks to a share directly, without a mount on the host. Why this was built into the app on 2026-05-20 rather than left to a host mount was not recorded.
+- A swap closes the old backend only after its last open file or running upload call (audit L13).
 
 **Alternatives considered:**
-- **S3-compatible object storage as primary backend:** Adds MinIO or similar as a dependency for non-cloud deployments. The TUS server would need S3 integration. Complexity not justified.
-- **Abstraction layer (multiple backends in code):** Premature. If S3 support is ever needed, the abstraction can be added at that point. For now, YAGNI.
+- **S3-compatible object storage:** adds a dependency for on-premises deployments and a TUS S3 integration. Not justified.
 
-**Operational note:** The operator is responsible for mounting the storage path correctly in `docker-compose.yml`. The `operations.md` documentation covers this in detail.
+**Operational note:** the SMB password is stored encrypted (DEC-041). The storage folder may not contain the database (orphan cleanup would treat it as an unknown file).
 
 ---
 
@@ -131,7 +129,7 @@ This document is intended as a living record. When a decision is revisited or re
 **Rationale:**
 - The deployment is fully on-premises. External mail services (Sendgrid, Mailgun, etc.) introduce an external dependency and potential data leakage.
 - SMTP configuration is standard and well-understood by IT administrators.
-- Go's standard library and the `jordan-wright/email` library handle HTML mail composition cleanly.
+- `wneessen/go-mail` builds the HTML and plain-text MIME messages and speaks SMTP (it replaced the unmaintained `jordan-wright/email` on 2026-09-22). One connection is reused for a whole batch of the mail job (audit O5).
 
 **Notifications sent:**
 1. To recipient(s): transfer available (includes download link)
@@ -534,11 +532,11 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 ---
 
-## DEC-033: TLS termination — Caddy (recommended), nginx (supported)
+## DEC-033: TLS termination — a reverse proxy in front (nginx or Caddy)
 
-**Decision:** Caddy is the recommended reverse proxy for TLS termination. nginx is fully supported and documented as an alternative. Traefik is not documented but would work with standard reverse proxy configuration.
+**Decision:** The application listens on localhost only and leaves TLS to a reverse proxy on the host. nginx and Caddy are both documented in `operations.md`, including the TUS settings (body size, request buffering, forwarded headers). The reference deployment runs nginx.
 
-**Rationale:** Caddy handles Let's Encrypt certificate provisioning automatically, has secure defaults out of the box, and has a simpler configuration file than nginx for this use case. Both Caddy and nginx configurations are fully documented in `operations.md` including all required TUS-specific settings (CORS headers, body size, request buffering). The application only listens on localhost:8080 and is reverse-proxy-agnostic.
+**Rationale:** the application stays proxy-agnostic. Caddy provisions Let's Encrypt certificates on its own; nginx fits where a certificate (e.g. a wildcard) already exists. The proxy's address must be in `server.trusted_proxies`, or every visitor appears to come from the proxy.
 
 ---
 
@@ -609,6 +607,38 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 **Decision:** Transfer and request ZIPs are written by one function (`streamZIP`). Entries are stored, not deflated. Only complete files are included; on the requester's routes, files that are still uploading or broke off are not listed or downloadable either. A file that cannot be opened is left out and named in `MISSING_FILES.txt` inside the ZIP. A failure while a file is being written aborts the response (`http.ErrAbortHandler`), so the browser shows a failed download. ZIP and file names use `buildContentDisposition` everywhere (RFC 5987, accents and spaces intact); an untitled request gives `files.zip`.
 
 **Rationale:** a skipped file used to give a ZIP with status 200 and no word about it, and a read error mid-file gave a truncated file in an archive that looked fine. Deflating video costs a lot of CPU for close to nothing.
+
+---
+
+## DEC-039: "Get a link" — a transfer without mail
+
+**Decision:** Next to "Notify by email", the send form offers "Get a link": no recipients, no mails, the sender gets one shareable download link on the page (`link_only=1`, `transfers.notify_recipients = 0`). The one recipient row carries the sender's address only to hold the link's token. Download notifications for it say "Someone with your shared link", and the expiry summary says "Your shared link".
+
+**Rationale:** for sending a link through another channel (chat, a ticket), without Ferri mailing anyone. Built 2026-06-10.
+
+---
+
+## DEC-040: The sender gets their own link
+
+**Decision:** A transfer with "Notify by email" gets one extra recipient row with `is_sender = 1` (migration 003). Its link goes into the sender's confirmation mail. That row gets no availability mail, triggers no download notification, does not count as a recipient, and is labelled "You (your own link)" in the expiry summary. If the sender is also a recipient, their recipient link is the sender link (unique index on transfer and address). Link-only transfers get no sender link.
+
+**Rationale:** the sender can check or forward the transfer without using, and skewing, a recipient's link. Built 2026-09-25.
+
+---
+
+## DEC-041: SMB password encrypted with a key from Argon2id
+
+**Decision:** The SMB password is stored AES-256-GCM encrypted. The key comes from Argon2id over the admin token, with a fresh random salt per encryption stored with the ciphertext (time 3, 64 MiB, 4 threads). Changing `ADMIN_TOKEN` means entering the SMB password again. A saved password is only reused for the saved host, share, user and domain (audit M4).
+
+**Rationale:** a key derived with a bare hash gave no brute-force margin if the admin token were ever weak; a memory-hard KDF with a salt makes each guess expensive and precomputation useless.
+
+---
+
+## DEC-042: Content Security Policy — scripts only from the app itself
+
+**Decision:** `script-src 'self'`: no inline `<script>`, no inline event handlers, no external script hosts. Page scripts live in `static/files/*.js` (embedded in the binary), data reaches them through `data-*` attributes, and third-party code is vendored (`tus.min.js`, `client-zip.js`).
+
+**Rationale:** injected markup cannot run script even if escaping fails somewhere, and no external host can change the code the page runs. Done 2026-09-23.
 
 ---
 

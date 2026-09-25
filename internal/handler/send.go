@@ -42,6 +42,12 @@ const (
 	maxRecipients = 100
 	maxTitleLen   = 200
 	maxMessageLen = 5000
+	maxNameLen    = 200
+	// maxFormBytes caps a /send or /request body. The biggest honest one is
+	// /send's file list (at most max_files_per_transfer entries; more files
+	// go as one ZIP), a few KB. Without a cap, the part of a multipart body
+	// above 1 MB went to /tmp, which is RAM in the container (audit L11).
+	maxFormBytes = 1 << 20
 )
 
 // ── Send form ─────────────────────────────────────────────────────────────────
@@ -96,6 +102,8 @@ func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 // Validates input, creates the transfer in the DB, returns JSON {transfer_id}.
 func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+
 		// The JS client sends FormData, which the browser encodes as
 		// multipart/form-data. Only a non-multipart body may fall back to
 		// ParseForm: a multipart body that fails to parse (e.g. Go's limit of
@@ -127,6 +135,10 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		if senderName == "" {
 			jsonError(w, "Sender name is required", http.StatusBadRequest)
+			return
+		}
+		if len(senderName) > maxNameLen {
+			jsonError(w, fmt.Sprintf("Name is too long (max %d characters)", maxNameLen), http.StatusBadRequest)
 			return
 		}
 		if !isValidEmail(senderEmail) {
@@ -295,18 +307,21 @@ func parseAnnouncedFiles(r *http.Request) ([]announcedFile, error) {
 	if raw := r.FormValue("files"); raw != "" {
 		var list []announcedFile
 		if err := json.Unmarshal([]byte(raw), &list); err != nil {
+			//lint:ignore ST1005 shown to the user as is
 			return nil, errors.New("Invalid file list")
 		}
 		return list, nil
 	}
 	names, sizes := r.Form["filenames[]"], r.Form["sizes[]"]
 	if len(names) != len(sizes) {
+		//lint:ignore ST1005 shown to the user as is
 		return nil, errors.New("Filenames and sizes count mismatch")
 	}
 	list := make([]announcedFile, 0, len(names))
 	for i, name := range names {
 		size, err := strconv.ParseInt(sizes[i], 10, 64)
 		if err != nil {
+			//lint:ignore ST1005 shown to the user as is
 			return nil, fmt.Errorf("Invalid file size for %s", name)
 		}
 		list = append(list, announcedFile{Name: name, Size: size})
@@ -320,6 +335,12 @@ func parseAnnouncedFiles(r *http.Request) ([]announcedFile, error) {
 // addresses that real mail servers accept. The SMTP relay will reject
 // truly invalid addresses at send time.
 func isValidEmail(email string) bool {
+	// No whitespace or control characters, and at most 254 characters: a CR
+	// or LF passed here and only failed when the mail was sent, so the mail
+	// failed for good (audit L11).
+	if len(email) > 254 || strings.IndexFunc(email, func(r rune) bool { return r <= ' ' || r == 0x7f }) >= 0 {
+		return false
+	}
 	parts := strings.SplitN(email, "@", 2)
 	if len(parts) != 2 {
 		return false
@@ -380,7 +401,3 @@ func jsonError(w http.ResponseWriter, msg string, status int) {
 
 // ── Template rendering placeholder ───────────────────────────────────────────
 // Replace with real template rendering when web/templates/ are implemented.
-
-func renderSendPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string) {
-	renderHomePage(w, cfg, settings, "send", errMsg)
-}

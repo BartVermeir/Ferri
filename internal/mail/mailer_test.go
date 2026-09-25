@@ -8,9 +8,9 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
-// TestBuildMessage_SubjectCRLFInjection guards the "Geverifieerd in orde"
-// property: a Subject containing a raw CRLF must not
-// be able to inject an extra header (e.g. Bcc) into the sent message.
+// TestBuildMessage_SubjectCRLFInjection guards against header injection: a
+// Subject containing a raw CRLF must not be able to inject an extra header
+// (e.g. Bcc) into the sent message.
 // go-mail Q-encodes header values (RFC 2047), so CR/LF bytes never reach the
 // wire unescaped.
 func TestBuildMessage_SubjectCRLFInjection(t *testing.T) {

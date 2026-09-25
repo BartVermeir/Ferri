@@ -16,9 +16,24 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// connPragmas are set by the driver on every new connection, via the DSN.
+// Set once with Exec, they applied only to the first connection: when
+// database/sql replaced it after an error, foreign keys and the busy timeout
+// were silently off (audit L3).
+var connPragmas = []string{"busy_timeout(5000)", "foreign_keys(1)", "journal_mode(WAL)"}
+
 // Open opens the SQLite database at the given path with the required PRAGMAs.
 func Open(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := path
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	for _, p := range connPragmas {
+		dsn += sep + "_pragma=" + p
+		sep = "&"
+	}
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
@@ -26,17 +41,13 @@ func Open(path string) (*sql.DB, error) {
 	// SQLite: single writer, WAL mode for concurrent readers
 	db.SetMaxOpenConns(1)
 
-	// Each PRAGMA in its own Exec — modernc/sqlite does not reliably execute
-	// multiple statements in a single Exec call.
-	pragmas := []string{
-		"PRAGMA journal_mode = WAL",
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA busy_timeout = 5000",
+	// The DSN pragmas run when the first connection opens; check they took.
+	var fk int
+	if err := db.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			return nil, fmt.Errorf("set pragma %q: %w", p, err)
-		}
+	if fk != 1 {
+		return nil, fmt.Errorf("open sqlite: foreign_keys is off")
 	}
 
 	return db, nil

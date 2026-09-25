@@ -10,15 +10,34 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned to a commit, tools to a version: a moved tag or a new
+      # release cannot change what CI runs without a commit here (audit O3).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: go.mod # the toolchain line: same Go as the Docker build
 
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
 
-      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "Not gofmt'ed:"; echo "$unformatted"; exit 1; fi
+
+      - run: go test -race ./...
+
+      - run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+      - run: staticcheck ./...
+
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - run: govulncheck ./...
+
+  # The server builds this image on deploy; a broken Dockerfile should fail
+  # here, not there.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - run: docker build --build-arg VERSION=ci -t ferri:ci .

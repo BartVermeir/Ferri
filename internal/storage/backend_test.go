@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -83,5 +84,47 @@ func TestLocalBackend_FreeSpace(t *testing.T) {
 	}
 	if free == 0 {
 		t.Fatal("FreeSpace = 0 on a writable temp dir")
+	}
+}
+
+// closeCounter is local storage that records being closed.
+type closeCounter struct {
+	*LocalBackend
+	closed int
+}
+
+func (c *closeCounter) Close() error { c.closed++; return nil }
+
+// Audit L13: swapping the storage used to close the old backend at once,
+// breaking off downloads still reading from it. Now it closes when the last
+// open file is closed, or immediately when nothing uses it.
+func TestSwap_ClosesOldBackendAfterLastUse(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := &closeCounter{LocalBackend: NewLocalBackend(dir)}
+	m := NewManager(old)
+
+	f, err := m.Open("f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := &closeCounter{LocalBackend: NewLocalBackend(t.TempDir())}
+	m.Swap(next)
+	if old.closed != 0 {
+		t.Fatal("old backend closed while a file on it is still open")
+	}
+	if got, _ := io.ReadAll(f); string(got) != "data" {
+		t.Fatalf("read after swap = %q", got)
+	}
+	f.Close()
+	if old.closed != 1 {
+		t.Fatalf("old backend closed %d times after its last file closed, want 1", old.closed)
+	}
+
+	m.Swap(&closeCounter{LocalBackend: NewLocalBackend(t.TempDir())})
+	if next.closed != 1 {
+		t.Fatalf("idle backend closed %d times on swap, want 1 (right away)", next.closed)
 	}
 }

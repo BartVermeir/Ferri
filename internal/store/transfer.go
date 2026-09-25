@@ -433,41 +433,6 @@ func (s *TransferStore) MarkFileDeleted(fileID string) error {
 	return err
 }
 
-// ListActive returns pending/active transfers for the admin dashboard.
-func (s *TransferStore) ListActive(limit int) ([]Transfer, error) {
-	rows, err := s.db.Query(`
-		SELECT id, title, message, sender_name, sender_email,
-		       password_hash, status, expires_at, activated_at, expired_at, created_at,
-		       notify_recipients
-		FROM transfers
-		WHERE status IN ('pending','active')
-		ORDER BY created_at DESC
-		LIMIT ?`, limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanTransfers(rows)
-}
-
-// ListAll returns all transfers for the admin panel.
-func (s *TransferStore) ListAll(limit int) ([]Transfer, error) {
-	rows, err := s.db.Query(`
-		SELECT id, title, message, sender_name, sender_email,
-		       password_hash, status, expires_at, activated_at, expired_at, created_at,
-		       notify_recipients
-		FROM transfers
-		ORDER BY created_at DESC
-		LIMIT ?`, limit,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanTransfers(rows)
-}
-
 // GetRecipients returns all recipients for a transfer.
 func (s *TransferStore) GetRecipients(transferID string) ([]Recipient, error) {
 	rows, err := s.db.Query(`
@@ -520,7 +485,6 @@ func (s *TransferStore) ValidateForTUS(transferID string) (bool, error) {
 	).Scan(&count)
 	return count > 0, err
 }
-
 
 // CountFiles returns how many live (not deleted) file rows a transfer has, and
 // the number of files /send announced for it (NULL for pre-004 transfers).

@@ -3,6 +3,7 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -99,5 +100,19 @@ func TestIPAllowBlockedUsesDeniedHandler(t *testing.T) {
 		if rw.code != tt.want {
 			t.Fatalf("%s: got %d, want %d", tt.remoteAddr, rw.code, tt.want)
 		}
+	}
+}
+
+// Audit L14: with only X-Forwarded-For, the visitor is the rightmost address
+// that is not a trusted proxy; the leftmost one is whatever the client sent.
+func TestClientIP_ForwardedForTakesRightmostUntrusted(t *testing.T) {
+	_, proxy, _ := net.ParseCIDR("10.200.0.1/32")
+	_, lb, _ := net.ParseCIDR("10.9.0.0/16")
+	trusted := []*net.IPNet{proxy, lb}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "10.200.0.1:5555"
+	req.Header.Set("X-Forwarded-For", "192.168.1.10, 203.0.113.7, 10.9.1.1")
+	if got := ClientIP(req, trusted); got != "203.0.113.7" {
+		t.Fatalf("ClientIP = %q, want 203.0.113.7 (the spoofed 192.168.1.10 must not win)", got)
 	}
 }

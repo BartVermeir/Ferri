@@ -48,6 +48,26 @@ func IPAllow(allowlist []*net.IPNet, trustedProxies []*net.IPNet, denied http.Ha
 // direct client cannot spoof it via X-Real-IP / X-Forwarded-For headers.
 // It only trusts X-Real-IP / X-Forwarded-For when the direct TCP connection
 // (r.RemoteAddr) comes from a known trusted proxy. Otherwise RemoteAddr is used.
+// forwardedClient picks the visitor from an X-Forwarded-For chain: the
+// rightmost address that is not one of our trusted proxies. Each proxy
+// appends the address it received from, so everything left of that is what
+// the client itself sent, and it can put anything there. The leftmost value
+// used to be taken, which a client could forge (audit L14).
+func forwardedClient(header string, trustedProxies []*net.IPNet) string {
+	hops := strings.Split(header, ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop := strings.TrimSpace(hops[i])
+		ip := net.ParseIP(hop)
+		if ip == nil {
+			return hop // not an address: stop, do not look further left
+		}
+		if !containsIP(ip, trustedProxies) {
+			return hop
+		}
+	}
+	return strings.TrimSpace(hops[0])
+}
+
 func ClientIP(r *http.Request, trustedProxies []*net.IPNet) string {
 	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -60,7 +80,7 @@ func ClientIP(r *http.Request, trustedProxies []*net.IPNet) string {
 			return strings.TrimSpace(ip)
 		}
 		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			return strings.TrimSpace(strings.SplitN(forwarded, ",", 2)[0])
+			return forwardedClient(forwarded, trustedProxies)
 		}
 	}
 

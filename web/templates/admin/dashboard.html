@@ -114,14 +114,14 @@
             <td style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
             <td class="recipients">
               {{range .Recipients}}
-                <a href="/dl/{{.DownloadToken}}" target="_blank">{{.Email}}</a>{{if .IsSender}} <span class="size-label">sender link</span>{{end}}
+                {{.Email}}{{if .IsSender}} <span class="size-label">sender link</span>{{end}}
                 {{if .DownloadCount}}<span class="dl-count">({{.DownloadCount}}×)</span>{{end}}<br>
               {{else}}
                 <span style="color:#ccc;">—</span>
               {{end}}
             </td>
             <td style="font-size:12px; white-space:nowrap;">
-              {{if .FileCount}}{{.FileCount}}<span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
+              {{if .FileCount}}<a href="/admin/transfers/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
             </td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
             <td style="font-size:12px; color:#aaa; white-space:nowrap;">{{.CreatedAt | formatDate}}</td>

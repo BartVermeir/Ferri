@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS transfers (
     activated_at       INTEGER,                     -- set when status → active
     expired_at         INTEGER,                     -- set when status → expired
     notify_recipients  INTEGER NOT NULL DEFAULT 1,  -- 0 = link-only, skip notification emails
+    expected_files     INTEGER,                     -- files /send announced; NULL before migration 004
     created_at      INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -104,7 +105,8 @@ CREATE TABLE IF NOT EXISTS recipients (
     notified_at         INTEGER,                    -- when the availability mail was sent
     first_download_at   INTEGER,                    -- NULL until first download
     download_count      INTEGER NOT NULL DEFAULT 0,
-    created_at          INTEGER NOT NULL DEFAULT (unixepoch())
+    created_at          INTEGER NOT NULL DEFAULT (unixepoch()),
+    is_sender           INTEGER NOT NULL DEFAULT 0  -- 1 = the sender's own link (migration 003)
 );
 
 CREATE INDEX IF NOT EXISTS idx_recipients_transfer_id    ON recipients (transfer_id);
@@ -166,6 +168,7 @@ CREATE TABLE IF NOT EXISTS upload_requests (
     requester_name      TEXT    NOT NULL DEFAULT '',
     requester_email     TEXT    NOT NULL DEFAULT '',
     upload_token        TEXT    NOT NULL UNIQUE,
+    view_token          TEXT,                       -- requester's link to the files; NULL before migration 005
     password_hash       TEXT,
     max_files           INTEGER,                    -- NULL = unlimited
     max_total_bytes     INTEGER,                    -- NULL = use global config limit
@@ -180,6 +183,7 @@ CREATE TABLE IF NOT EXISTS upload_requests (
 CREATE INDEX IF NOT EXISTS idx_upload_requests_status  ON upload_requests (status);
 CREATE INDEX IF NOT EXISTS idx_upload_requests_expiry  ON upload_requests (expires_at);
 CREATE INDEX IF NOT EXISTS idx_upload_requests_token   ON upload_requests (upload_token);
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_upload_requests_view_token ON upload_requests (view_token);
 
 
 -- -------------------------------------------------------------

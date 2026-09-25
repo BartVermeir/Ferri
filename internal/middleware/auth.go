@@ -88,8 +88,18 @@ func validateSessionCookie(value, secret string) bool {
 	return hmac.Equal([]byte(expected), []byte(parts[2]))
 }
 
+// computeHMAC signs a session payload with a key derived from the admin token,
+// not the token itself: the login secret is then never used directly as a MAC
+// key, and the same token can safely derive other keys (the password cookies
+// use a different label). Existing sessions end when this changes (audit L10).
 func computeHMAC(payload, secret string) string {
-	mac := hmac.New(sha256.New, []byte(secret))
+	mac := hmac.New(sha256.New, sessionKey(secret))
 	mac.Write([]byte(payload))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func sessionKey(adminToken string) []byte {
+	m := hmac.New(sha256.New, []byte(adminToken))
+	m.Write([]byte("ferri admin session v1"))
+	return m.Sum(nil)
 }

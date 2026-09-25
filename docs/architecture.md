@@ -63,7 +63,7 @@ The application is a single Go binary. It has no runtime dependencies beyond the
 │   ├── db/
 │   │   ├── db.go                # Open connection, run migrations, startup hooks
 │   │   └── migrations/
-│   │       └── 001_initial.sql  # Schema (= schema.sql at project root)
+│   │       └── 001_initial.sql  # Base schema; 002–005 add columns (schema.sql = the sum)
 │   ├── handler/
 │   │   ├── send.go              # POST /send — create transfer
 │   │   ├── download.go          # GET /dl/:token — download page + file serve
@@ -834,10 +834,9 @@ ENTRYPOINT ["/ferri"]
 ```yaml
 services:
   app:
-    # 'ferri:latest' is the locally-built tag used during development.
-    # In production, replace with an explicit version tag (e.g. ferri:1.2.0)
-    # so that 'docker compose pull' never silently changes what is running.
-    image: ferri:latest
+    # Template: scripts/deploy.sh pins the live copy to the deployed tag
+    # (never 'latest'), so the running version is always explicit.
+    image: ferri:vX.Y.Z
     restart: unless-stopped
     user: "1000:1000"
     read_only: true

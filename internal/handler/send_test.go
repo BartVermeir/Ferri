@@ -180,3 +180,43 @@ func TestSendPage_CarriesLimits(t *testing.T) {
 		}
 	}
 }
+
+// Audit L11: bodies, names and addresses are bounded, and an address with a
+// line break no longer gets in (the mail to it used to fail for good later).
+func TestSendCreate_Bounds(t *testing.T) {
+	stores := newTestStores(t)
+	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {
+		w.WriteField("message", strings.Repeat("x", maxFormBytes+1))
+	})
+	if code != http.StatusBadRequest || !strings.Contains(msg, "Could not read the form") {
+		t.Errorf("body over %d bytes: status = %d, error = %q", maxFormBytes, code, msg)
+	}
+
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for k, v := range map[string]string{
+		"sender_name": strings.Repeat("n", maxNameLen+1), "sender_email": "alice@example.com",
+		"recipients": "bob@example.com", "expiry_hours": "24", "files": `[{"name":"a","size":1}]`,
+	} {
+		w.WriteField(k, v)
+	}
+	w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/send", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+	SendCreate(newTestConfig(), stores).ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Name is too long") {
+		t.Errorf("long name: status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestIsValidEmail_RejectsControlCharacters(t *testing.T) {
+	for _, bad := range []string{"alice@example.com\r\nBcc: x@evil.test", "ali ce@example.com", "alice@exa\tmple.com", strings.Repeat("a", 250) + "@example.com"} {
+		if isValidEmail(bad) {
+			t.Errorf("isValidEmail(%q) = true", bad)
+		}
+	}
+	if !isValidEmail("alice@example.com") {
+		t.Error("a normal address is rejected")
+	}
+}

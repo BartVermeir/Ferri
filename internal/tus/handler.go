@@ -22,9 +22,11 @@ package tus
 //
 //   ServeHTTP post-PATCH hook — updates tus_last_activity_at after each chunk.
 //
-// Storage layout:
-//   Transfer files: <storage_path>/transfers/<transfer_id>/<file_id>
-//   Request files:  <storage_path>/requests/<request_id>/<file_id>
+// Storage layout: flat. The data of an upload is <root>/<tus_upload_id>
+// with <root>/<tus_upload_id>.info next to it. The transfers/<id>/ and
+// requests/<id>/ folders are created but stay empty; a file row's
+// storage_path (transfers/<transfer_id>/<file_id>) is a logical name, not
+// where the bytes are.
 
 import (
 	"database/sql"

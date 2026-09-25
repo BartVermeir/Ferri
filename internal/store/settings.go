@@ -28,11 +28,11 @@ type Settings struct {
 	StorageType string
 	// LocalPath overrides config.yaml's storage.path when set. Empty means
 	// "use the config.yaml default".
-	LocalPath            string
-	SMBHost              string
-	SMBShare             string
-	SMBBasePath          string
-	SMBUsername          string
+	LocalPath   string
+	SMBHost     string
+	SMBShare    string
+	SMBBasePath string
+	SMBUsername string
 	// SMBPasswordEncrypted holds the AES-256-GCM encrypted password, base64-encoded.
 	// Empty when no password is configured or backend is local.
 	SMBPasswordEncrypted string
@@ -42,11 +42,11 @@ type Settings struct {
 // SettingsStore maintains an in-memory cache of the settings table.
 // Refreshed every 60 seconds and on every admin save.
 type SettingsStore struct {
-	db       *sql.DB
-	mu       sync.RWMutex
-	cached   *Settings
+	db        *sql.DB
+	mu        sync.RWMutex
+	cached    *Settings
 	fetchedAt time.Time
-	ttl      time.Duration
+	ttl       time.Duration
 }
 
 func NewSettingsStore(db *sql.DB) *SettingsStore {
