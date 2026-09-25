@@ -26,15 +26,15 @@ func TestBuildMessage_MessageIDUsesFromDomain(t *testing.T) {
 }
 
 func TestWrap_LogoIsAbsolute(t *testing.T) {
-	s := &store.Settings{CompanyName: "Example Org", LogoURL: "/static/logo/logo.png"}
-	out := Wrap(s, "https://ferri.example.com", "preview", "<p>body</p>")
-	if !strings.Contains(out, `src="https://ferri.example.com/static/logo/logo.png"`) {
+	s := &store.Settings{CompanyName: "Example Corp", LogoURL: "/static/logo/logo.png"}
+	out := Wrap(s, "https://send.example.com", "preview", "<p>body</p>")
+	if !strings.Contains(out, `src="https://send.example.com/static/logo/logo.png"`) {
 		t.Fatalf("expected absolute logo src, got:\n%s", out)
 	}
 
 	// Without a logo the company name is the header.
-	out = Wrap(&store.Settings{CompanyName: "Example Org"}, "https://ferri.example.com", "", "")
-	if strings.Contains(out, "<img") || !strings.Contains(out, "Example Org") {
+	out = Wrap(&store.Settings{CompanyName: "Example Corp"}, "https://send.example.com", "", "")
+	if strings.Contains(out, "<img") || !strings.Contains(out, "Example Corp") {
 		t.Fatalf("expected text header without logo, got:\n%s", out)
 	}
 }

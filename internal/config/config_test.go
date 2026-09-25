@@ -109,9 +109,9 @@ func TestProxiesInAllowlist(t *testing.T) {
 		allow   []string
 		want    int
 	}{
-		{"proxy exactly allowlisted", []string{"172.31.0.1/32"}, []string{"192.168.0.0/16", "172.31.0.1/32"}, 1},
-		{"proxy inside allowlisted range", []string{"172.31.0.1/32"}, []string{"172.16.0.0/12"}, 1},
-		{"no overlap", []string{"172.31.0.1/32"}, []string{"172.20.0.0/16", "192.168.100.0/24"}, 0},
+		{"proxy exactly allowlisted", []string{"10.0.0.5/32"}, []string{"192.168.0.0/16", "10.0.0.5/32"}, 1},
+		{"proxy inside allowlisted range", []string{"10.0.0.5/32"}, []string{"10.0.0.0/8"}, 1},
+		{"no overlap", []string{"10.0.0.5/32"}, []string{"10.1.0.0/16", "192.168.1.0/24"}, 0},
 		{"no proxies", nil, []string{"10.0.0.0/8"}, 0},
 	}
 	for _, tt := range tests {
