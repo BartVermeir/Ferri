@@ -24,6 +24,7 @@ import (
 
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/store"
+	"github.com/BartVermeir/Ferri/internal/token"
 )
 
 // Send sends a single mail queue item via SMTP.
@@ -76,6 +77,13 @@ func buildMessage(fromName, fromAddress string, item store.MailItem) (*gomail.Ms
 
 	if err := msg.To(item.ToAddress); err != nil {
 		return nil, fmt.Errorf("to address: %w", err)
+	}
+
+	// go-mail's default Message-ID ends in os.Hostname(), which inside the
+	// container is a bare container ID — not a domain. Spam filters score a
+	// non-FQDN Message-ID, so use the From domain instead.
+	if at := strings.LastIndex(fromAddress, "@"); at >= 0 && at < len(fromAddress)-1 {
+		msg.SetMessageIDWithValue(token.Generate() + "@" + fromAddress[at+1:])
 	}
 
 	msg.Subject(item.Subject)

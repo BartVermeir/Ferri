@@ -184,9 +184,22 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		// Enqueue notification mail to requester
 		if settings.MailFromAddress != "" {
-			subject := fmt.Sprintf("Files received: %s", req.Title)
-			bodyHTML := mail.Wrap(settings, buildUploadCompleteHTML(req, cfg.Server.BaseURL))
-			bodyText := buildUploadCompleteText(req, cfg.Server.BaseURL)
+			var items []mail.FileItem
+			for _, f := range files {
+				if f.Status == "complete" {
+					items = append(items, mail.FileItem{Name: f.OriginalName, Size: f.SizeBytes})
+				}
+			}
+			u := uploadCompleteMail{
+				Settings: settings,
+				BaseURL:  cfg.Server.BaseURL,
+				Loc:      cfg.Server.Location,
+				Request:  req,
+				Files:    items,
+			}
+			subject := fmt.Sprintf("Received: %s for %s", mail.Plural(len(items), "file"), u.requestLabel())
+			bodyHTML := buildUploadCompleteHTML(u)
+			bodyText := buildUploadCompleteText(u)
 			if err := stores.Mail.Enqueue(nil, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("upload complete: enqueue mail", "to", req.RequesterEmail, "error", err)
 			}
@@ -222,23 +235,67 @@ func bcryptHashEqual(a, b string) bool {
 
 // ── Mail body builders ────────────────────────────────────────────────────────
 
-func buildUploadCompleteHTML(req *store.UploadRequest, baseURL string) string {
-	viewURL := baseURL + "/ul/" + req.UploadToken + "/files"
-	msgPart := ""
-	if req.Message != "" {
-		msgPart = fmt.Sprintf(`<p style="margin:0 0 16px;font-size:14px;color:#555;">%s</p>`, html.EscapeString(req.Message))
-	}
-	return fmt.Sprintf(
-		`<p style="margin:0 0 16px;font-size:15px;color:#333;">Files have been uploaded for your request <strong>%s</strong>.</p>%s<table width="100%%" cellpadding="0" cellspacing="0" style="margin:24px 0;"><tr><td><a href="%s" style="display:inline-block;padding:12px 24px;background:#000;color:#fff;text-decoration:none;border-radius:8px;font-size:14px;font-weight:500;">View uploaded files</a></td></tr></table>`,
-		html.EscapeString(req.Title), msgPart, viewURL,
-	)
+// uploadCompleteMail holds what the "files received" mail shows.
+type uploadCompleteMail struct {
+	Settings *store.Settings
+	BaseURL  string
+	Loc      *time.Location
+	Request  *store.UploadRequest
+	Files    []mail.FileItem
 }
 
-func buildUploadCompleteText(req *store.UploadRequest, baseURL string) string {
-	return fmt.Sprintf(
-		"Files received for your request '%s'.\n\n%s\n\nView files: %s/ul/%s/files",
-		req.Title, req.Message, baseURL, req.UploadToken,
-	)
+func (u uploadCompleteMail) viewURL() string {
+	return u.BaseURL + "/ul/" + u.Request.UploadToken + "/files"
+}
+
+func (u uploadCompleteMail) requestLabel() string {
+	if u.Request.Title != "" {
+		return `"` + u.Request.Title + `"`
+	}
+	return "your request"
+}
+
+// filesWere is "1 file was" / "3 files were".
+func (u uploadCompleteMail) filesWere() string {
+	if len(u.Files) == 1 {
+		return "1 file was"
+	}
+	return mail.Plural(len(u.Files), "file") + " were"
+}
+
+func (u uploadCompleteMail) note() string {
+	return "You are receiving this email because you requested files with " + mail.CompanyName(u.Settings) + " and the uploader marked the upload as complete."
+}
+
+func buildUploadCompleteHTML(u uploadCompleteMail) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(u.Request.RequesterName))
+	fmt.Fprintf(&b, `<p style="margin:0 0 20px;">%s uploaded for %s. You can view and download them now.</p>`,
+		html.EscapeString(u.filesWere()), html.EscapeString(u.requestLabel()))
+	b.WriteString(mail.QuoteHTML(u.Request.Message))
+	b.WriteString(mail.FileListHTML(u.Files))
+	b.WriteString(mail.ButtonHTML(u.viewURL(), "View uploaded files", u.Settings))
+	fmt.Fprintf(&b, `<p style="margin:0 0 8px;font-size:13px;color:#555;">The files are available until <strong>%s</strong>. After that date the link stops working.</p>`,
+		html.EscapeString(mail.FormatDate(u.Request.ExpiresAt, u.Loc)))
+	b.WriteString(mail.NoteHTML(u.note()))
+
+	preheader := fmt.Sprintf("%s received for %s.", mail.Plural(len(u.Files), "file"), u.requestLabel())
+	return mail.Wrap(u.Settings, u.BaseURL, preheader, b.String())
+}
+
+func buildUploadCompleteText(u uploadCompleteMail) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Hello %s,\n\n%s uploaded for %s. You can view and download them now.\n\n",
+		u.Request.RequesterName, u.filesWere(), u.requestLabel())
+	if u.Request.Message != "" {
+		b.WriteString(u.Request.Message + "\n\n")
+	}
+	if len(u.Files) > 0 {
+		b.WriteString("Files:\n" + mail.FileListText(u.Files) + "\n")
+	}
+	fmt.Fprintf(&b, "View files: %s\n\nThe files are available until %s. After that date the link stops working.\n\n--\n%s\n",
+		u.viewURL(), mail.FormatDate(u.Request.ExpiresAt, u.Loc), u.note())
+	return b.String()
 }
 
 // ── Template rendering placeholders ──────────────────────────────────────────

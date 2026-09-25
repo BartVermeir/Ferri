@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/BartVermeir/Ferri/internal/token"
@@ -52,6 +53,7 @@ type Recipient struct {
 	FirstDownloadAt sql.NullInt64
 	DownloadCount   int
 	CreatedAt       time.Time
+	IsSender        bool // the sender's own link, see migration 003
 }
 
 // CreateTransferInput holds all data needed to create a transfer atomically.
@@ -65,6 +67,11 @@ type CreateTransferInput struct {
 	Recipients       []string // email addresses
 	Files            []CreateFileInput
 	NotifyRecipients bool // false = link-only, skip notification emails
+	// SenderLink adds a separate recipient row (is_sender = 1) for the sender,
+	// unless the sender is already one of the recipients — then that row is
+	// the sender's link, and the unique (transfer_id, email) index forbids a
+	// second one anyway.
+	SenderLink bool
 }
 
 type CreateFileInput struct {
@@ -152,6 +159,17 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 			})
 		}
 
+		if input.SenderLink && !containsFold(input.Recipients, input.SenderEmail) {
+			_, err := tx.Exec(`
+				INSERT INTO recipients (id, transfer_id, email, download_token, is_sender)
+				VALUES (?, ?, ?, ?, 1)`,
+				token.Generate(), transferID, input.SenderEmail, token.Generate(),
+			)
+			if err != nil {
+				return fmt.Errorf("insert sender link: %w", err)
+			}
+		}
+
 		return nil
 	})
 
@@ -168,9 +186,9 @@ func (s *TransferStore) GetByDownloadToken(tok string) (*Transfer, *Recipient, [
 	err := s.db.QueryRow(`
 		SELECT t.id, t.title, t.message, t.sender_name, t.sender_email,
 		       t.password_hash, t.status, t.expires_at, t.activated_at,
-		       t.expired_at, t.created_at,
+		       t.expired_at, t.created_at, t.notify_recipients,
 		       r.id, r.transfer_id, r.email, r.download_token, r.notified_at,
-		       r.first_download_at, r.download_count, r.created_at
+		       r.first_download_at, r.download_count, r.created_at, r.is_sender
 		FROM recipients r
 		JOIN transfers t ON t.id = r.transfer_id
 		WHERE r.download_token = ?
@@ -180,9 +198,9 @@ func (s *TransferStore) GetByDownloadToken(tok string) (*Transfer, *Recipient, [
 	).Scan(
 		&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
 		&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
-		&t.ExpiredAt, &tCreatedAt,
+		&t.ExpiredAt, &tCreatedAt, &t.NotifyRecipients,
 		&r.ID, &r.TransferID, &r.Email, &r.DownloadToken, &r.NotifiedAt,
-		&r.FirstDownloadAt, &r.DownloadCount, &rCreatedAt,
+		&r.FirstDownloadAt, &r.DownloadCount, &rCreatedAt, &r.IsSender,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil, nil, nil
@@ -426,10 +444,10 @@ func (s *TransferStore) ListAll(limit int) ([]Transfer, error) {
 func (s *TransferStore) GetRecipients(transferID string) ([]Recipient, error) {
 	rows, err := s.db.Query(`
 		SELECT id, transfer_id, email, download_token, notified_at,
-		       first_download_at, download_count, created_at
+		       first_download_at, download_count, created_at, is_sender
 		FROM recipients
 		WHERE transfer_id = ?
-		ORDER BY email`,
+		ORDER BY is_sender, email`,
 		transferID,
 	)
 	if err != nil {
@@ -443,7 +461,7 @@ func (s *TransferStore) GetRecipients(transferID string) ([]Recipient, error) {
 		var createdAt int64
 		if err := rows.Scan(
 			&r.ID, &r.TransferID, &r.Email, &r.DownloadToken,
-			&r.NotifiedAt, &r.FirstDownloadAt, &r.DownloadCount, &createdAt,
+			&r.NotifiedAt, &r.FirstDownloadAt, &r.DownloadCount, &createdAt, &r.IsSender,
 		); err != nil {
 			return nil, err
 		}
@@ -547,6 +565,15 @@ func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+func containsFold(list []string, s string) bool {
+	for _, v := range list {
+		if strings.EqualFold(v, s) {
+			return true
+		}
+	}
+	return false
+}
 
 func boolToInt(b bool) int {
 	if b {

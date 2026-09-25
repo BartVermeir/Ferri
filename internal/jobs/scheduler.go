@@ -142,7 +142,7 @@ func (s *Scheduler) runExpiryJob() {
 		// Build and enqueue expiry summary mail if enabled and from-address is configured.
 		settings := s.stores.Settings.Get()
 		if settings.ExpirySummary && settings.MailFromAddress != "" {
-			if err := s.enqueueExpirySummary(t.ID, t.SenderEmail, t.Title); err != nil {
+			if err := s.enqueueExpirySummary(t); err != nil {
 				slog.Error("expiry job: enqueue summary", "transfer", t.ID, "error", err)
 			}
 		}
@@ -167,24 +167,39 @@ func (s *Scheduler) runExpiryJob() {
 }
 
 // enqueueExpirySummary builds and enqueues the expiry summary mail for a transfer.
-func (s *Scheduler) enqueueExpirySummary(transferID, senderEmail, title string) error {
-	history, err := s.stores.Downloads.GetHistoryForTransfer(transferID)
+func (s *Scheduler) enqueueExpirySummary(t store.Transfer) error {
+	history, err := s.stores.Downloads.GetHistoryForTransfer(t.ID)
 	if err != nil {
 		return err
 	}
-
-	settings := s.stores.Settings.Get()
+	dbFiles, err := s.stores.Transfers.GetFilesByTransferID(t.ID)
+	if err != nil {
+		return err
+	}
 
 	loc := s.cfg.Server.Location
 	if loc == nil {
 		loc = time.UTC
 	}
 
-	subject := "Transfer expired: " + title
-	bodyHTML := buildExpirySummaryHTML(title, history, settings, loc)
-	bodyText := buildExpirySummaryText(title, history, loc)
+	e := expirySummary{
+		Settings:   s.stores.Settings.Get(),
+		BaseURL:    s.cfg.Server.BaseURL,
+		Loc:        loc,
+		Transfer:   t,
+		History:    history,
+		GraceHours: s.cfg.Jobs.CleanupGraceHours,
+	}
+	for _, f := range dbFiles {
+		e.Files = append(e.Files, mail.FileItem{Name: f.OriginalName, Size: f.SizeBytes})
+	}
 
-	return s.stores.Mail.Enqueue(nil, senderEmail, subject, bodyHTML, bodyText)
+	title := "your transfer"
+	if t.Title != "" {
+		title = `"` + t.Title + `"`
+	}
+	subject := "Expired: " + title
+	return s.stores.Mail.Enqueue(nil, t.SenderEmail, subject, buildExpirySummaryHTML(e), buildExpirySummaryText(e))
 }
 
 // ── Cleanup job ───────────────────────────────────────────────────────────────
@@ -373,6 +388,45 @@ func sendMail(cfg *config.Config, settings *store.Settings, item store.MailItem)
 
 // ── Expiry summary builders ───────────────────────────────────────────────────
 
+// expirySummary holds what the expiry summary mail shows.
+type expirySummary struct {
+	Settings   *store.Settings
+	BaseURL    string
+	Loc        *time.Location
+	Transfer   store.Transfer
+	History    []store.RecipientHistory
+	Files      []mail.FileItem
+	GraceHours int
+}
+
+// label names a history row: the sender's own link and the one shared link
+// of a link-only transfer carry the sender's address, which would read as
+// if the sender downloaded their own files.
+func (e expirySummary) label(h store.RecipientHistory) string {
+	switch {
+	case h.IsSender:
+		return "You (your own link)"
+	case !e.Transfer.NotifyRecipients:
+		return "Your shared link"
+	default:
+		return h.Email
+	}
+}
+
+func (e expirySummary) intro() string {
+	title := "Your transfer"
+	if e.Transfer.Title != "" {
+		title = "Your transfer \"" + e.Transfer.Title + "\""
+	}
+	return fmt.Sprintf("%s expired on %s. The download links no longer work.",
+		title, mail.FormatDate(e.Transfer.ExpiresAt, e.Loc))
+}
+
+func (e expirySummary) cleanupNote() string {
+	return fmt.Sprintf("The files will be permanently deleted after a grace period of %d hours. You are receiving this summary because expiry summaries are switched on for transfers you send with %s.",
+		e.GraceHours, mail.CompanyName(e.Settings))
+}
+
 // buildExpirySummaryHTML renders the expiry summary mail as HTML.
 // Format (architecture.md §8):
 //
@@ -384,66 +438,60 @@ func sendMail(cfg *config.Config, settings *store.Settings, item store.MailItem)
 //
 //	bob@client.com
 //	  Never opened.
-func buildExpirySummaryHTML(title string, history []store.RecipientHistory, settings *store.Settings, loc *time.Location) string {
-	if loc == nil {
-		loc = time.UTC
-	}
-
+func buildExpirySummaryHTML(e expirySummary) string {
 	var rows strings.Builder
-	for _, h := range history {
+	for _, h := range e.History {
 		var detail string
 		if h.DownloadCount == 0 {
 			detail = `<span style="color:#aaa;">Never opened</span>`
 		} else {
 			var timestamps []string
 			for _, ev := range h.Events {
-				timestamps = append(timestamps, time.Unix(ev.DownloadedAt, 0).In(loc).Format("2 Jan 15:04"))
+				timestamps = append(timestamps, time.Unix(ev.DownloadedAt, 0).In(e.Loc).Format("2 Jan 15:04"))
 			}
-			detail = fmt.Sprintf(`<span style="color:#555;">%d download(s)</span> <span style="color:#bbb;font-size:12px;">%s</span>`,
+			detail = fmt.Sprintf(`<span style="color:#555;">%d download(s)</span><br><span style="color:#aaa;font-size:12px;">%s</span>`,
 				h.DownloadCount, strings.Join(timestamps, ", "))
 		}
 		rows.WriteString(fmt.Sprintf(
-			`<tr><td style="padding:9px 0;font-size:13px;color:#333;border-bottom:1px solid #f0f0ec;">%s</td>`+
-				`<td style="padding:9px 0;font-size:13px;text-align:right;border-bottom:1px solid #f0f0ec;">%s</td></tr>`,
-			html.EscapeString(h.Email), detail,
+			`<tr><td style="padding:9px 0;font-size:13px;color:#333;border-bottom:1px solid #f0f0ec;vertical-align:top;">%s</td>`+
+				`<td style="padding:9px 0 9px 12px;font-size:13px;text-align:right;border-bottom:1px solid #f0f0ec;">%s</td></tr>`,
+			html.EscapeString(e.label(h)), detail,
 		))
 	}
 
-	body := fmt.Sprintf(`
-<p style="margin:0 0 20px;font-size:15px;color:#1a1a1a;">
-  Transfer <strong>%s</strong> has expired.
-</p>
-<table width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-  %s
-</table>`,
-		html.EscapeString(title),
-		rows.String(),
-	)
-
-	if settings != nil {
-		return mail.Wrap(settings, body)
+	var b strings.Builder
+	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(e.Transfer.SenderName))
+	fmt.Fprintf(&b, `<p style="margin:0 0 20px;">%s Here is who downloaded what.</p>`, html.EscapeString(e.intro()))
+	b.WriteString(`<p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.04em;">Downloads</p>`)
+	fmt.Fprintf(&b, `<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 20px;">%s</table>`, rows.String())
+	if len(e.Files) > 0 {
+		b.WriteString(`<p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.04em;">Files</p>`)
+		b.WriteString(mail.FileListHTML(e.Files))
 	}
-	return body
+	b.WriteString(mail.NoteHTML(e.cleanupNote()))
+
+	return mail.Wrap(e.Settings, e.BaseURL, e.intro(), b.String())
 }
 
-func buildExpirySummaryText(title string, history []store.RecipientHistory, loc *time.Location) string {
-	if loc == nil {
-		loc = time.UTC
-	}
+func buildExpirySummaryText(e expirySummary) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Transfer %q has expired.\n\n", title))
-	for _, h := range history {
+	fmt.Fprintf(&b, "Hello %s,\n\n%s Here is who downloaded what.\n\n", e.Transfer.SenderName, e.intro())
+	for _, h := range e.History {
 		if h.DownloadCount == 0 {
-			b.WriteString(fmt.Sprintf("%s\n  Never opened.\n\n", h.Email))
+			b.WriteString(fmt.Sprintf("%s\n  Never opened.\n\n", e.label(h)))
 		} else {
-			b.WriteString(fmt.Sprintf("%s (%d download(s))\n", h.Email, h.DownloadCount))
+			b.WriteString(fmt.Sprintf("%s (%d download(s))\n", e.label(h), h.DownloadCount))
 			for _, ev := range h.Events {
 				b.WriteString(fmt.Sprintf("  • %s\n",
-					time.Unix(ev.DownloadedAt, 0).In(loc).Format("2 Jan 15:04"),
+					time.Unix(ev.DownloadedAt, 0).In(e.Loc).Format("2 Jan 15:04"),
 				))
 			}
 			b.WriteString("\n")
 		}
 	}
+	if len(e.Files) > 0 {
+		b.WriteString("Files:\n" + mail.FileListText(e.Files) + "\n")
+	}
+	fmt.Fprintf(&b, "--\n%s\n", e.cleanupNote())
 	return b.String()
 }

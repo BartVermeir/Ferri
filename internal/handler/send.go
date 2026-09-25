@@ -231,6 +231,8 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			ExpiresAt:        expiresAt,
 			Recipients:       recipients,
 			NotifyRecipients: !linkOnly,
+			// Link-only already makes the sender the sole recipient.
+			SenderLink: !linkOnly,
 		}
 
 		result, err := stores.Transfers.Create(input)

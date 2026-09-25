@@ -216,11 +216,13 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 			logDownloadError("record download event", err, fileID)
 		}
 
-		// Enqueue download notification mail if enabled
-		if settings.NotifyOnDownload && settings.MailFromAddress != "" {
-			subject := fmt.Sprintf("File downloaded: %s", targetFile.OriginalName)
-			bodyHTML := mail.Wrap(settings, buildDownloadNotifyHTML(transfer, recipient.Email, targetFile.OriginalName))
-			bodyText := buildDownloadNotifyText(transfer, recipient.Email, targetFile.OriginalName)
+		// Enqueue download notification mail if enabled. Not for the sender's
+		// own link: telling the sender they downloaded their own file is noise.
+		if settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
+			n := downloadNotice(cfg, settings, transfer, recipient, targetFile.OriginalName)
+			subject := fmt.Sprintf("Downloaded: %s", targetFile.OriginalName)
+			bodyHTML := buildDownloadNotifyHTML(n)
+			bodyText := buildDownloadNotifyText(n)
 			if err := stores.Mail.Enqueue(nil, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
 				logDownloadError("enqueue download notification", err, fileID)
 			}
@@ -361,17 +363,73 @@ func renderNotFound(w http.ResponseWriter, settings *store.Settings) {
 
 // ── Mail body builders ────────────────────────────────────────────────────────
 
-func buildDownloadNotifyHTML(t *store.Transfer, recipientEmail, filename string) string {
-	// All three values are attacker-influenced (filename comes from client TUS
-	// metadata), so they MUST be HTML-escaped before interpolation. The caller
-	// wraps this fragment via mail.Wrap for the standard layout.
-	return fmt.Sprintf(`<p style="margin:0;font-size:15px;color:#333;"><strong>%s</strong> downloaded <strong>%s</strong> from your transfer <em>%s</em>.</p>`,
-		html.EscapeString(recipientEmail), html.EscapeString(filename), html.EscapeString(t.Title))
+// downloadNoticeData holds what a download notification shows.
+type downloadNoticeData struct {
+	Settings *store.Settings
+	BaseURL  string
+	Loc      *time.Location
+	Transfer *store.Transfer
+	// Who is the recipient's email, or "" for a link-only transfer: there
+	// the one link is shared by the sender, so the address on the row is the
+	// sender's own and says nothing about who actually downloaded.
+	Who  string
+	What string
+	At   time.Time
 }
 
-func buildDownloadNotifyText(t *store.Transfer, recipientEmail, filename string) string {
-	return fmt.Sprintf("%s downloaded %s from your transfer '%s'.",
-		recipientEmail, filename, t.Title)
+func downloadNotice(cfg *config.Config, settings *store.Settings, t *store.Transfer, r *store.Recipient, what string) downloadNoticeData {
+	n := downloadNoticeData{
+		Settings: settings,
+		BaseURL:  cfg.Server.BaseURL,
+		Loc:      cfg.Server.Location,
+		Transfer: t,
+		What:     what,
+		At:       time.Now(),
+	}
+	if t.NotifyRecipients {
+		n.Who = r.Email
+	}
+	return n
+}
+
+// transferLabel is the quoted title, or a neutral fallback for an untitled transfer.
+func transferLabel(t *store.Transfer) string {
+	if t.Title != "" {
+		return `"` + t.Title + `"`
+	}
+	return "your transfer"
+}
+
+func (n downloadNoticeData) who() string {
+	if n.Who == "" {
+		return "Someone with your shared link"
+	}
+	return n.Who
+}
+
+func buildDownloadNotifyHTML(n downloadNoticeData) string {
+	// Recipient email, filename (client TUS metadata) and title are all
+	// attacker-influenced, so they MUST be HTML-escaped before interpolation.
+	var b strings.Builder
+	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(n.Transfer.SenderName))
+	fmt.Fprintf(&b, `<p style="margin:0 0 20px;"><strong>%s</strong> downloaded <strong>%s</strong> from %s.</p>`,
+		html.EscapeString(n.who()), html.EscapeString(n.What), html.EscapeString(transferLabel(n.Transfer)))
+	fmt.Fprintf(&b, `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px;font-size:13px;color:#555;">
+  <tr><td style="padding:3px 16px 3px 0;color:#888;">Downloaded</td><td style="padding:3px 0;">%s</td></tr>
+  <tr><td style="padding:3px 16px 3px 0;color:#888;">Available until</td><td style="padding:3px 0;">%s</td></tr>
+</table>`,
+		html.EscapeString(mail.FormatDate(n.At, n.Loc)), html.EscapeString(mail.FormatDate(n.Transfer.ExpiresAt, n.Loc)))
+	b.WriteString(mail.NoteHTML("You are receiving this email because download notifications are switched on for transfers you send with " + mail.CompanyName(n.Settings) + "."))
+
+	preheader := fmt.Sprintf("%s downloaded %s.", n.who(), n.What)
+	return mail.Wrap(n.Settings, n.BaseURL, preheader, b.String())
+}
+
+func buildDownloadNotifyText(n downloadNoticeData) string {
+	return fmt.Sprintf("Hello %s,\n\n%s downloaded %s from %s.\n\nDownloaded:      %s\nAvailable until: %s\n\n--\nYou are receiving this email because download notifications are switched on for transfers you send with %s.\n",
+		n.Transfer.SenderName, n.who(), n.What, transferLabel(n.Transfer),
+		mail.FormatDate(n.At, n.Loc), mail.FormatDate(n.Transfer.ExpiresAt, n.Loc),
+		mail.CompanyName(n.Settings))
 }
 
 // ── Logging helper ────────────────────────────────────────────────────────────
@@ -415,10 +473,11 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		}
 
 		// Enqueue a single notification mail for the ZIP download if enabled
-		if settings.NotifyOnDownload && settings.MailFromAddress != "" {
-			subject := fmt.Sprintf("All files downloaded (ZIP): %s", transfer.Title)
-			bodyHTML := mail.Wrap(settings, buildDownloadNotifyHTML(transfer, recipient.Email, "all files (ZIP)"))
-			bodyText := buildDownloadNotifyText(transfer, recipient.Email, "all files (ZIP)")
+		if settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
+			n := downloadNotice(cfg, settings, transfer, recipient, "all files (ZIP)")
+			subject := fmt.Sprintf("Downloaded: all files of %s", transferLabel(transfer))
+			bodyHTML := buildDownloadNotifyHTML(n)
+			bodyText := buildDownloadNotifyText(n)
 			if err := stores.Mail.Enqueue(nil, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("zip: enqueue download notification", "error", err)
 			}

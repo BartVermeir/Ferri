@@ -62,18 +62,19 @@ func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua
 type RecipientHistory struct {
 	Email         string
 	DownloadCount int
+	IsSender      bool // the sender's own link, not a real recipient
 	Events        []DownloadEvent
 }
 
 func (s *DownloadStore) GetHistoryForTransfer(transferID string) ([]RecipientHistory, error) {
 	rows, err := s.db.Query(`
-		SELECT r.email, r.download_count,
+		SELECT r.email, r.download_count, r.is_sender,
 		       de.id, de.recipient_id, de.file_id, de.original_name,
 		       de.ip_address, de.user_agent, de.downloaded_at
 		FROM recipients r
 		LEFT JOIN download_events de ON de.recipient_id = r.id
 		WHERE r.transfer_id = ?
-		ORDER BY r.email, de.downloaded_at ASC`,
+		ORDER BY r.is_sender, r.email, de.downloaded_at ASC`,
 		transferID,
 	)
 	if err != nil {
@@ -88,6 +89,7 @@ func (s *DownloadStore) GetHistoryForTransfer(transferID string) ([]RecipientHis
 		var (
 			email         string
 			downloadCount int
+			isSender      bool
 			ev            DownloadEvent
 			eventID       sql.NullString
 			recipientID   sql.NullString
@@ -95,7 +97,7 @@ func (s *DownloadStore) GetHistoryForTransfer(transferID string) ([]RecipientHis
 			downloadedAt  sql.NullInt64
 		)
 		if err := rows.Scan(
-			&email, &downloadCount,
+			&email, &downloadCount, &isSender,
 			&eventID, &recipientID, &ev.FileID, &originalName,
 			&ev.IPAddress, &ev.UserAgent, &downloadedAt,
 		); err != nil {
@@ -107,6 +109,7 @@ func (s *DownloadStore) GetHistoryForTransfer(transferID string) ([]RecipientHis
 			result = append(result, RecipientHistory{
 				Email:         email,
 				DownloadCount: downloadCount,
+				IsSender:      isSender,
 			})
 			idx = len(result) - 1
 			emailIdx[email] = idx
