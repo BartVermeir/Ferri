@@ -34,6 +34,7 @@ import (
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
 )
@@ -244,7 +245,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		// Without an explicit Content-Disposition: attachment, browsers may render
 		// the file inline instead of saving it. This is especially wrong for
 		// video files, PDFs, and images.
-		w.Header().Set("Content-Disposition", buildContentDisposition(targetFile.OriginalName))
+		w.Header().Set("Content-Disposition", buildContentDisposition(relpath.Base(targetFile.OriginalName)))
 
 		// Determine modTime for conditional request validation.
 		// Use ActivatedAt if set; fall back to now() so http.ServeContent still works.
@@ -579,7 +580,10 @@ func streamZIP(w http.ResponseWriter, mgr *storage.Manager, items []zipItem, log
 			missing = append(missing, it.Name)
 			continue
 		}
-		entry, err := zw.CreateHeader(&zip.FileHeader{Name: uniqueZipName(seen, it.Name), Method: zip.Store, Modified: now})
+		// Names are cleaned on upload already; cleaning again here keeps a
+		// row from before that (or from anywhere else) from writing outside
+		// the archive. A folder path becomes folders inside the ZIP.
+		entry, err := zw.CreateHeader(&zip.FileHeader{Name: uniqueZipName(seen, relpath.Clean(it.Name)), Method: zip.Store, Modified: now})
 		if err == nil {
 			_, err = io.CopyBuffer(entry, src, buf)
 		}
@@ -612,24 +616,27 @@ func logDownloadError(op string, err error, fileID string) {
 	slog.Error("download handler: "+op, "file_id", fileID, "error", err)
 }
 
-// uniqueZipName returns a ZIP entry name that is unique within the archive,
-// appending " (1)", " (2)", … before the extension when a base name repeats.
-// Without this, two files sharing a base name (e.g. two "report.pdf" from
-// different folders) produce duplicate entries that most unzip tools silently
-// overwrite. seen tracks assigned names across the archive.
-func uniqueZipName(seen map[string]int, original string) string {
-	base := filepath.Base(original)
-	if seen[base] == 0 {
-		seen[base] = 1
-		return base
+// uniqueZipName returns a ZIP entry name that is unique within the archive.
+// The folder path is kept (DEC-035: a folder upload keeps its structure);
+// only when the same path occurs twice does the file name get " (1)", " (2)",
+// … before its extension, since most unzip tools silently overwrite a
+// duplicate entry. seen tracks assigned names across the archive.
+func uniqueZipName(seen map[string]int, name string) string {
+	if seen[name] == 0 {
+		seen[name] = 1
+		return name
 	}
-	ext := filepath.Ext(base)
-	stem := strings.TrimSuffix(base, ext)
-	for i := seen[base]; ; i++ {
-		candidate := fmt.Sprintf("%s (%d)%s", stem, i, ext)
+	dir, file := relpath.Dir(name), relpath.Base(name)
+	if dir != "" {
+		dir += "/"
+	}
+	ext := filepath.Ext(file)
+	stem := strings.TrimSuffix(file, ext)
+	for i := seen[name]; ; i++ {
+		candidate := fmt.Sprintf("%s%s (%d)%s", dir, stem, i, ext)
 		if seen[candidate] == 0 {
 			seen[candidate] = 1
-			seen[base] = i + 1
+			seen[name] = i + 1
 			return candidate
 		}
 	}

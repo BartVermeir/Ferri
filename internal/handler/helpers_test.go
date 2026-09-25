@@ -77,10 +77,13 @@ func TestUniqueZipName(t *testing.T) {
 	got := []string{
 		uniqueZipName(seen, "report.pdf"),
 		uniqueZipName(seen, "sub/report.pdf"),
-		uniqueZipName(seen, "other/report.pdf"),
+		uniqueZipName(seen, "report.pdf"),
+		uniqueZipName(seen, "sub/report.pdf"),
+		uniqueZipName(seen, "report.pdf"),
 		uniqueZipName(seen, "notes.txt"),
 	}
-	want := []string{"report.pdf", "report (1).pdf", "report (2).pdf", "notes.txt"}
+	// Folders are kept; only a repeated path gets a number.
+	want := []string{"report.pdf", "sub/report.pdf", "report (1).pdf", "sub/report (1).pdf", "report (2).pdf", "notes.txt"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("entry %d = %q, want %q", i, got[i], want[i])

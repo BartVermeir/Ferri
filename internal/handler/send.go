@@ -43,11 +43,12 @@ const (
 	maxTitleLen   = 200
 	maxMessageLen = 5000
 	maxNameLen    = 200
-	// maxFormBytes caps a /send or /request body. The biggest honest one is
-	// /send's file list (at most max_files_per_transfer entries; more files
-	// go as one ZIP), a few KB. Without a cap, the part of a multipart body
-	// above 1 MB went to /tmp, which is RAM in the container (audit L11).
+	// maxFormBytes caps a /request body, maxSendBytes a /send body. /send
+	// carries the file list: up to max_files_per_transfer (5000) paths in
+	// folders, a few hundred bytes each at most. Without a cap, a multipart
+	// body went to /tmp, which is RAM in the container (audit L11).
 	maxFormBytes = 1 << 20
+	maxSendBytes = 4 << 20
 )
 
 // ── Send form ─────────────────────────────────────────────────────────────────
@@ -59,9 +60,9 @@ type homePageData struct {
 	WelcomeMessage string
 	Mode           string // "send" or "request"
 	Error          string // request panel validation error
-	// Limits for upload.js: above MaxFiles files, or with a folder, the
-	// browser packs everything into one ZIP (DEC-035); MaxUploadBytes caps
-	// each upload, the ZIP included. The server enforces both again.
+	// Limits for upload.js: at most MaxFiles files per transfer, folders
+	// included (DEC-035), each at most MaxUploadBytes. The server enforces
+	// both again.
 	MaxFiles       int
 	MaxUploadBytes int64
 }
@@ -102,7 +103,7 @@ func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 // Validates input, creates the transfer in the DB, returns JSON {transfer_id}.
 func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+		r.Body = http.MaxBytesReader(w, r.Body, maxSendBytes)
 
 		// The JS client sends FormData, which the browser encodes as
 		// multipart/form-data. Only a non-multipart body may fall back to

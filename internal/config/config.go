@@ -129,8 +129,8 @@ func Defaults() *Config {
 		},
 		Limits: LimitsConfig{
 			MaxUploadBytes:      644_245_094_400, // 600 GB
-			MaxFilesPerTransfer: 50,
-			MinFreeBytes:        53_687_091_200, // 50 GB
+			MaxFilesPerTransfer: 5000,            // a folder goes as loose files (DEC-035)
+			MinFreeBytes:        53_687_091_200,  // 50 GB
 		},
 		Jobs: JobsConfig{
 			ExpiryIntervalMinutes: 60,

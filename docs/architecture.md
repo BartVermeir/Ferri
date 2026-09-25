@@ -661,7 +661,7 @@ expiry_options:
 
 limits:
   max_upload_bytes: 644245094400          # 600 GB
-  max_files_per_transfer: 50
+  max_files_per_transfer: 5000
   min_free_bytes: 53687091200             # 50 GB
 
 jobs:

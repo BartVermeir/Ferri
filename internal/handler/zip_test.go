@@ -196,3 +196,31 @@ func TestZIP_ReadErrorAbortsDownload(t *testing.T) {
 	rr := f.get("/ul/" + f.view + "/zip")
 	t.Fatalf("download completed (status %d, %d bytes) despite the read error", rr.Code, rr.Body.Len())
 }
+
+// DEC-035: folder paths become folders in the ZIP; a raw "../" in a stored
+// name (a row from before names were cleaned) cannot leave the archive. A
+// single download is named after the file, without its folder.
+func TestZIP_FolderStructure(t *testing.T) {
+	f := newReqFixture(t, "Series")
+	f.file("a", "Series/day1/img001.jpg", "one", true, true)
+	f.file("b", "Series/day2/img002.jpg", "two", true, true)
+	f.file("c", "../../escape.txt", "three", true, true)
+
+	entries := readZIP(t, f.get("/ul/"+f.view+"/zip").Body.Bytes())
+	for _, want := range []string{"Series/day1/img001.jpg", "Series/day2/img002.jpg", "escape.txt"} {
+		if entries[want] == nil {
+			t.Errorf("ZIP lacks %s; has %v", want, entries)
+		}
+	}
+	for name := range entries {
+		if strings.Contains(name, "..") || strings.HasPrefix(name, "/") {
+			t.Errorf("ZIP entry %q escapes the archive", name)
+		}
+	}
+	if cd := f.get("/ul/" + f.view + "/file/a").Header().Get("Content-Disposition"); cd != buildContentDisposition("img001.jpg") {
+		t.Errorf("single download named %q, want the file name without its folder", cd)
+	}
+	if page := f.get("/ul/" + f.view + "/files").Body.String(); !strings.Contains(page, ">img001.jpg<") || !strings.Contains(page, "Series/day1/") {
+		t.Error("file page does not show the file name with its folder")
+	}
+}

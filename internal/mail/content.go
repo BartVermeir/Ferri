@@ -66,6 +66,10 @@ func CompanyName(settings *store.Settings) string {
 	return "Ferri"
 }
 
+// maxListedFiles is how many files a mail lists by name. A folder can hold
+// thousands (DEC-035); the rest is one "and N more" line, with the total.
+const maxListedFiles = 20
+
 // FileListHTML renders files as a two-column table with a total row.
 func FileListHTML(files []FileItem) string {
 	if len(files) == 0 {
@@ -73,9 +77,17 @@ func FileListHTML(files []FileItem) string {
 	}
 	var b strings.Builder
 	var total int64
-	b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 20px;">`)
 	for _, f := range files {
 		total += f.Size
+	}
+	b.WriteString(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 20px;">`)
+	for i, f := range files {
+		if i == maxListedFiles {
+			fmt.Fprintf(&b,
+				`<tr><td colspan="2" style="padding:7px 0;font-size:13px;color:#888;border-bottom:1px solid #f0f0ec;">… and %s</td></tr>`,
+				Plural(len(files)-maxListedFiles, "more file"))
+			break
+		}
 		fmt.Fprintf(&b,
 			`<tr><td style="padding:7px 0;font-size:13px;color:#333;border-bottom:1px solid #f0f0ec;word-break:break-all;">%s</td>`+
 				`<td style="padding:7px 0 7px 12px;font-size:13px;color:#888;text-align:right;white-space:nowrap;border-bottom:1px solid #f0f0ec;">%s</td></tr>`,
@@ -97,6 +109,12 @@ func FileListText(files []FileItem) string {
 	var total int64
 	for _, f := range files {
 		total += f.Size
+	}
+	for i, f := range files {
+		if i == maxListedFiles {
+			fmt.Fprintf(&b, "  … and %s\n", Plural(len(files)-maxListedFiles, "more file"))
+			break
+		}
 		fmt.Fprintf(&b, "  - %s (%s)\n", f.Name, FormatSize(f.Size))
 	}
 	if len(files) > 1 {

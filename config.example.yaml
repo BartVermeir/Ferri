@@ -45,7 +45,7 @@ expiry_options:
 
 limits:
   max_upload_bytes: 644245094400         # 600 GB per individual file
-  max_files_per_transfer: 50
+  max_files_per_transfer: 5000           # a folder is uploaded as loose files, with its structure kept
   min_free_bytes: 53687091200            # 50 GB: refuse new uploads that would leave less free on storage
 
 jobs:

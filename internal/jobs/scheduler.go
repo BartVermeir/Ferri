@@ -480,11 +480,18 @@ func (e expirySummary) fileItems() []mail.FileItem {
 // ("3 of 5 files"), one line per downloaded file with its download times,
 // and the files not downloaded. HTML and text render the same summary.
 type recipientSummary struct {
-	Label   string
-	Status  string
-	Lines   []summaryLine
-	Missing []string
+	Label       string
+	Status      string
+	Lines       []summaryLine
+	MoreLines   int // downloaded files beyond maxSummaryLines, not listed
+	Missing     []string
+	MoreMissing int // not-downloaded files beyond maxSummaryLines, not named
 }
+
+// maxSummaryLines caps the files listed per recipient, and the names in
+// "Not downloaded": a folder can hold thousands of files (DEC-035). A ZIP of
+// everything is one "All files" line anyway.
+const maxSummaryLines = 20
 
 type summaryLine struct {
 	What  string
@@ -533,11 +540,20 @@ func (e expirySummary) recipients() []recipientSummary {
 			rs.Lines = append(rs.Lines, summaryLine{What: n, Times: e.formatTimes(byName[n])})
 		}
 
+		if len(rs.Lines) > maxSummaryLines {
+			rs.MoreLines = len(rs.Lines) - maxSummaryLines
+			rs.Lines = rs.Lines[:maxSummaryLines]
+		}
+		if len(rs.Missing) > maxSummaryLines {
+			rs.MoreMissing = len(rs.Missing) - maxSummaryLines
+			rs.Missing = rs.Missing[:maxSummaryLines]
+		}
+
 		total := len(e.Files)
 		switch {
 		case len(rs.Lines) == 0:
 			rs.Status = "nothing downloaded"
-			rs.Missing = nil // "nothing downloaded" already says it
+			rs.Missing, rs.MoreMissing = nil, 0 // "nothing downloaded" already says it
 		case total <= 1 || downloaded == 0:
 			rs.Status = "downloaded"
 		case downloaded == total:
@@ -637,6 +653,10 @@ func buildExpirySummaryHTML(e expirySummary) string {
 		if len(rs.Lines) == 0 && len(rs.Missing) == 0 {
 			bottom = "16px"
 		}
+		missing := strings.Join(rs.Missing, ", ")
+		if rs.MoreMissing > 0 {
+			missing += fmt.Sprintf(", … and %d more", rs.MoreMissing)
+		}
 		fmt.Fprintf(&rows, `<p style="margin:0 0 %s;font-size:13px;color:#333;"><strong>%s</strong>: %s</p>`,
 			bottom, html.EscapeString(rs.Label), html.EscapeString(rs.Status))
 		if len(rs.Lines) == 0 && len(rs.Missing) == 0 {
@@ -647,9 +667,12 @@ func buildExpirySummaryHTML(e expirySummary) string {
 			fmt.Fprintf(&rows, `<li style="word-break:break-all;">%s: <span style="color:#888;">%s</span></li>`,
 				html.EscapeString(l.What), html.EscapeString(l.Times))
 		}
+		if rs.MoreLines > 0 {
+			fmt.Fprintf(&rows, `<li style="color:#888;">… and %s downloaded</li>`, html.EscapeString(mail.Plural(rs.MoreLines, "more file")))
+		}
 		if len(rs.Missing) > 0 {
 			fmt.Fprintf(&rows, `<li style="color:#999;list-style:none;margin-left:-18px;">Not downloaded: %s</li>`,
-				html.EscapeString(strings.Join(rs.Missing, ", ")))
+				html.EscapeString(missing))
 		}
 		rows.WriteString(`</ul>`)
 	}
@@ -676,8 +699,15 @@ func buildExpirySummaryText(e expirySummary) string {
 		for _, l := range rs.Lines {
 			fmt.Fprintf(&b, "  • %s: %s\n", l.What, l.Times)
 		}
+		if rs.MoreLines > 0 {
+			fmt.Fprintf(&b, "  … and %s downloaded\n", mail.Plural(rs.MoreLines, "more file"))
+		}
 		if len(rs.Missing) > 0 {
-			fmt.Fprintf(&b, "  Not downloaded: %s\n", strings.Join(rs.Missing, ", "))
+			missing := strings.Join(rs.Missing, ", ")
+			if rs.MoreMissing > 0 {
+				missing += fmt.Sprintf(", … and %d more", rs.MoreMissing)
+			}
+			fmt.Fprintf(&b, "  Not downloaded: %s\n", missing)
 		}
 		b.WriteString("\n")
 	}

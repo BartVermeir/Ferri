@@ -327,8 +327,8 @@ All deploy-time settings live in `config.yaml`. Sensitive values should be provi
 | `admin.token` | *(use env var)* | Set via `ADMIN_TOKEN`. Min 32 characters. |
 | `admin.session_ttl_hours` | `8` | Admin session cookie lifetime in hours. |
 | `expiry_options` | see example | List of expiry choices shown in the send form. |
-| `limits.max_upload_bytes` | `644245094400` | Maximum size per individual file upload (600 GB). Enforced per TUS upload, not per transfer total. A transfer with three 300 GB files is allowed after a warning in the browser; a single file (or packed folder) over 600 GB is rejected at upload-create time with HTTP 413. |
-| `limits.max_files_per_transfer` | `50` | Above this many files, or with a folder, the browser packs everything into one ZIP (DEC-035). |
+| `limits.max_upload_bytes` | `644245094400` | Maximum size per individual file upload (600 GB). Enforced per TUS upload, not per transfer total. A transfer with three 300 GB files is allowed after a warning in the browser; a single file over 600 GB is rejected at upload-create time with HTTP 413. |
+| `limits.max_files_per_transfer` | `5000` | Files per transfer or upload request, folders included. A folder goes as loose files with its structure kept (DEC-035). |
 | `limits.min_free_bytes` | `53687091200` | A new upload is refused (HTTP 507) when it would leave less than this free on storage (50 GB). If the storage cannot report its free space, the upload goes ahead with a WARN in the log. |
 | `jobs.expiry_interval_minutes` | `60` | How often the expiry job runs. |
 | `jobs.cleanup_grace_hours` | `24` | Hours after expiry before files are deleted from disk. |

@@ -548,30 +548,26 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 ---
 
-## DEC-035: Folders and many files are packed into one ZIP in the browser
+## DEC-035: Folders are uploaded as loose files, with their structure kept
 
-**Decision:** When the user selects or drops a folder, or more files than `limits.max_files_per_transfer`, the browser packs everything into one ZIP before uploading. It uses `client-zip`, vendored in `static/files/client-zip.js`, and applies no compression. The ZIP keeps the folder structure and is uploaded over TUS as a single stream of known length. Fewer loose files are still uploaded one by one.
+**Decision:** A folder (selected with "Select a folder" or dropped) is uploaded file by file, like loose files. Each file carries its path inside the folder (`Series/day1/img001.jpg`) as its name. The server cleans that path (`internal/relpath`: no `..`, no absolute or drive parts, no control characters) and stores it. Recipients download single files, or everything as one ZIP that the server builds with the folder structure (`streamZIP`, DEC-038). A transfer or request takes up to `limits.max_files_per_transfer` files (default 5000).
 
-**The problem:** a colleague tried to send a folder, and then its 1600 files. Folders could not be selected, and a dropped folder is not a readable file. The file list was sent as two form fields per file, so 1600 files meant 3202 multipart parts, and Go refuses more than 1000 by default. The server then fell back to parsing an empty form and answered "Sender name is required". Even with that fixed, a transfer holds at most 50 files.
+**The problem:** a colleague tried to send a folder, and then its 1600 files. Folders could not be selected, and a dropped folder is not a readable file. The file list was sent as two form fields per file, so 1600 files meant 3202 multipart parts, and Go refuses more than 1000 by default; the server then fell back to an empty form and answered "Sender name is required". The file list is now one JSON field (`files`), and a multipart body that fails to parse is reported as such.
 
-**Why pack instead of raising the limit and keeping the files loose:** a folder with hundreds of files (an image sequence, a memory card) is used as a whole. One ZIP keeps the server, the mails and the download page unchanged. It also avoids thousands of sequential TUS requests, and the recipient gets one download with the structure intact. Not compressing costs no CPU on media that does not compress anyway, and it makes the archive size exactly predictable (`predictLength`). TUS needs that size before the first byte, because the server does not support deferred length.
-
-**Considered and rejected (2026-09-25):** a threshold for folders too (keep a folder's files separate below e.g. 100), a "send as one ZIP" checkbox for the sender, and always keeping files separate with a much higher limit. Loose files already stay separate up to the limit, and that covers the need to download single files. A folder is treated as a whole.
-
-**Also changed:** the file list of `POST /send` is one JSON field (`files`), so the number of files no longer hits the multipart part limit. A multipart body that fails to parse is reported as such, instead of falling back to an empty form.
+**Why loose files and not one ZIP made in the browser:** every file is its own resumable upload (DEC-037). A file that cannot be read fails alone and is named in the error; a new try continues the same transfer and skips the files that arrived. One ZIP stream of a whole folder could not resume, so any failure restarted everything, and one unreadable file among hundreds failed all of it (seen in a test with 605 files, 102 GB: the browser could not read the first file). The recipient also keeps single-file downloads.
 
 **Limits and risks:**
-- `client-zip` marks every archive "version 4.5 needed to extract" (ZIP64 capable). The built-in extractors of Windows and macOS and 7-Zip handle this; some very old tools do not.
-- A packed upload is a stream and cannot resume after a page reload or a failed attempt; it starts over. Loose files do resume (DEC-037).
-- The recipient cannot download a single file from a packed folder.
+- Files go one after another; hundreds of small files cost a few requests each.
+- Mails and the expiry summary name at most 20 files, with the rest counted; the download pages list every file in a list that scrolls.
+- Lists show the path; a single download is named after the file alone.
 
 ---
 
 ## DEC-036: 600 GB per transfer is a warning; only free space is a hard stop
 
 **Decision:** Ferri checks three things before an upload starts. Only the free-space check is a hard stop that users can meet in normal use.
-- **Per upload:** `limits.max_upload_bytes` (600 GB) stays a hard limit per uploaded file (DEC-029). A packed folder is one upload, so a ZIP over 600 GB is refused in the browser before anything is sent.
-- **Per transfer or request:** no limit on the total size, and none on the number of files. When loose files add up to more than 600 GB, the send page and the upload page ask "Upload them anyway?", and on yes the upload goes ahead.
+- **Per upload:** `limits.max_upload_bytes` (600 GB) stays a hard limit per uploaded file (DEC-029).
+- **Per transfer or request:** no limit on the total size; up to `max_files_per_transfer` files (5000), folders included. When the files add up to more than 600 GB, the send page and the upload page ask "Upload them anyway?", and on yes the upload goes ahead.
 - **Free space:** a new upload is refused (HTTP 507) when it would leave less than `limits.min_free_bytes` (default 50 GB) free on the storage. If the storage cannot report its free space, the upload goes ahead and a WARN is logged.
 - **Announced files:** a transfer takes at most twice the number of files `/send` announced. This is not a limit for users, because every new attempt creates a new transfer.
 
@@ -590,7 +586,7 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 ## DEC-037: Uploads survive a restart and resume after an error
 
-**Decision:** The browser retries a failed upload request for about 8.5 minutes (`RETRY_DELAYS` in `upload.js`), and a file (not a packed ZIP stream) is resumable: tus-js-client remembers its upload URL in `localStorage` and continues from the server's offset after an error, a new attempt or a reload of the upload page. The remembered key includes the transfer or request (`uploadFingerprint`). On the upload page, a new attempt skips the files that already reached the server. `scripts/deploy.sh` warns and asks before restarting when the app handled upload chunks in the last 10 minutes (`FORCE=1` skips the question).
+**Decision:** The browser retries a failed upload request for about 8.5 minutes (`RETRY_DELAYS` in `upload.js`), and every file is resumable: tus-js-client remembers its upload URL in `localStorage` and continues from the server's offset after an error, a new attempt or a reload of the upload page. The remembered key includes the transfer or request (`uploadFingerprint`). A new attempt skips the files that already reached the server: on the upload page, and on the send page too, where it continues the same transfer as long as the form and the file list did not change. `scripts/deploy.sh` warns and asks before restarting when the app handled upload chunks in the last 10 minutes (`FORCE=1` skips the question).
 
 **Rationale:** a deploy stops the app for up to a few minutes. The old retries gave up after 38 seconds, and without resuming a 400 GB upload started over, while a new attempt on the upload page stored every file that had already arrived a second time. Tested in a browser: the app stopped during a 150 MB upload for 20 seconds, and the upload continued and completed with intact bytes.
 
@@ -598,7 +594,6 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 **Limits and risks:**
 - On the send page, a reload loses the form, so a new attempt creates a new transfer and starts over. The abandoned transfer stays `pending` and expires (DEC-016).
-- A packed ZIP is not resumable (DEC-035).
 
 ---
 
@@ -636,7 +631,7 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 ## DEC-042: Content Security Policy — scripts only from the app itself
 
-**Decision:** `script-src 'self'`: no inline `<script>`, no inline event handlers, no external script hosts. Page scripts live in `static/files/*.js` (embedded in the binary), data reaches them through `data-*` attributes, and third-party code is vendored (`tus.min.js`, `client-zip.js`).
+**Decision:** `script-src 'self'`: no inline `<script>`, no inline event handlers, no external script hosts. Page scripts live in `static/files/*.js` (embedded in the binary), data reaches them through `data-*` attributes, and third-party code is vendored (`tus.min.js`).
 
 **Rationale:** injected markup cannot run script even if escaping fails somewhere, and no external host can change the code the page runs. Done 2026-09-23.
 

@@ -29,6 +29,7 @@ import (
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
 )
@@ -435,7 +436,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 		}
 		defer f.Close()
 
-		w.Header().Set("Content-Disposition", buildContentDisposition(target.OriginalName))
+		w.Header().Set("Content-Disposition", buildContentDisposition(relpath.Base(target.OriginalName)))
 		http.ServeContent(w, r, target.OriginalName, time.Time{}, f)
 	}
 }
@@ -493,7 +494,7 @@ func renderUploadPage(w http.ResponseWriter, cfg *config.Config, tok string, req
 		baseData
 		Request        *store.UploadRequest
 		CompleteURL    string
-		MaxFiles       int   // above this, or with a folder, upload.js packs one ZIP (DEC-035)
+		MaxFiles       int   // files per upload, folders included (DEC-035)
 		MaxUploadBytes int64 // per upload, the ZIP included
 	}{
 		baseData:       baseData{PageTitle: req.Title, Settings: settings},

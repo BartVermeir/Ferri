@@ -2,6 +2,7 @@ package mail
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -91,5 +92,22 @@ func TestBuildMessage_FromFormat(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "From: <sender@example.com>") {
 		t.Fatalf("expected a bare From header, got:\n%s", buf.String())
+	}
+}
+
+// DEC-035: a folder can hold thousands of files; a mail names the first 20
+// and counts the rest, the total still covers all of them.
+func TestFileList_CapsLongLists(t *testing.T) {
+	var files []FileItem
+	for i := 0; i < 25; i++ {
+		files = append(files, FileItem{Name: fmt.Sprintf("Series/img%02d.jpg", i), Size: 1})
+	}
+	text := FileListText(files)
+	if strings.Count(text, "  - ") != 20 || !strings.Contains(text, "… and 5 more files") || !strings.Contains(text, "25 files, 25 B total") {
+		t.Fatalf("capped text list wrong:\n%s", text)
+	}
+	htmlList := FileListHTML(files)
+	if strings.Contains(htmlList, "img20.jpg") || !strings.Contains(htmlList, "… and 5 more files") || !strings.Contains(htmlList, "25 files") {
+		t.Fatalf("capped HTML list wrong:\n%s", htmlList)
 	}
 }

@@ -298,3 +298,29 @@ func TestTUSPost_RefusalReachesClient(t *testing.T) {
 		t.Fatalf("body = %q, want %q", got, msgStorageFull)
 	}
 }
+
+// DEC-035: a file from a folder is stored with its path, cleaned: "../" and
+// absolute parts cannot reach the ZIP a recipient downloads later.
+func TestPreUploadCreate_StoresCleanFolderPath(t *testing.T) {
+	h, _, stores := newTestHandler(t)
+	transferID := mustCreatePendingTransfer(t, stores)
+	for name, want := range map[string]string{
+		"Series/day1/img001.jpg": "Series/day1/img001.jpg",
+		"../../etc/passwd":      "etc/passwd",
+		`\\server\share\x.mov`:  "server/share/x.mov",
+	} {
+		_, changes, err := h.preUploadCreate(tusd.HookEvent{Upload: tusd.FileInfo{
+			Size: 10, MetaData: tusd.MetaData{"transfer_id": transferID, "filename": name},
+		}})
+		if err != nil {
+			t.Fatalf("%q refused: %v", name, err)
+		}
+		f, err := stores.Transfers.GetFileByID(changes.MetaData[metaKeyFileID])
+		if err != nil || f == nil {
+			t.Fatal(err)
+		}
+		if f.OriginalName != want {
+			t.Errorf("stored name for %q = %q, want %q", name, f.OriginalName, want)
+		}
+	}
+}

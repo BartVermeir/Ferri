@@ -39,6 +39,7 @@ import (
 
 	"github.com/BartVermeir/Ferri/internal/config"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
 )
@@ -392,7 +393,7 @@ func AdminTransferFile(cfg *config.Config, stores *store.Stores, mgr *storage.Ma
 			return
 		}
 		defer src.Close()
-		w.Header().Set("Content-Disposition", buildContentDisposition(f.OriginalName))
+		w.Header().Set("Content-Disposition", buildContentDisposition(relpath.Base(f.OriginalName)))
 		http.ServeContent(w, r, f.OriginalName, time.Time{}, src)
 	}
 }

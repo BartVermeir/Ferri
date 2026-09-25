@@ -13,7 +13,7 @@ func TestVendoredAssetsPresent(t *testing.T) {
 	for _, f := range []string{
 		"files/tus.min.js", "files/upload.js", "files/favicon.svg",
 		"files/base.js", "files/send.js", "files/request-created.js", "files/upload-init.js",
-		"files/admin-settings.js", "files/admin-dashboard.js", "files/client-zip.js",
+		"files/admin-settings.js", "files/admin-dashboard.js",
 	} {
 		b, err := FS.ReadFile(f)
 		if err != nil {
@@ -29,11 +29,9 @@ func TestVendoredAssetsPresent(t *testing.T) {
 		t.Error("files/tus.min.js does not look like the tus-js-client build")
 	}
 
-	// upload.js imports makeZip and predictLength from this module (DEC-035).
-	cz, _ := FS.ReadFile("files/client-zip.js")
-	for _, want := range []string{"client-zip 2.5.1", "N as makeZip", "S as predictLength"} {
-		if !bytes.Contains(cz, []byte(want)) {
-			t.Errorf("files/client-zip.js lacks %q", want)
-		}
+	// Folders go as loose files (DEC-035); nothing packs in the browser.
+	if _, err := FS.ReadFile("files/client-zip.js"); err == nil {
+		t.Error("files/client-zip.js is back, but nothing uses it")
 	}
+
 }

@@ -1,9 +1,9 @@
 /**
  * upload.js — Ferri TUS upload client
  *
- * Folders, and more files than the server's per-transfer limit, are packed
- * into one ZIP in the browser (client-zip, no compression) and uploaded as a
- * single stream. Everything else is uploaded file by file. See DEC-035.
+ * Every file is its own TUS upload, one after another, so each one resumes on
+ * its own. Files from a folder carry their path in it ("Series/day1/img.jpg");
+ * the server keeps that structure and builds a ZIP on download. DEC-035.
  */
 
 (function () {
@@ -58,73 +58,36 @@
     return this.items.some(function (it) { return it.path.indexOf('/') !== -1; });
   };
 
-  // ── Limits and packing ───────────────────────────────────────────────────────
+  // ── Limits ───────────────────────────────────────────────────────────────────
 
   // readLimits takes the server limits from data attributes on el.
   function readLimits(el) {
     return {
-      maxFiles: parseInt(el && el.dataset.maxFiles, 10) || 50,
+      maxFiles: parseInt(el && el.dataset.maxFiles, 10) || 5000,
       maxBytes: Number(el && el.dataset.maxBytes) || Infinity,
     };
   }
 
-  // shouldPack: a folder, or more files than one transfer may hold, goes up as
-  // one ZIP. The ZIP keeps the folder structure; nothing is compressed.
-  function shouldPack(collection, limits) {
-    return collection.hasFolder() || collection.count() > limits.maxFiles;
-  }
-
-  // zipName: one top-level folder and nothing else → "<folder>.zip";
-  // otherwise the title (send page) or "files".
-  function zipName(collection, title) {
-    var tops = {};
-    var loose = false;
-    collection.items.forEach(function (it) {
-      var slash = it.path.indexOf('/');
-      if (slash === -1) loose = true;
-      else tops[it.path.slice(0, slash)] = true;
-    });
-    var names = Object.keys(tops);
-    var base = (!loose && names.length === 1) ? names[0] : (title || 'files');
-    base = base.replace(/[\/\\:*?"<>|\x00-\x1f]/g, '_').trim().slice(0, 100) || 'files';
-    return base + '.zip';
-  }
-
-  // buildUploads turns the collection into what uploadFiles sends. Packed:
-  // one item whose source is a ZIP stream reader of known length (TUS needs
-  // the size up front; client-zip predicts it exactly). Otherwise one item per
-  // file. Rejects with a readable message when something exceeds the limits.
-  async function buildUploads(collection, limits, title) {
-    if (!shouldPack(collection, limits)) {
-      var tooBig = collection.items.filter(function (it) { return it.file.size > limits.maxBytes; });
-      if (tooBig.length > 0) {
-        throw new Error(tooBig[0].path + ' is larger than the limit of ' + formatSize(limits.maxBytes) + '.');
-      }
-      return collection.items.map(function (it) {
-        return { source: it.file, name: it.path, size: it.file.size };
-      });
+  // buildUploads turns the collection into what uploadFiles sends: one item
+  // per file, named by its path. Throws a readable message when the
+  // selection is past the limits.
+  function buildUploads(collection, limits) {
+    if (collection.count() > limits.maxFiles) {
+      throw new Error('At most ' + limits.maxFiles + ' files per upload; this selection has ' + collection.count() + '.');
     }
-
-    var cz = await import('/static/client-zip.js');
-    var entries = collection.items.map(function (it) {
-      return { name: it.path, size: it.file.size, lastModified: new Date(it.file.lastModified), input: it.file };
-    });
-    // Metadata and input must be in the same order for an exact prediction.
-    var size = Number(cz.predictLength(entries.map(function (e) {
-      return { name: e.name, size: e.size, lastModified: e.lastModified };
-    })));
-    if (size > limits.maxBytes) {
-      throw new Error('Together these files are ' + formatSize(size) + ', more than the limit of ' + formatSize(limits.maxBytes) + '.');
+    var tooBig = collection.items.filter(function (it) { return it.file.size > limits.maxBytes; });
+    if (tooBig.length > 0) {
+      throw new Error(tooBig[0].path + ' is larger than the limit of ' + formatSize(limits.maxBytes) + '.');
     }
-    return [{ source: cz.makeZip(entries).getReader(), name: zipName(collection, title), size: size, packed: collection.count() }];
+    return collection.items.map(function (it) {
+      return { source: it.file, name: it.path, size: it.file.size };
+    });
   }
 
-  // confirmLargeTotal: loose files can each be under the limit and still add
-  // up to more. That is allowed after a warning: 600 GB per transfer is what
-  // users are told, not a hard rule (DEC-036). A packed ZIP is one upload, so
-  // for it the limit stays hard (buildUploads).
+  // confirmLargeTotal: files can each be under the limit and still add up to
+  // more. That is allowed after a warning: 600 GB per transfer is what users
+  // are told, not a hard rule (DEC-036).
   function confirmLargeTotal(uploads, limits) {
-    if (uploads.length === 1 && uploads[0].packed) return true;
     var total = uploads.reduce(function (sum, u) { return sum + u.size; }, 0);
     if (total <= limits.maxBytes) return true;
     return window.confirm('Together these files are ' + formatSize(total) +
@@ -194,8 +157,26 @@
 
     var folderBtn = document.getElementById('folder-btn');
     var folderInput = document.getElementById('folder-input');
-    var noteEl = document.getElementById('pack-note');
+    var noteEl = document.getElementById('file-note');
     var refresh = function () { renderFileList(collection, listEl, noteEl, limits); };
+
+    // The zone itself takes clicks and drops. The file input used to lie on
+    // top of it (invisible), so a dropped folder landed on the input, where
+    // each browser handles folders its own way.
+    dropEl.addEventListener('click', function (e) {
+      if (e.target === inputEl) return; // the input's own click bubbling up
+      inputEl.click();
+    });
+    dropEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputEl.click(); }
+    });
+    // A drop that misses the zone must not make the browser open the file or
+    // folder in place of this page (and lose the form).
+    ['dragover', 'drop'].forEach(function (type) {
+      window.addEventListener(type, function (e) {
+        if (!dropEl.contains(e.target)) e.preventDefault();
+      });
+    });
 
     inputEl.addEventListener('change', function () {
       collection.add(fromFileList(inputEl.files));
@@ -241,9 +222,9 @@
 
   function renderFileList(collection, listEl, noteEl, limits) {
     if (noteEl) {
-      if (collection.count() > 0 && shouldPack(collection, limits)) {
-        noteEl.textContent = collection.count() + ' file(s) will be sent as one ZIP file (' +
-          formatSize(collection.totalSize()) + ')' + (collection.hasFolder() ? ', folders included.' : '.');
+      if (collection.count() > 1) {
+        noteEl.textContent = collection.count() + ' files, ' + formatSize(collection.totalSize()) +
+          (collection.hasFolder() ? '. The folder structure is kept.' : '.');
         noteEl.hidden = false;
       } else {
         noteEl.hidden = true;
@@ -291,13 +272,18 @@
     var dropEl   = document.getElementById('file-drop');
     var inputEl  = document.getElementById('file-input');
     var listEl   = document.getElementById('file-list');
-    var noteEl   = document.getElementById('pack-note');
+    var noteEl   = document.getElementById('file-note');
     var progWrap = document.getElementById('progress-wrap');
     var progFill = document.getElementById('progress-fill');
     var progLbl  = document.getElementById('progress-label');
     var resultEl = document.getElementById('result-msg');
     var limits   = readLimits(form);
     var collection = new FileCollection();
+    // attempt is the transfer of the last try that did not finish. A new
+    // try with the same form and files continues it, and sends only the
+    // files that did not arrive yet; anything changed makes a new transfer.
+    // Before, a failure at file 500 of 605 meant a new transfer from file 1.
+    var attempt = null;
 
     initFileDrop(dropEl, inputEl, collection, listEl, limits);
 
@@ -311,7 +297,7 @@
 
       var uploads;
       try {
-        uploads = await buildUploads(collection, limits, (form.elements.title && form.elements.title.value.trim()) || '');
+        uploads = buildUploads(collection, limits);
       } catch (err) {
         showResult(resultEl, 'error', err.message);
         return;
@@ -319,43 +305,51 @@
       if (!confirmLargeTotal(uploads, limits)) return;
 
       setSubmitState(form, true);
+      hideResult(resultEl); // a new try must not show the last try's error
       if (progWrap) progWrap.style.display = '';
-      updateProgress(progFill, progLbl, 0, 'Creating transfer…');
 
       // One JSON field for the whole list: two form fields per file broke
       // at 500 files on the server's multipart part limit (audit M12).
       var data = new FormData(form);
-      data.set('files', JSON.stringify(uploads.map(function (u) { return { name: u.name, size: u.size }; })));
+      var fileList = JSON.stringify(uploads.map(function (u) { return { name: u.name, size: u.size }; }));
+      data.set('files', fileList);
+      var key = formKey(data);
 
-      var transferId;
-      var downloadUrl;
-      try {
-        var resp = await fetch('/send', { method: 'POST', body: data });
-        var json = await resp.json();
-        if (!resp.ok) {
-          showResult(resultEl, 'error', json.error || 'Failed to create transfer.');
+      if (!attempt || attempt.key !== key) {
+        updateProgress(progFill, progLbl, 0, 'Creating transfer…');
+        try {
+          var resp = await fetch('/send', { method: 'POST', body: data });
+          var json = await resp.json();
+          if (!resp.ok) {
+            showResult(resultEl, 'error', json.error || 'Failed to create transfer.');
+            setSubmitState(form, false);
+            if (progWrap) progWrap.style.display = 'none';
+            return;
+          }
+          attempt = { key: key, transferId: json.transfer_id, downloadUrl: json.download_url || null, uploaded: {} };
+        } catch (err) {
+          showResult(resultEl, 'error', 'Network error. Please try again.');
           setSubmitState(form, false);
           if (progWrap) progWrap.style.display = 'none';
           return;
         }
-        transferId = json.transfer_id;
-        downloadUrl = json.download_url || null;
-      } catch (err) {
-        showResult(resultEl, 'error', 'Network error. Please try again.');
-        setSubmitState(form, false);
-        if (progWrap) progWrap.style.display = 'none';
-        return;
       }
+      var current = attempt;
 
       try {
-        await uploadFiles(uploads, { transfer_id: transferId },
-          function (pct, label) { updateProgress(progFill, progLbl, pct, label); });
+        await uploadFiles(uploads.filter(function (u) { return !current.uploaded[uploadKey(u)]; }),
+          { transfer_id: current.transferId },
+          function (pct, label) { updateProgress(progFill, progLbl, pct, label); },
+          function (item) { current.uploaded[uploadKey(item)] = true; });
       } catch (err) {
-        showResult(resultEl, 'error', 'Upload failed: ' + err.message);
+        showResult(resultEl, 'error', 'Upload failed: ' + err.message +
+          ' Click the button again to continue: files that already arrived are not sent again.');
         setSubmitState(form, false);
         if (progWrap) progWrap.style.display = 'none';
         return;
       }
+      var downloadUrl = current.downloadUrl;
+      attempt = null;
 
       if (progWrap) progWrap.style.display = 'none';
 
@@ -391,9 +385,8 @@
     var collection = new FileCollection();
     // Files that already reached the server. A new attempt after an error
     // sends only the rest: they would otherwise show up twice in the request
-    // (audit M13). Keyed by name and size, like the file list itself.
+    // (audit M13).
     var uploaded = {};
-    function uploadKey(u) { return u.name + '\u0000' + u.size; }
 
     if (!startBtn) return;
 
@@ -407,7 +400,7 @@
 
       var uploads;
       try {
-        uploads = await buildUploads(collection, limits, '');
+        uploads = buildUploads(collection, limits);
       } catch (err) {
         showResult(resultEl, 'error', err.message);
         return;
@@ -416,6 +409,7 @@
       uploads = uploads.filter(function (u) { return !uploaded[uploadKey(u)]; });
 
       startBtn.disabled = true;
+      hideResult(resultEl);
       if (progWrap) progWrap.style.display = '';
       updateProgress(progFill, progLbl, 0, 'Starting upload…');
 
@@ -425,7 +419,8 @@
           function (pct, label) { updateProgress(progFill, progLbl, pct, label); },
           function (item) { uploaded[uploadKey(item)] = true; });
       } catch (err) {
-        showResult(resultEl, 'error', 'Upload failed: ' + err.message);
+        showResult(resultEl, 'error', 'Upload failed: ' + err.message +
+          ' Click the button again to continue: files that already arrived are not sent again.');
         startBtn.disabled = false;
         if (progWrap) progWrap.style.display = 'none';
         return;
@@ -456,13 +451,17 @@
     return ['ferri', owner, name, file.size, file.lastModified || 0].join('/');
   }
 
-  // uploadFiles sends each item one after another. An item's source is a File,
-  // or (packed) a ZIP stream reader with its exact size in item.size: a stream
-  // has no size of its own, and TUS needs one before the first byte.
+  // uploadKey identifies a file within one selection: its path and size.
+  function uploadKey(u) { return u.name + '\u0000' + u.size; }
+
+  // uploadFiles sends each item (a File) one after another. Progress counts
+  // bytes over all items, so a big file weighs more than a small one.
   // onItemDone(item), optional, runs as each item has fully reached the server.
   function uploadFiles(uploads, extraMeta, onProgress, onItemDone) {
     return new Promise(function (resolve, reject) {
       var index = 0;
+      var totalBytes = uploads.reduce(function (sum, u) { return sum + u.size; }, 0);
+      var doneBytes = 0;
 
       function uploadNext() {
         if (index >= uploads.length) { resolve(); return; }
@@ -471,32 +470,28 @@
         var num = index + 1;
         index++;
 
-        var resumable = item.source instanceof Blob;
         var options = {
           endpoint: '/tus/',
           retryDelays: RETRY_DELAYS,
           chunkSize: 50 * 1024 * 1024,
-          // A File can be resumed: after an error, a new attempt, or a reload
-          // of the upload page it continues where the server stopped instead
-          // of starting over as a new file (audit M10, M13). A packed ZIP is a
-          // stream and cannot be read again from the middle.
-          storeFingerprintForResuming: resumable,
+          // Resumable: after an error, a new attempt, or a reload of the
+          // upload page it continues where the server stopped instead of
+          // starting over as a new file (audit M10, M13).
+          storeFingerprintForResuming: true,
           removeFingerprintOnSuccess: true,
           fingerprint: function (file) {
             return Promise.resolve(uploadFingerprint(file, item.name, extraMeta));
           },
           metadata: Object.assign({ filename: item.name }, extraMeta),
 
-          onProgress: function (bytesUploaded, bytesTotal) {
-            var pct = bytesTotal > 0
-              ? Math.round(((num - 1 + bytesUploaded / bytesTotal) / uploads.length) * 100)
-              : 0;
-            var what = item.packed ? 'Packing and uploading ' + item.packed + ' files as ' + item.name : 'Uploading ' + item.name;
-            if (onProgress) onProgress(pct,
-              what + ': ' + Math.round(bytesUploaded / bytesTotal * 100) + '% (' + num + '/' + uploads.length + ')');
+          onProgress: function (bytesUploaded) {
+            var pct = totalBytes > 0 ? Math.floor((doneBytes + bytesUploaded) / totalBytes * 100) : 0;
+            if (onProgress) onProgress(pct, 'Uploading ' + item.name + ' (' + num + '/' + uploads.length + ', ' +
+              formatSize(doneBytes + bytesUploaded) + ' of ' + formatSize(totalBytes) + ')');
           },
 
           onSuccess: function () {
+            doneBytes += item.size;
             if (onItemDone) onItemDone(item);
             uploadNext();
           },
@@ -510,15 +505,11 @@
           },
 
           onError: function (error) {
-            reject(new Error(item.name + ': ' + serverReason(error)));
+            reject(new Error('file ' + num + ' of ' + uploads.length + ', ' + item.name + ': ' + serverReason(error) + '.'));
           },
         };
-        if (!(item.source instanceof Blob)) {
-          options.uploadSize = item.size;
-        }
 
         var upload = new tus.Upload(item.source, options);
-        if (!resumable) { upload.start(); return; }
         upload.findPreviousUploads().then(function (previous) {
           if (previous.length > 0) upload.resumeFromPreviousUpload(previous[0]);
           upload.start();
@@ -547,9 +538,23 @@
 
   // ── UI helpers ───────────────────────────────────────────────────────────────
 
+  // formKey is everything the send form would create a transfer from, the
+  // file list included: equal keys mean a new try may continue the transfer.
+  function formKey(data) {
+    var parts = [];
+    data.forEach(function (value, name) {
+      if (typeof value === 'string') parts.push(name + '=' + value);
+    });
+    return parts.join('\u0000');
+  }
+
   function updateProgress(fillEl, labelEl, pct, label) {
     if (fillEl) fillEl.style.width = pct + '%';
     if (labelEl) labelEl.textContent = label;
+  }
+
+  function hideResult(el) {
+    if (el) el.style.display = 'none';
   }
 
   function showResult(el, type, msg) {

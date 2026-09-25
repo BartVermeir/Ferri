@@ -19,8 +19,8 @@
           <div class="file-row">
             <div class="file-row-icon">📄</div>
             <div class="file-row-info">
-              <div class="file-row-name">{{.OriginalName}}</div>
-              <div class="file-row-size">{{.SizeBytes | formatSize}}</div>
+              <div class="file-row-name" title="{{.OriginalName}}">{{fileBase .OriginalName}}</div>
+              <div class="file-row-size">{{with fileDir .OriginalName}}<span class="file-row-dir">{{.}}/</span> · {{end}}{{.SizeBytes | formatSize}}</div>
             </div>
             <a href="{{$.DownloadBase}}/file/{{.ID}}" class="btn btn-primary btn-sm">Download</a>
           </div>

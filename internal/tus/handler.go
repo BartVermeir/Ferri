@@ -44,6 +44,7 @@ import (
 
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
+	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
 	"github.com/BartVermeir/Ferri/internal/token"
@@ -177,10 +178,9 @@ func (h *Handler) preCreateTransferFile(
 		return rejectWith(http.StatusInsufficientStorage, msgStorageFull)
 	}
 
-	originalName := stringMeta(meta, "filename")
-	if originalName == "" {
-		originalName = "unnamed"
-	}
+	// A file from a folder keeps its path in the folder (DEC-035); Clean
+	// makes it a safe relative path before it is stored.
+	originalName := relpath.Clean(stringMeta(meta, "filename"))
 
 	fileID := token.Generate()
 	storagePath := "transfers/" + transferID + "/" + fileID
@@ -230,10 +230,9 @@ func (h *Handler) preCreateRequestFile(
 		return rejectWith(http.StatusInsufficientStorage, msgStorageFull)
 	}
 
-	originalName := stringMeta(meta, "filename")
-	if originalName == "" {
-		originalName = "unnamed"
-	}
+	// A file from a folder keeps its path in the folder (DEC-035); Clean
+	// makes it a safe relative path before it is stored.
+	originalName := relpath.Clean(stringMeta(meta, "filename"))
 
 	fileID := token.Generate()
 	storagePath := "requests/" + requestID + "/" + fileID

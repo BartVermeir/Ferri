@@ -7,6 +7,7 @@ package jobs
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -505,5 +506,28 @@ func TestExpirySummary_EscapesNames(t *testing.T) {
 	out := buildExpirySummaryHTML(e)
 	if strings.Contains(out, "<b>x</b>") || !strings.Contains(out, "&lt;b&gt;x&lt;/b&gt;.mov") {
 		t.Fatalf("file name not escaped in HTML summary:\n%s", out)
+	}
+}
+
+// DEC-035: with a folder of hundreds of files the summary lists at most 20
+// per recipient, and counts the rest.
+func TestExpirySummary_CapsLongLists(t *testing.T) {
+	e := expirySummary{Loc: time.UTC, Transfer: store.Transfer{NotifyRecipients: true}}
+	var events []store.DownloadEvent
+	for i := 0; i < 60; i++ {
+		id := fmt.Sprintf("f%02d", i)
+		e.Files = append(e.Files, store.File{ID: id, OriginalName: "Series/img" + id + ".jpg", Status: "complete"})
+		if i < 30 { // downloaded one by one, each at its own time
+			events = append(events, store.DownloadEvent{FileID: sql.NullString{String: id, Valid: true}, DownloadedAt: int64(1000 + i*600)})
+		}
+	}
+	e.History = []store.RecipientHistory{{Email: "bob@example.com", DownloadCount: 30, Events: events}}
+
+	text := buildExpirySummaryText(e)
+	if strings.Count(text, "  • ") != 20 || !strings.Contains(text, "… and 10 more files downloaded") {
+		t.Errorf("downloaded list not capped:\n%s", text)
+	}
+	if !strings.Contains(text, "30 of 60 files") || !strings.Contains(text, ", … and 10 more\n") {
+		t.Errorf("status or not-downloaded list wrong:\n%s", text)
 	}
 }

@@ -126,21 +126,30 @@ func TestSendCreate_FileListAsJSON(t *testing.T) {
 	}
 }
 
-// 1600 files in one request: the server must answer with the real reason,
-// never "Sender name is required" (what a colleague got, 2026-09-25).
+// A folder of 1600 files (what a colleague sent, 2026-09-25) goes as loose
+// files: accepted, with long folder paths. Past max_files_per_transfer the
+// server says so, never "Sender name is required".
 func TestSendCreate_ManyFilesGetTheRealError(t *testing.T) {
 	stores := newTestStores(t)
-
-	// New format: the file list is read, the per-transfer limit applies.
-	var list []string
-	for i := 0; i < 1600; i++ {
-		list = append(list, fmt.Sprintf(`{"name":"img%d.jpg","size":1}`, i))
+	fileList := func(n int) string {
+		var list []string
+		for i := 0; i < n; i++ {
+			list = append(list, fmt.Sprintf(`{"name":"Project %s/day %d/img%05d.jpg","size":1}`, strings.Repeat("x", 120), i%40, i))
+		}
+		return "[" + strings.Join(list, ",") + "]"
 	}
-	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {
-		w.WriteField("files", "["+strings.Join(list, ",")+"]")
-	})
-	if code != http.StatusBadRequest || !strings.Contains(msg, "Maximum 50 files") {
-		t.Errorf("JSON with 1600 files: status = %d, error = %q, want the file limit", code, msg)
+
+	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) { w.WriteField("files", fileList(1600)) })
+	if code != http.StatusOK {
+		t.Errorf("folder of 1600 files: status = %d, error = %q, want it accepted", code, msg)
+	}
+	code, msg = postSendMultipart(t, stores, func(w *multipart.Writer) { w.WriteField("files", fileList(5000)) })
+	if code != http.StatusOK {
+		t.Errorf("5000 files with long paths: status = %d, error = %q, want it accepted (body cap)", code, msg)
+	}
+	code, msg = postSendMultipart(t, stores, func(w *multipart.Writer) { w.WriteField("files", fileList(5001)) })
+	if code != http.StatusBadRequest || !strings.Contains(msg, "Maximum 5000 files") {
+		t.Errorf("5001 files: status = %d, error = %q, want the file limit", code, msg)
 	}
 
 	// Old format, 3200 parts: Go refuses the form; say so.
@@ -167,14 +176,14 @@ func TestSendCreate_OldFormatStillAccepted(t *testing.T) {
 	}
 }
 
-// The send page carries the limits upload.js packs by.
+// The send page carries the limits upload.js checks.
 func TestSendPage_CarriesLimits(t *testing.T) {
 	stores := newTestStores(t)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
 	SendPage(newTestConfig(), stores).ServeHTTP(rr, req)
 	body := rr.Body.String()
-	for _, want := range []string{`data-max-files="50"`, `data-max-bytes="644245094400"`, `id="folder-btn"`, `name="sender_name" autocomplete="name" required`} {
+	for _, want := range []string{`data-max-files="5000"`, `data-max-bytes="644245094400"`, `id="folder-btn"`, `name="sender_name" autocomplete="name" required`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("send page lacks %s", want)
 		}
@@ -186,10 +195,10 @@ func TestSendPage_CarriesLimits(t *testing.T) {
 func TestSendCreate_Bounds(t *testing.T) {
 	stores := newTestStores(t)
 	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {
-		w.WriteField("message", strings.Repeat("x", maxFormBytes+1))
+		w.WriteField("message", strings.Repeat("x", maxSendBytes+1))
 	})
 	if code != http.StatusBadRequest || !strings.Contains(msg, "Could not read the form") {
-		t.Errorf("body over %d bytes: status = %d, error = %q", maxFormBytes, code, msg)
+		t.Errorf("body over %d bytes: status = %d, error = %q", maxSendBytes, code, msg)
 	}
 
 	var body bytes.Buffer

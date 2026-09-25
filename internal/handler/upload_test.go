@@ -654,7 +654,7 @@ func TestUploadPage_CarriesLimits(t *testing.T) {
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/ul/"+tok, nil))
 	body := rr.Body.String()
-	for _, want := range []string{`data-max-files="50"`, `data-max-bytes="644245094400"`, `id="folder-btn"`} {
+	for _, want := range []string{`data-max-files="5000"`, `data-max-bytes="644245094400"`, `id="folder-btn"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("upload page lacks %s", want)
 		}

@@ -72,14 +72,14 @@
               <textarea name="recipients" id="recipients" rows="2" required></textarea>
             </div>
             <label>Files</label>
-            <div class="file-drop" id="file-drop">
+            <div class="file-drop" id="file-drop" role="button" tabindex="0" aria-label="Select files, or drop files or folders here">
               <div class="file-drop-icon">↑</div>
               <div class="file-drop-text">Click to select or drag &amp; drop files or folders</div>
-              <input type="file" id="file-input" multiple>
+              <input type="file" id="file-input" multiple hidden>
             </div>
             <div class="mt-8"><button type="button" class="btn btn-secondary btn-sm" id="folder-btn">Select a folder</button></div>
             <input type="file" id="folder-input" webkitdirectory multiple hidden>
-            <p class="text-muted mt-8" id="pack-note" hidden></p>
+            <p class="text-muted mt-8" id="file-note" hidden></p>
             <ul class="file-list" id="file-list"></ul>
             <label>Expires after</label>
             <select name="expiry_hours">

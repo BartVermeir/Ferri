@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/store"
 	"github.com/BartVermeir/Ferri/static"
 	"github.com/BartVermeir/Ferri/web"
@@ -77,6 +78,10 @@ func buildTemplates() {
 			}
 			return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 		},
+		// A file from a folder is stored with its path (DEC-035): the page
+		// shows the name, with the folder under it.
+		"fileBase":    relpath.Base,
+		"fileDir":     relpath.Dir,
 		"uploadJSVer": func() string { return uploadJSVer },
 		"appVersion":  func() string { return appVersion },
 	}
