@@ -564,7 +564,7 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 **Limits and risks:**
 - `client-zip` marks every archive "version 4.5 needed to extract" (ZIP64 capable). The built-in extractors of Windows and macOS and 7-Zip handle this; some very old tools do not.
-- A packed upload is a stream and cannot resume after a page reload. Loose files cannot resume after a reload either (see the audit, M10).
+- A packed upload is a stream and cannot resume after a page reload or a failed attempt; it starts over. Loose files do resume (DEC-037).
 - The recipient cannot download a single file from a packed folder.
 
 ---
@@ -587,6 +587,28 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 - The free-space check sees the space at the start of an upload, not what running uploads will still write. The 50 GB margin has to absorb that.
 - A 600 GB upload needs 650 GB free, because the upload plus the 50 GB margin must fit.
 - On SMB, a unit of free space is go-smb2's `BlockSize()` (bytes per sector) times `FragmentSize()` (sectors per unit). Using `BlockSize()` alone under-reports the space, usually by a factor of 8.
+
+---
+
+## DEC-037: Uploads survive a restart and resume after an error
+
+**Decision:** The browser retries a failed upload request for about 8.5 minutes (`RETRY_DELAYS` in `upload.js`), and a file (not a packed ZIP stream) is resumable: tus-js-client remembers its upload URL in `localStorage` and continues from the server's offset after an error, a new attempt or a reload of the upload page. The remembered key includes the transfer or request (`uploadFingerprint`). On the upload page, a new attempt skips the files that already reached the server. `scripts/deploy.sh` warns and asks before restarting when the app handled upload chunks in the last 10 minutes (`FORCE=1` skips the question).
+
+**Rationale:** a deploy stops the app for up to a few minutes. The old retries gave up after 38 seconds, and without resuming a 400 GB upload started over, while a new attempt on the upload page stored every file that had already arrived a second time. Tested in a browser: the app stopped during a 150 MB upload for 20 seconds, and the upload continued and completed with intact bytes.
+
+**Why the transfer or request is in the key:** tus-js-client's own key is name, type, size and date. A second transfer with the same file would then continue the first transfer's upload, and the file would land in the wrong transfer.
+
+**Limits and risks:**
+- On the send page, a reload loses the form, so a new attempt creates a new transfer and starts over. The abandoned transfer stays `pending` and expires (DEC-016).
+- A packed ZIP is not resumable (DEC-035).
+
+---
+
+## DEC-038: ZIP downloads are stored, only hold complete files, and never fail silently
+
+**Decision:** Transfer and request ZIPs are written by one function (`streamZIP`). Entries are stored, not deflated. Only complete files are included; on the requester's routes, files that are still uploading or broke off are not listed or downloadable either. A file that cannot be opened is left out and named in `MISSING_FILES.txt` inside the ZIP. A failure while a file is being written aborts the response (`http.ErrAbortHandler`), so the browser shows a failed download. ZIP and file names use `buildContentDisposition` everywhere (RFC 5987, accents and spaces intact); an untitled request gives `files.zip`.
+
+**Rationale:** a skipped file used to give a ZIP with status 200 and no word about it, and a read error mid-file gave a truncated file in an archive that looked fine. Deflating video costs a lot of CPU for close to nothing.
 
 ---
 

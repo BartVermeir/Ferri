@@ -15,14 +15,11 @@ package handler
 //   The handler marks the request completed and enqueues a notification mail.
 
 import (
-	"archive/zip"
 	"context"
 	"fmt"
 	"html"
-	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -411,7 +408,7 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 		}{
 			baseData:     baseData{PageTitle: req.Title, Settings: settings},
 			Request:      req,
-			Files:        files,
+			Files:        completeRequestFiles(files),
 			DownloadBase: "/ul/" + tok,
 		})
 	}
@@ -437,7 +434,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 
 		// Read file fresh from DB to get latest tus_upload_id
 		target, err := stores.Requests.GetRequestFileByID(fileID)
-		if err != nil || target == nil || target.UploadRequestID != req.ID {
+		if err != nil || target == nil || target.UploadRequestID != req.ID || target.Status != "complete" {
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
@@ -458,7 +455,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 		}
 		defer f.Close()
 
-		w.Header().Set("Content-Disposition", "attachment; filename=" + url.QueryEscape(target.OriginalName))
+		w.Header().Set("Content-Disposition", buildContentDisposition(target.OriginalName))
 		http.ServeContent(w, r, target.OriginalName, time.Time{}, f)
 	}
 }
@@ -487,36 +484,28 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 		}
 
 		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("Content-Disposition", "attachment; filename=" + url.QueryEscape(req.Title) + ".zip")
+		w.Header().Set("Content-Disposition", buildContentDisposition(zipFileName(req.Title)))
 
-		zw := zip.NewWriter(w)
-		defer zw.Close()
+		var items []zipItem
+		for _, f := range completeRequestFiles(files) {
+			items = append(items, zipItem{ID: f.ID, Name: f.OriginalName, StoragePath: f.StoragePath, TUSUploadID: f.TUSUploadID})
+		}
+		streamZIP(w, mgr, items, "request zip")
+	}
+}
 
-		seen := map[string]int{}
-		buf := make([]byte, zipCopyBufSize)
-		for _, f := range files {
-			src, err := mgr.Open(f.StoragePath)
-			if err != nil && f.TUSUploadID.Valid && f.TUSUploadID.String != "" {
-				src, err = mgr.Open(f.TUSUploadID.String)
-			}
-			if err != nil {
-				slog.Error("request zip: open file", "file_id", f.ID, "error", err)
-				continue
-			}
-			entry, err := zw.Create(uniqueZipName(seen, f.OriginalName))
-			if err != nil {
-				src.Close()
-				slog.Error("request zip: create entry", "file_id", f.ID, "error", err)
-				continue
-			}
-			if _, err := io.CopyBuffer(entry, src, buf); err != nil {
-				src.Close()
-				slog.Error("request zip: copy file", "file_id", f.ID, "error", err)
-				continue
-			}
-			src.Close()
+// completeRequestFiles keeps the files that finished uploading. A row stays
+// 'uploading' while a file is still coming in, and for good when that upload
+// broke off (until the stalled cleanup); the requester must not get its
+// partial data as if it were the file (audit M9).
+func completeRequestFiles(files []store.UploadRequestFile) []store.UploadRequestFile {
+	var out []store.UploadRequestFile
+	for _, f := range files {
+		if f.Status == "complete" {
+			out = append(out, f)
 		}
 	}
+	return out
 }
 
 

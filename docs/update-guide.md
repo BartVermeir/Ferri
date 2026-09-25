@@ -275,8 +275,8 @@ VERSION=$(git describe --tags --always)
 # 1. Pull the latest distroless image
 docker pull gcr.io/distroless/static-debian12:latest
 
-# 2. Rebuild the application image — the build stage uses golang:1.26-alpine
-#    Check for a newer Go version if needed
+# 2. Rebuild the application image — the build stage uses the pinned
+#    golang:1.26.x-alpine from the Dockerfile (see below for a newer patch)
 docker build --no-cache -t ferri:${VERSION}-rebase .
 
 # 3. Verify the new image size is reasonable
@@ -286,7 +286,7 @@ docker images ferri
 # 4. Deploy using the standard update procedure (§2)
 ```
 
-Go version updates (e.g. 1.26 → 1.27) require changing the `FROM golang:1.26-alpine` line in the Dockerfile (and the `go` directive in `go.mod`) and rebuilding. Check the Go release notes for any breaking changes in the standard library before upgrading. Run `govulncheck ./...` after upgrading.
+Go is pinned to a patch release in two places that must match: `FROM golang:1.26.x-alpine` in the Dockerfile and `toolchain go1.26.x` in `go.mod` (CI reads the latter). Security fixes of the standard library arrive as patch releases, so bump both when `govulncheck` or the Go release notes report one. `scripts/deploy.sh` builds with `--pull`, so the runtime image is fetched fresh on every deploy. A new minor version (e.g. 1.26 → 1.27) also changes the `go` directive. Check the Go release notes for any breaking changes in the standard library before upgrading. Run `govulncheck ./...` after upgrading.
 
 ---
 

@@ -16,6 +16,7 @@ package handler
 
 import (
 	"archive/zip"
+	"database/sql"
 	"crypto/subtle"
 	"fmt"
 	"html"
@@ -293,6 +294,22 @@ func buildContentDisposition(originalName string) string {
 	return fmt.Sprintf(`attachment; filename=%q; filename*=UTF-8''%s`, ascii, encoded)
 }
 
+// zipFileName derives the ZIP's file name from a transfer or request title:
+// letters (accents included), digits, '-' and '_' stay, spaces become '_',
+// anything else '_'. An empty title gives "files.zip", not ".zip".
+func zipFileName(title string) string {
+	name := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, strings.TrimSpace(title))
+	if name == "" {
+		name = "files"
+	}
+	return name + ".zip"
+}
+
 // sanitiseASCIIFilename replaces non-ASCII and special characters with underscores
 // to produce a safe ASCII fallback for the legacy `filename` parameter.
 func sanitiseASCIIFilename(name string) string {
@@ -534,49 +551,76 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 			}
 		}
 
-		// Derive a safe ZIP filename from the transfer title
-		zipName := strings.Map(func(r rune) rune {
-			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == ' ' {
-				return r
-			}
-			return '_'
-		}, transfer.Title)
-		if zipName == "" {
-			zipName = "files"
-		}
-		zipName = strings.ReplaceAll(zipName, " ", "_") + ".zip"
-
 		w.Header().Set("Content-Type", "application/zip")
-		w.Header().Set("Content-Disposition", "attachment; filename="+url.QueryEscape(zipName))
+		w.Header().Set("Content-Disposition", buildContentDisposition(zipFileName(transfer.Title)))
 
-		zw := zip.NewWriter(w)
-		defer zw.Close()
-
-		seen := map[string]int{}
-		buf := make([]byte, zipCopyBufSize)
+		items := make([]zipItem, 0, len(files))
 		for _, f := range files {
-			src, err := mgr.Open(f.StoragePath)
-			if err != nil && f.TUSUploadID.Valid {
-				src, err = mgr.Open(f.TUSUploadID.String)
-			}
-			if err != nil {
-				slog.Error("zip: open file", "file_id", f.ID, "error", err)
-				continue
-			}
-
-			entry, err := zw.Create(uniqueZipName(seen, f.OriginalName))
-			if err != nil {
-				src.Close()
-				slog.Error("zip: create entry", "file_id", f.ID, "error", err)
-				continue
-			}
-			if _, err := io.CopyBuffer(entry, src, buf); err != nil {
-				src.Close()
-				slog.Error("zip: copy file", "file_id", f.ID, "error", err)
-				continue
-			}
-			src.Close()
+			items = append(items, zipItem{ID: f.ID, Name: f.OriginalName, StoragePath: f.StoragePath, TUSUploadID: f.TUSUploadID})
 		}
+		streamZIP(w, mgr, items, "zip")
+	}
+}
+
+// zipItem is one file for streamZIP.
+type zipItem struct {
+	ID          string
+	Name        string
+	StoragePath string
+	TUSUploadID sql.NullString
+}
+
+// streamZIP writes items as a ZIP to w, for transfers and requests alike.
+// Entries are stored, not deflated: the files are mostly video, which does
+// not compress, and deflating hundreds of GB costs a lot of CPU for nothing.
+//
+// Failures are never silent (audit M9). A file that cannot be opened is left
+// out and named in MISSING_FILES.txt inside the ZIP. A failure while a file
+// is being written aborts the whole response: the entry would otherwise end
+// up truncated in an archive that looks fine, while an aborted download shows
+// as failed in the browser.
+func streamZIP(w http.ResponseWriter, mgr *storage.Manager, items []zipItem, logPrefix string) {
+	zw := zip.NewWriter(w)
+	seen := map[string]int{}
+	buf := make([]byte, zipCopyBufSize)
+	now := time.Now()
+	var missing []string
+	for _, it := range items {
+		src, err := mgr.Open(it.StoragePath)
+		if err != nil && it.TUSUploadID.Valid && it.TUSUploadID.String != "" {
+			src, err = mgr.Open(it.TUSUploadID.String)
+		}
+		if err != nil {
+			slog.Error(logPrefix+": open file, left out of the ZIP", "file_id", it.ID, "error", err)
+			missing = append(missing, it.Name)
+			continue
+		}
+		entry, err := zw.CreateHeader(&zip.FileHeader{Name: uniqueZipName(seen, it.Name), Method: zip.Store, Modified: now})
+		if err == nil {
+			_, err = io.CopyBuffer(entry, src, buf)
+		}
+		src.Close()
+		if err != nil {
+			slog.Error(logPrefix+": write file, aborting the download", "file_id", it.ID, "error", err)
+			panic(http.ErrAbortHandler)
+		}
+	}
+	if len(missing) > 0 {
+		note := "These files could not be read from storage and are not in this ZIP.\r\n" +
+			"Download them one by one, or ask the sender.\r\n\r\n" +
+			strings.Join(missing, "\r\n") + "\r\n"
+		entry, err := zw.CreateHeader(&zip.FileHeader{Name: uniqueZipName(seen, "MISSING_FILES.txt"), Method: zip.Store, Modified: now})
+		if err == nil {
+			_, err = io.WriteString(entry, note)
+		}
+		if err != nil {
+			slog.Error(logPrefix+": write MISSING_FILES.txt, aborting the download", "error", err)
+			panic(http.ErrAbortHandler)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		slog.Error(logPrefix+": finish ZIP", "error", err)
+		panic(http.ErrAbortHandler)
 	}
 }
 

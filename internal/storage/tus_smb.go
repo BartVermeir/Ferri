@@ -21,14 +21,18 @@ import (
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 )
 
-// smbTUSStore is a tusd.DataStore backed by an SMB share.
+// smbTUSStore is a tusd.DataStore backed by an SMB share. Every share
+// operation goes through the backend's withShare, which reconnects once when
+// the connection or session is gone (audit M6). It used to hold the raw share
+// pointer, so after the server dropped an idle session every upload failed
+// until some download or delete happened to trigger a reconnect.
 type smbTUSStore struct {
-	share    *smb2.Share
+	b        *SMBBackend
 	basePath string // path prefix on the share, e.g. "" or "ferri"
 }
 
-func newSMBTUSStore(share *smb2.Share, basePath string) *smbTUSStore {
-	return &smbTUSStore{share: share, basePath: basePath}
+func newSMBTUSStore(b *SMBBackend, basePath string) *smbTUSStore {
+	return &smbTUSStore{b: b, basePath: basePath}
 }
 
 // smbPath returns the full path on the share for a given name.
@@ -47,11 +51,16 @@ func (s *smbTUSStore) NewUpload(ctx context.Context, info tusd.FileInfo) (tusd.U
 
 	// Create empty data file
 	binPath := s.smbPath(info.ID)
-	f, err := s.share.OpenFile(binPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	err := s.b.withShare(func(sh *smb2.Share) error {
+		f, err := sh.OpenFile(binPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			return err
+		}
+		return f.Close()
+	})
 	if err != nil {
 		return nil, fmt.Errorf("smb tus: create data file %q: %w", binPath, err)
 	}
-	f.Close()
 
 	// Write .info file
 	upload := &smbUpload{store: s, info: info}
@@ -62,16 +71,32 @@ func (s *smbTUSStore) NewUpload(ctx context.Context, info tusd.FileInfo) (tusd.U
 	return upload, nil
 }
 
-// GetUpload retrieves an existing TUS upload from the SMB share.
+// GetUpload retrieves an existing TUS upload from the SMB share. Only a
+// missing .info file is ErrNotFound; any other error is returned as is. Before,
+// every error was "not found", so after a network hiccup the browser dropped
+// an upload that was still there instead of retrying it (audit M6).
 func (s *smbTUSStore) GetUpload(ctx context.Context, id string) (tusd.Upload, error) {
 	infoPath := s.smbPath(id + ".info")
-	f, err := s.share.Open(infoPath)
-	if err != nil {
+	binPath := s.smbPath(id)
+	var data []byte
+	var size int64 = -1
+	err := s.b.withShare(func(sh *smb2.Share) error {
+		f, err := sh.Open(infoPath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if data, err = io.ReadAll(f); err != nil {
+			return err
+		}
+		if fi, err := sh.Stat(binPath); err == nil {
+			size = fi.Size()
+		}
+		return nil
+	})
+	if isNotExist(err) {
 		return nil, tusd.ErrNotFound
 	}
-	defer f.Close()
-
-	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("smb tus: read info file %q: %w", infoPath, err)
 	}
@@ -82,10 +107,8 @@ func (s *smbTUSStore) GetUpload(ctx context.Context, id string) (tusd.Upload, er
 	}
 
 	// Sync offset from actual data file size (mirrors filestore behaviour).
-	binPath := s.smbPath(id)
-	fi, err := s.share.Stat(binPath)
-	if err == nil {
-		info.Offset = fi.Size()
+	if size >= 0 {
+		info.Offset = size
 	}
 
 	return &smbUpload{store: s, info: info}, nil
@@ -110,9 +133,18 @@ const writeBufSize = 1 << 20 // 1MB
 
 // WriteChunk appends src to the data file starting at offset.
 // TUS guarantees sequential chunks, so appending is always correct.
+// Only opening the file may reconnect and retry: once bytes of src are
+// consumed, a retry would write the rest at the wrong place. A failure
+// mid-copy returns what was written; the client then asks for the offset
+// (GetUpload reads the real file size) and resumes from there.
 func (u *smbUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error) {
 	binPath := u.store.smbPath(u.info.ID)
-	f, err := u.store.share.OpenFile(binPath, os.O_WRONLY|os.O_APPEND, 0o644)
+	var f *smb2.File
+	err := u.store.b.withShare(func(sh *smb2.Share) error {
+		var err error
+		f, err = sh.OpenFile(binPath, os.O_WRONLY|os.O_APPEND, 0o644)
+		return err
+	})
 	if err != nil {
 		return 0, fmt.Errorf("smb tus: open data file for write %q: %w", binPath, err)
 	}
@@ -126,7 +158,12 @@ func (u *smbUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader)
 
 func (u *smbUpload) GetReader(ctx context.Context) (io.ReadCloser, error) {
 	binPath := u.store.smbPath(u.info.ID)
-	f, err := u.store.share.Open(binPath)
+	var f *smb2.File
+	err := u.store.b.withShare(func(sh *smb2.Share) error {
+		var err error
+		f, err = sh.Open(binPath)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("smb tus: open data file for read %q: %w", binPath, err)
 	}
@@ -138,17 +175,27 @@ func (u *smbUpload) FinishUpload(ctx context.Context) error {
 	return u.writeInfo()
 }
 
+// writeInfo rewrites the whole .info file, so retrying it after a reconnect
+// is safe.
 func (u *smbUpload) writeInfo() error {
 	infoPath := u.store.smbPath(u.info.ID + ".info")
 	data, err := json.Marshal(u.info)
 	if err != nil {
 		return fmt.Errorf("marshal info: %w", err)
 	}
-	f, err := u.store.share.OpenFile(infoPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	err = u.store.b.withShare(func(sh *smb2.Share) error {
+		f, err := sh.OpenFile(infoPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			return err
+		}
+		return f.Close()
+	})
 	if err != nil {
-		return fmt.Errorf("open info file %q: %w", infoPath, err)
+		return fmt.Errorf("write info file %q: %w", infoPath, err)
 	}
-	defer f.Close()
-	_, err = f.Write(data)
-	return err
+	return nil
 }

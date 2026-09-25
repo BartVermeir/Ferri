@@ -677,7 +677,14 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		}
 
 		// Only update password if a new one was provided (empty = keep existing).
+		// Keeping it is only allowed for the same server and account: the
+		// backend reload below would otherwise log in to a new host with the
+		// stored credential (audit M4).
 		newPassword := r.FormValue("storage.smb_password")
+		if newPassword == "" && storageType == "smb" && !mayReuseSMBPassword(stores.Settings.Get(), r) {
+			http.Redirect(w, r, "/admin/settings?storage_error="+url.QueryEscape(msgSMBPasswordAgain), http.StatusSeeOther)
+			return
+		}
 		if newPassword != "" {
 			encrypted, err := storage.Encrypt(cfg.Admin.Token, newPassword)
 			if err != nil {
@@ -709,6 +716,25 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		slog.Info("admin: storage settings saved", "type", storageType)
 		http.Redirect(w, r, "/admin/settings?storage_saved=1", http.StatusSeeOther)
 	}
+}
+
+const msgSMBPasswordAgain = "Enter the password again: host, share, username or domain differ from the saved settings."
+
+// mayReuseSMBPassword reports whether an empty password field may fall back
+// to the saved password: only when there is none, or when the form's host,
+// share, username and domain match the saved ones. Otherwise anyone with an
+// admin session could enter their own server and capture the service
+// account's NTLM login (audit M4). Host and domain are case-insensitive, like
+// DNS and Windows domains.
+func mayReuseSMBPassword(saved *store.Settings, r *http.Request) bool {
+	if saved.SMBPasswordEncrypted == "" {
+		return true
+	}
+	form := func(k string) string { return strings.TrimSpace(r.FormValue(k)) }
+	return strings.EqualFold(form("storage.smb_host"), saved.SMBHost) &&
+		form("storage.smb_share") == saved.SMBShare &&
+		form("storage.smb_username") == saved.SMBUsername &&
+		strings.EqualFold(form("storage.smb_domain"), saved.SMBDomain)
 }
 
 // AdminStorageTest handles POST /admin/settings/storage/test.
@@ -744,8 +770,13 @@ func AdminStorageTest(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 		username := strings.TrimSpace(r.FormValue("storage.smb_username"))
 		domain := strings.TrimSpace(r.FormValue("storage.smb_domain"))
 
-		// Use submitted password if provided; otherwise decrypt stored one.
+		// Use submitted password if provided; otherwise decrypt the stored one,
+		// but only for the stored server and account (audit M4).
 		password := r.FormValue("storage.smb_password")
+		if password == "" && !mayReuseSMBPassword(stores.Settings.Get(), r) {
+			writeJSON(w, map[string]any{"ok": false, "error": msgSMBPasswordAgain})
+			return
+		}
 		if password == "" {
 			settings := stores.Settings.Get()
 			if settings.SMBPasswordEncrypted != "" {

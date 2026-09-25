@@ -814,7 +814,7 @@ Cleans up TUS uploads abandoned mid-way. Runs independently of transfer expiry.
 ### Dockerfile (multi-stage)
 
 ```dockerfile
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26.8-alpine AS builder   # pinned patch, same as toolchain in go.mod
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download

@@ -389,6 +389,11 @@
     var resultEl = document.getElementById('result-msg');
     var limits   = readLimits(document.body);
     var collection = new FileCollection();
+    // Files that already reached the server. A new attempt after an error
+    // sends only the rest: they would otherwise show up twice in the request
+    // (audit M13). Keyed by name and size, like the file list itself.
+    var uploaded = {};
+    function uploadKey(u) { return u.name + '\u0000' + u.size; }
 
     if (!startBtn) return;
 
@@ -408,6 +413,7 @@
         return;
       }
       if (!confirmLargeTotal(uploads, limits)) return;
+      uploads = uploads.filter(function (u) { return !uploaded[uploadKey(u)]; });
 
       startBtn.disabled = true;
       if (progWrap) progWrap.style.display = '';
@@ -416,7 +422,8 @@
       try {
         await uploadFiles(uploads,
           { upload_request_token: window.FERRI_UPLOAD_TOKEN },
-          function (pct, label) { updateProgress(progFill, progLbl, pct, label); });
+          function (pct, label) { updateProgress(progFill, progLbl, pct, label); },
+          function (item) { uploaded[uploadKey(item)] = true; });
       } catch (err) {
         showResult(resultEl, 'error', 'Upload failed: ' + err.message);
         startBtn.disabled = false;
@@ -435,10 +442,25 @@
 
   // ── TUS upload engine ────────────────────────────────────────────────────────
 
+  // RETRY_DELAYS: about 8.5 minutes in total. A deploy stops the app for up
+  // to a few minutes (graceful shutdown, then start); the old 38 seconds gave
+  // up long before it was back, and a 400 GB upload started over (audit M10).
+  var RETRY_DELAYS = [0, 3000, 5000, 10000, 20000, 30000, 60000, 60000, 60000, 120000, 120000];
+
+  // uploadFingerprint is the key under which tus-js-client remembers an
+  // upload for resuming. It includes the transfer or request it belongs to:
+  // tus-js-client's own key is only name, type, size and date, so a new
+  // transfer with the same file would continue the old transfer's upload.
+  function uploadFingerprint(file, name, extraMeta) {
+    var owner = extraMeta.transfer_id ? 't:' + extraMeta.transfer_id : 'r:' + (extraMeta.upload_request_token || '');
+    return ['ferri', owner, name, file.size, file.lastModified || 0].join('/');
+  }
+
   // uploadFiles sends each item one after another. An item's source is a File,
   // or (packed) a ZIP stream reader with its exact size in item.size: a stream
   // has no size of its own, and TUS needs one before the first byte.
-  function uploadFiles(uploads, extraMeta, onProgress) {
+  // onItemDone(item), optional, runs as each item has fully reached the server.
+  function uploadFiles(uploads, extraMeta, onProgress, onItemDone) {
     return new Promise(function (resolve, reject) {
       var index = 0;
 
@@ -449,11 +471,20 @@
         var num = index + 1;
         index++;
 
+        var resumable = item.source instanceof Blob;
         var options = {
           endpoint: '/tus/',
-          retryDelays: [0, 3000, 5000, 10000, 20000],
+          retryDelays: RETRY_DELAYS,
           chunkSize: 50 * 1024 * 1024,
-          storeFingerprintForResuming: false,
+          // A File can be resumed: after an error, a new attempt, or a reload
+          // of the upload page it continues where the server stopped instead
+          // of starting over as a new file (audit M10, M13). A packed ZIP is a
+          // stream and cannot be read again from the middle.
+          storeFingerprintForResuming: resumable,
+          removeFingerprintOnSuccess: true,
+          fingerprint: function (file) {
+            return Promise.resolve(uploadFingerprint(file, item.name, extraMeta));
+          },
           metadata: Object.assign({ filename: item.name }, extraMeta),
 
           onProgress: function (bytesUploaded, bytesTotal) {
@@ -465,7 +496,10 @@
               what + ': ' + Math.round(bytesUploaded / bytesTotal * 100) + '% (' + num + '/' + uploads.length + ')');
           },
 
-          onSuccess: function () { uploadNext(); },
+          onSuccess: function () {
+            if (onItemDone) onItemDone(item);
+            uploadNext();
+          },
 
           // tus-js-client's default, except that a full server (507) is
           // not retried: it will not have room seconds later either.
@@ -483,7 +517,12 @@
           options.uploadSize = item.size;
         }
 
-        new tus.Upload(item.source, options).start();
+        var upload = new tus.Upload(item.source, options);
+        if (!resumable) { upload.start(); return; }
+        upload.findPreviousUploads().then(function (previous) {
+          if (previous.length > 0) upload.resumeFromPreviousUpload(previous[0]);
+          upload.start();
+        }, function () { upload.start(); });
       }
 
       uploadNext();

@@ -40,7 +40,25 @@ VERSION=$(git describe --tags --exact-match 2>/dev/null) || {
 }
 
 echo "==> Deploying $VERSION"
-docker build --build-arg VERSION="$VERSION" -t "ferri:$VERSION" -t ferri:latest .
+# --pull: fetch the base images fresh, so security fixes in the runtime image
+# arrive without a manual docker pull (audit M5).
+docker build --pull --build-arg VERSION="$VERSION" -t "ferri:$VERSION" -t ferri:latest .
+
+# A restart breaks off running uploads. The browser retries for about 8.5
+# minutes and resumes where it stopped, but a longer outage loses them
+# (audit M10). So: warn when the running app handled upload chunks in the
+# last 10 minutes, before anything is changed. FORCE=1 skips the question.
+if [[ "${FORCE:-}" != 1 ]]; then
+	active=$(cd "$DEPLOY_DIR" && docker compose logs --since 10m app 2>/dev/null | grep -c 'method=PATCH' || true)
+	if [[ "${active:-0}" -gt 0 ]]; then
+		echo "WARNING: $active upload chunks arrived in the last 10 minutes; uploads may be running."
+		read -r -p "Restart now anyway? [y/N] " answer || answer=""
+		if [[ "$answer" != [yY] ]]; then
+			echo "Aborted. Nothing was changed; the new image ferri:$VERSION is built. Run again later, or with FORCE=1." >&2
+			exit 1
+		fi
+	fi
+fi
 
 # Only the live compose file is pinned. The repo copy is never touched, so
 # the checkout stays identical to GitHub and the next `git pull` can't

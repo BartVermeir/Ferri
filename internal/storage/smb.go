@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"time"
 
 	smb2 "github.com/hirochachacha/go-smb2"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
@@ -50,7 +52,11 @@ func (b *SMBBackend) connect() error {
 	// Close any existing connection silently
 	b.disconnectLocked()
 
-	conn, err := net.Dial("tcp", b.cfg.Host+":445")
+	// A timeout, so an unreachable host fails in seconds instead of hanging
+	// the admin's connection test (~2 min); keepalives, so a connection the
+	// server silently dropped is noticed (audit M6).
+	dialer := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	conn, err := dialer.Dial("tcp", b.cfg.Host+":445")
 	if err != nil {
 		return fmt.Errorf("smb: TCP connect to %s:445: %w", b.cfg.Host, err)
 	}
@@ -104,19 +110,30 @@ func (b *SMBBackend) withShare(fn func(*smb2.Share) error) error {
 	share := b.share
 	b.mu.RUnlock()
 
-	err := fn(share)
-	if err == nil {
-		return nil
+	var err error
+	if share == nil {
+		// An earlier reconnect failed and left no share: try again rather
+		// than calling fn with nil.
+		err = errors.New("smb: not connected")
+	} else {
+		if err = fn(share); err == nil {
+			return nil
+		}
+		// Only reconnect on probable connection-level errors
+		if !isConnectionError(err) {
+			return err
+		}
 	}
 
-	// Only reconnect on probable connection-level errors
-	if !isConnectionError(err) {
-		return err
-	}
-
-	slog.Warn("storage: SMB connection error, reconnecting", "error", err)
 	b.mu.Lock()
-	reconnErr := b.connect()
+	var reconnErr error
+	if b.share == share {
+		// First to notice: reconnect. Another goroutine may already have
+		// done so (parallel uploads hit the same dead session); reconnecting
+		// again would tear down its fresh connection mid-use.
+		slog.Warn("storage: SMB connection error, reconnecting", "error", err)
+		reconnErr = b.connect()
+	}
 	newShare := b.share
 	b.mu.Unlock()
 
@@ -126,10 +143,25 @@ func (b *SMBBackend) withShare(fn func(*smb2.Share) error) error {
 	return fn(newShare)
 }
 
-// isConnectionError reports whether err looks like a network/connection error.
+// NT status codes with which an SMB server says the session or share is
+// gone. Their texts ("The client session has expired", ...) contain none of
+// the keywords below, so a session the server expired after an idle period
+// was never re-established (audit M6).
+var sessionGoneCodes = map[uint32]bool{
+	0xC000035C: true, // STATUS_NETWORK_SESSION_EXPIRED
+	0xC0000203: true, // STATUS_USER_SESSION_DELETED
+	0xC00000C9: true, // STATUS_NETWORK_NAME_DELETED
+}
+
+// isConnectionError reports whether err looks like a network/connection
+// error, or an SMB session the server ended: both are fixed by reconnecting.
 func isConnectionError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var re *smb2.ResponseError
+	if errors.As(err, &re) && sessionGoneCodes[re.Code] {
+		return true
 	}
 	msg := strings.ToLower(err.Error())
 	for _, kw := range []string{"connection", "reset", "broken", "eof", "closed", "refused", "timeout"} {
@@ -209,14 +241,11 @@ func (b *SMBBackend) MkdirAll(relPath string) error {
 	})
 }
 
-// TUSStore returns a tusd.DataStore backed by this SMB share.
-// The store is constructed fresh each call but shares the same connection.
+// TUSStore returns a tusd.DataStore backed by this SMB share. It goes
+// through withShare like every other operation, so a dropped or expired
+// session is re-established for uploads too (audit M6).
 func (b *SMBBackend) TUSStore() tusd.DataStore {
-	b.mu.RLock()
-	share := b.share
-	b.mu.RUnlock()
-	basePath := strings.Trim(b.cfg.BasePath, "/")
-	return newSMBTUSStore(share, basePath)
+	return newSMBTUSStore(b, strings.Trim(b.cfg.BasePath, "/"))
 }
 
 // FreeSpace returns the bytes available to this user on the share
