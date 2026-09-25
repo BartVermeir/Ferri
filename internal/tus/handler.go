@@ -378,6 +378,11 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 		Settings:    settings,
 	}
 	for _, f := range dbFiles {
+		// A stray 'uploading' row (a TUS client that restarted an upload after
+		// a 404) is not part of what the recipients receive.
+		if f.Status != "complete" {
+			continue
+		}
 		m.Files = append(m.Files, mail.FileItem{Name: f.OriginalName, Size: f.SizeBytes})
 	}
 
@@ -651,7 +656,7 @@ func confirmNote(settings *store.Settings, hasSenderLink bool) string {
 		parts = append(parts, "Downloads through your own link are not counted as recipient downloads.")
 	}
 	if settings != nil && settings.NotifyOnDownload {
-		parts = append(parts, "You will get an email each time a recipient downloads a file.")
+		parts = append(parts, "You will get an email when a recipient downloads a file (at most once an hour per file).")
 	}
 	if settings != nil && settings.ExpirySummary {
 		parts = append(parts, "When the transfer expires you will receive a summary of who downloaded what.")

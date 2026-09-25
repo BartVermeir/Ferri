@@ -114,8 +114,17 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			renderHomePage(w, cfg, settings, "request", "Internal server error.")
 			return
 		}
+		// The view token is generated inside Create; read it back rather than
+		// widen Create's signature for this one caller.
+		created, err := stores.Requests.GetByUploadToken(uploadToken)
+		if err != nil || created == nil {
+			slog.Error("request: read back created request", "error", err)
+			renderHomePage(w, cfg, settings, "request", "Internal server error.")
+			return
+		}
 
 		uploadURL := cfg.Server.BaseURL + "/ul/" + uploadToken
+		viewURL := cfg.Server.BaseURL + "/ul/" + created.ViewPathToken() + "/files"
 
 		slog.Info("upload request created",
 			"requester", requesterEmail,
@@ -124,7 +133,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		)
 
 		// Render result page with the upload link
-		renderRequestResult(w, uploadURL, title, settings)
+		renderRequestResult(w, uploadURL, viewURL, settings)
 	}
 }
 
@@ -136,14 +145,16 @@ func renderRequestPage(w http.ResponseWriter, cfg *config.Config, settings *stor
 	renderHomePage(w, cfg, settings, "request", errMsg)
 }
 
-func renderRequestResult(w http.ResponseWriter, uploadURL, title string, settings *store.Settings) {
+// renderRequestResult shows both links: the upload link for the external
+// party, and the requester's own view link. They differ on purpose (audit M1).
+func renderRequestResult(w http.ResponseWriter, uploadURL, viewURL string, settings *store.Settings) {
 	renderPage(w, "request_created.html", struct {
 		baseData
 		UploadURL string
-		ExpiresAt string
+		ViewURL   string
 	}{
 		baseData:  baseData{PageTitle: "Upload link created", Settings: settings},
 		UploadURL: uploadURL,
-		ExpiresAt: "",
+		ViewURL:   viewURL,
 	})
 }

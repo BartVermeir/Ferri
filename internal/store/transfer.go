@@ -67,6 +67,10 @@ type CreateTransferInput struct {
 	Recipients       []string // email addresses
 	Files            []CreateFileInput
 	NotifyRecipients bool // false = link-only, skip notification emails
+	// ExpectedFiles is how many files the sender announced; the transfer
+	// activates once that many are complete. 0 = unknown (stored as NULL),
+	// which keeps the old "no incomplete files" rule.
+	ExpectedFiles int
 	// SenderLink adds a separate recipient row (is_sender = 1) for the sender,
 	// unless the sender is already one of the recipients — then that row is
 	// the sender's link, and the unique (transfer_id, email) index forbids a
@@ -110,10 +114,16 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 			passwordHash = sql.NullString{String: input.PasswordHash, Valid: true}
 		}
 
+		var expectedFiles sql.NullInt64
+		if input.ExpectedFiles > 0 {
+			expectedFiles = sql.NullInt64{Int64: int64(input.ExpectedFiles), Valid: true}
+		}
+
 		_, err := tx.Exec(`
 			INSERT INTO transfers (id, title, message, sender_name, sender_email,
-			                       password_hash, status, expires_at, notify_recipients)
-			VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+			                       password_hash, status, expires_at, notify_recipients,
+			                       expected_files)
+			VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
 			transferID,
 			input.Title,
 			input.Message,
@@ -122,6 +132,7 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 			passwordHash,
 			input.ExpiresAt.Unix(),
 			boolToInt(input.NotifyRecipients),
+			expectedFiles,
 		)
 		if err != nil {
 			return fmt.Errorf("insert transfer: %w", err)
@@ -243,8 +254,16 @@ func (s *TransferStore) GetFileByID(fileID string) (*File, error) {
 	return &f, nil
 }
 
-// TryActivate atomically sets the transfer to 'active' if all its files are complete.
-// Returns true if this call caused the activation. Race-safe: only one goroutine wins.
+// TryActivate atomically sets the transfer to 'active' once its files are in.
+// Returns true if this call caused the activation. Race-safe: only one
+// goroutine wins (DEC-016).
+//
+// With expected_files set: activate when at least that many files are
+// complete. "At least" rather than "no incomplete rows": a TUS client that
+// gets a 404 on resume creates a fresh upload and leaves the old row
+// 'uploading' — that stray row must not block the transfer forever.
+// Without expected_files (transfers from before migration 004): the old rule,
+// no file row may be incomplete.
 func (s *TransferStore) TryActivate(transferID string) (bool, error) {
 	result, err := s.db.Exec(`
 		UPDATE transfers
@@ -252,9 +271,15 @@ func (s *TransferStore) TryActivate(transferID string) (bool, error) {
 		       activated_at = unixepoch()
 		WHERE  id     = ?
 		AND    status = 'pending'
-		AND    (SELECT COUNT(*) FROM files
-		        WHERE transfer_id = ? AND status != 'complete') = 0`,
-		transferID, transferID,
+		AND    CASE
+		         WHEN expected_files IS NOT NULL THEN
+		           (SELECT COUNT(*) FROM files
+		            WHERE transfer_id = ? AND status = 'complete') >= expected_files
+		         ELSE
+		           (SELECT COUNT(*) FROM files
+		            WHERE transfer_id = ? AND status != 'complete') = 0
+		       END`,
+		transferID, transferID, transferID,
 	)
 	if err != nil {
 		return false, err
@@ -285,14 +310,17 @@ func (s *TransferStore) UpdateTUSActivity(fileID string) error {
 	return err
 }
 
-// GetExpired returns transfers that are active and past their expiry time.
+// GetExpired returns pending or active transfers past their expiry time.
+// Pending ones are included so an abandoned upload (e.g. 2 of 3 files done)
+// still expires and gets cleaned up; they never went live, so the expiry job
+// sends no summary for them (check ActivatedAt).
 func (s *TransferStore) GetExpired() ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
 		       password_hash, status, expires_at, activated_at, expired_at, created_at,
 		       notify_recipients
 		FROM transfers
-		WHERE status = 'active' AND expires_at < unixepoch()`,
+		WHERE status IN ('pending', 'active') AND expires_at < unixepoch()`,
 	)
 	if err != nil {
 		return nil, err
@@ -479,13 +507,15 @@ func (s *TransferStore) MarkRecipientNotified(recipientID string) error {
 	return err
 }
 
-// ValidateForTUS checks that a transfer exists, is pending or active, and not expired.
-// Active is allowed because multi-file transfers activate after the first file completes.
+// ValidateForTUS checks that a transfer still accepts uploads: pending and not
+// expired. An active transfer takes no new files — recipients were already
+// mailed a file list. (Active used to be allowed because multi-file transfers
+// went live after their first file; expected_files fixed that.)
 func (s *TransferStore) ValidateForTUS(transferID string) (bool, error) {
 	var count int
 	err := s.db.QueryRow(`
 		SELECT COUNT(*) FROM transfers
-		WHERE id = ? AND status IN ('pending','active') AND expires_at > unixepoch()`,
+		WHERE id = ? AND status = 'pending' AND expires_at > unixepoch()`,
 		transferID,
 	).Scan(&count)
 	return count > 0, err

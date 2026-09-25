@@ -20,6 +20,9 @@ type UploadRequest struct {
 	RequesterName  string
 	RequesterEmail string
 	UploadToken    string
+	// ViewToken opens the requester's view of received files. NULL for
+	// requests from before migration 005; use ViewPathToken, not this field.
+	ViewToken      sql.NullString
 	PasswordHash   sql.NullString
 	MaxFiles       sql.NullInt64
 	MaxTotalBytes  sql.NullInt64
@@ -28,6 +31,16 @@ type UploadRequest struct {
 	CompletedAt    sql.NullInt64
 	ExpiredAt      sql.NullInt64
 	CreatedAt      time.Time
+}
+
+// ViewPathToken is the token for the requester's routes (/ul/<token>/files).
+// Requests from before migration 005 have no view token; for those the upload
+// token still works there, so links in mails already sent stay valid.
+func (r UploadRequest) ViewPathToken() string {
+	if r.ViewToken.Valid && r.ViewToken.String != "" {
+		return r.ViewToken.String
+	}
+	return r.UploadToken
 }
 
 // UploadRequestFile represents a row in upload_request_files.
@@ -60,6 +73,7 @@ type CreateRequestInput struct {
 func (s *RequestStore) Create(input CreateRequestInput) (string, string, error) {
 	id := token.Generate()
 	uploadToken := token.Generate()
+	viewToken := token.Generate()
 
 	var passwordHash sql.NullString
 	if input.PasswordHash != "" {
@@ -79,11 +93,11 @@ func (s *RequestStore) Create(input CreateRequestInput) (string, string, error) 
 	_, err := s.db.Exec(`
 		INSERT INTO upload_requests
 		  (id, title, message, requester_name, requester_email,
-		   upload_token, password_hash, max_files, max_total_bytes,
+		   upload_token, view_token, password_hash, max_files, max_total_bytes,
 		   status, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
 		id, input.Title, input.Message, input.RequesterName, input.RequesterEmail,
-		uploadToken, passwordHash, maxFiles, maxBytes, input.ExpiresAt.Unix(),
+		uploadToken, viewToken, passwordHash, maxFiles, maxBytes, input.ExpiresAt.Unix(),
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("insert upload_request: %w", err)
@@ -99,7 +113,7 @@ func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
 	var expiresAt, createdAt int64
 	err := s.db.QueryRow(`
 		SELECT id, title, message, requester_name, requester_email,
-		       upload_token, password_hash, max_files, max_total_bytes,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
 		       status, expires_at, completed_at, expired_at, created_at
 		FROM upload_requests
 		WHERE upload_token = ?
@@ -108,7 +122,7 @@ func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
 		tok,
 	).Scan(
 		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
-		&r.UploadToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
 		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
 	)
 	if err == sql.ErrNoRows {
@@ -123,21 +137,61 @@ func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
 }
 
 
-// GetByUploadTokenAny looks up an upload request by token regardless of status.
-// Used for download pages where completed requests should still be accessible.
-func (s *RequestStore) GetByUploadTokenAny(tok string) (*UploadRequest, error) {
+// GetLiveByUploadToken looks up a request by its upload token when it is open
+// or completed and not expired. The upload page uses it to tell "you already
+// finished" (thank-you page) apart from "this link is dead" (404).
+func (s *RequestStore) GetLiveByUploadToken(tok string) (*UploadRequest, error) {
 	var r UploadRequest
 	var expiresAt, createdAt int64
 	err := s.db.QueryRow(`
 		SELECT id, title, message, requester_name, requester_email,
-		       upload_token, password_hash, max_files, max_total_bytes,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
 		       status, expires_at, completed_at, expired_at, created_at
 		FROM upload_requests
-		WHERE upload_token = ?`,
+		WHERE upload_token = ?
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()`,
 		tok,
 	).Scan(
 		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
-		&r.UploadToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.ExpiresAt = time.Unix(expiresAt, 0)
+	r.CreatedAt = time.Unix(createdAt, 0)
+	return &r, nil
+}
+
+// GetViewableByViewToken looks up the request behind a requester link
+// (/ul/<view_token>/files and friends): open or completed, and not past
+// expires_at — the mails promise the link stops working then, even while the
+// files still wait for the cleanup job's grace period.
+//
+// Only the view token matches, never the upload token: the upload link goes to
+// external parties and must not reveal what others uploaded (audit M1).
+// Exception: requests from before migration 005 have no view token, and their
+// upload token keeps working here until they expire.
+func (s *RequestStore) GetViewableByViewToken(tok string) (*UploadRequest, error) {
+	var r UploadRequest
+	var expiresAt, createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at
+		FROM upload_requests
+		WHERE (view_token = ? OR (view_token IS NULL AND upload_token = ?))
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()`,
+		tok, tok,
+	).Scan(
+		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
+		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
 		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
 	)
 	if err == sql.ErrNoRows {
@@ -183,7 +237,7 @@ func (s *RequestStore) SoftDelete(requestID string) error {
 func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
-		       upload_token, password_hash, max_files, max_total_bytes,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
 		       status, expires_at, completed_at, expired_at, created_at
 		FROM upload_requests
 		WHERE status = 'open' AND expires_at < unixepoch()`,
@@ -200,7 +254,7 @@ func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
 func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
-		       upload_token, password_hash, max_files, max_total_bytes,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
 		       status, expires_at, completed_at, expired_at, created_at
 		FROM upload_requests
 		WHERE (
@@ -384,7 +438,7 @@ func scanRequests(rows *sql.Rows) ([]UploadRequest, error) {
 		var expiresAt, createdAt int64
 		if err := rows.Scan(
 			&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
-			&r.UploadToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+			&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
 			&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
 		); err != nil {
 			return nil, err
@@ -426,7 +480,7 @@ type RequestSummary struct {
 func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
 	rows, err := s.db.Query(`
 		SELECT r.id, r.title, r.message, r.requester_name, r.requester_email,
-		       r.upload_token, r.password_hash, r.max_files, r.max_total_bytes,
+		       r.upload_token, r.view_token, r.password_hash, r.max_files, r.max_total_bytes,
 		       r.status, r.expires_at, r.completed_at, r.expired_at, r.created_at,
 		       COUNT(f.id)                    AS file_count,
 		       COALESCE(SUM(f.size_bytes), 0) AS total_bytes
@@ -449,7 +503,7 @@ func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
 		var expiresAt, createdAt int64
 		if err := rows.Scan(
 			&rs.ID, &rs.Title, &rs.Message, &rs.RequesterName, &rs.RequesterEmail,
-			&rs.UploadToken, &rs.PasswordHash, &rs.MaxFiles, &rs.MaxTotalBytes,
+			&rs.UploadToken, &rs.ViewToken, &rs.PasswordHash, &rs.MaxFiles, &rs.MaxTotalBytes,
 			&rs.Status, &expiresAt, &rs.CompletedAt, &rs.ExpiredAt, &createdAt,
 			&rs.FileCount, &rs.TotalBytes,
 		); err != nil {

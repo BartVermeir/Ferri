@@ -51,6 +51,20 @@ const zipCopyBufSize = 1 << 20 // 1MB
 // over knowing the password.
 const downloadPasswordCookie = "ferri_dl_auth"
 
+// downloadNotifyWindow: at most one download notification per recipient and
+// file within this window. Every counted download is still recorded.
+const downloadNotifyWindow = time.Hour
+
+// countsAsDownload reports whether a file request starts a download, as
+// opposed to continuing one. A request without Range, or with a Range starting
+// at byte 0, starts one; a Range starting later is a resume or a parallel
+// chunk of a download already counted. Without this, a download manager or a
+// resumed 400 GB download counted (and mailed) once per request.
+func countsAsDownload(r *http.Request) bool {
+	h := strings.TrimSpace(r.Header.Get("Range"))
+	return h == "" || strings.HasPrefix(h, "bytes=0-")
+}
+
 // ── Download page ─────────────────────────────────────────────────────────────
 
 // DownloadPage handles GET /dl/:token.
@@ -206,19 +220,29 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		// Do this before streaming so the event is recorded even if the client
 		// disconnects mid-download. Use the trusted-proxy-aware client IP so a
 		// direct client cannot forge the audit-log source via X-Real-IP.
-		ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
-		ua := r.Header.Get("User-Agent")
+		// Resumes and later chunks (Range not starting at 0) are not a new download.
+		notify := false
+		if countsAsDownload(r) {
+			ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
+			ua := r.Header.Get("User-Agent")
 
-		if _, err := stores.Downloads.RecordDownload(
-			recipient.ID, targetFile.ID, targetFile.OriginalName, ip, ua,
-		); err != nil {
-			// Log but continue — a recording failure should not block the download
-			logDownloadError("record download event", err, fileID)
+			recent, err := stores.Downloads.DownloadedWithin(recipient.ID, targetFile.ID, downloadNotifyWindow)
+			if err != nil {
+				logDownloadError("check recent download", err, fileID)
+			}
+			if _, err := stores.Downloads.RecordDownload(
+				recipient.ID, targetFile.ID, targetFile.OriginalName, ip, ua,
+			); err != nil {
+				// Log but continue — a recording failure should not block the download
+				logDownloadError("record download event", err, fileID)
+			}
+			notify = !recent
 		}
 
-		// Enqueue download notification mail if enabled. Not for the sender's
-		// own link: telling the sender they downloaded their own file is noise.
-		if settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
+		// Enqueue download notification mail if enabled, at most once per
+		// downloadNotifyWindow. Not for the sender's own link: telling the
+		// sender they downloaded their own file is noise.
+		if notify && settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
 			n := downloadNotice(cfg, settings, transfer, recipient, targetFile.OriginalName)
 			subject := fmt.Sprintf("Downloaded: %s", targetFile.OriginalName)
 			bodyHTML := buildDownloadNotifyHTML(n)
@@ -354,11 +378,19 @@ func renderPasswordPage(w http.ResponseWriter, tok string, settings *store.Setti
 	})
 }
 
+// renderNotFound is shown for unknown and expired download links alike, so the
+// page reveals nothing about whether a token ever existed.
 func renderNotFound(w http.ResponseWriter, settings *store.Settings) {
 	// Headers MUST be set before WriteHeader — after WriteHeader they are ignored.
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
-	renderPage(w, "download.html", baseData{PageTitle: "Download complete", Settings: settings})
+	renderPage(w, "not_found.html", struct {
+		baseData
+		Message string
+	}{
+		baseData: baseData{PageTitle: "Link not available", Settings: settings},
+		Message:  "This download link has expired or does not exist. Ask the sender for a new link.",
+	})
 }
 
 // ── Mail body builders ────────────────────────────────────────────────────────
@@ -461,10 +493,21 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 
 		// Record a download event for each file in the ZIP — before streaming
 		// so events are captured even if the client disconnects mid-download.
+		// The ZIP is streamed without Range support, so every GET is a download.
+		// Notify only if at least one file was not downloaded within the
+		// window: a repeated ZIP download must not mail the sender again.
 		ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
 		ua := r.Header.Get("User-Agent")
 
+		notify := false
 		for _, f := range files {
+			recent, err := stores.Downloads.DownloadedWithin(recipient.ID, f.ID, downloadNotifyWindow)
+			if err != nil {
+				logDownloadError("zip: check recent download", err, f.ID)
+			}
+			if !recent {
+				notify = true
+			}
 			if _, err := stores.Downloads.RecordDownload(
 				recipient.ID, f.ID, f.OriginalName, ip, ua,
 			); err != nil {
@@ -473,7 +516,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		}
 
 		// Enqueue a single notification mail for the ZIP download if enabled
-		if settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
+		if notify && settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
 			n := downloadNotice(cfg, settings, transfer, recipient, "all files (ZIP)")
 			subject := fmt.Sprintf("Downloaded: all files of %s", transferLabel(transfer))
 			bodyHTML := buildDownloadNotifyHTML(n)

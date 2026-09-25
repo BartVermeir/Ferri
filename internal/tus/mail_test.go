@@ -80,3 +80,40 @@ func TestEnqueueTransferMails_SenderGetsOwnLink(t *testing.T) {
 		t.Fatalf("sender row must not count as a recipient, subject: %q", alice.Subject)
 	}
 }
+
+// A stray 'uploading' row is not part of what recipients receive.
+func TestEnqueueTransferMails_ListsOnlyCompleteFiles(t *testing.T) {
+	h, _, stores := newTestHandler(t)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+		Recipients: []string{"bob@example.com"}, NotifyRecipients: true,
+		Files: []store.CreateFileInput{
+			{OriginalName: "done.mov", StoragePath: "p1", SizeBytes: 1},
+			{OriginalName: "stray.mov", StoragePath: "p2", SizeBytes: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Transfers.SetFileComplete(res.Files[0].FileID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.enqueueTransferMails(res.TransferID); err != nil {
+		t.Fatal(err)
+	}
+	items, err := stores.Mail.FetchPending(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if !strings.Contains(it.BodyText, "done.mov") {
+			t.Errorf("mail to %s misses the complete file", it.ToAddress)
+		}
+		if strings.Contains(it.BodyText, "stray.mov") || strings.Contains(it.BodyHTML, "stray.mov") {
+			t.Errorf("mail to %s lists the incomplete file", it.ToAddress)
+		}
+	}
+}

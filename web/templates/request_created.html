@@ -20,6 +20,11 @@
           <button class="btn btn-secondary" id="copy-btn">Copy link</button>
           <a href="/request" class="btn btn-secondary">New request</a>
         </div>
+        <hr class="divider">
+        <p class="text-muted">Your own link to see what was uploaded. Keep it to yourself: it is not the link above, and it opens every file received. You will also get it by email once the upload is complete.</p>
+        <div class="mt-8 url-display-box">
+          <a class="url-display-text" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>
+        </div>
       </div>
     </div>
   </main>

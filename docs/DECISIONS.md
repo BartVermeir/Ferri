@@ -188,8 +188,10 @@ This document is intended as a living record. When a decision is revisited or re
 
 **URL structure:**
 - Download: `/dl/<token>`
-- Upload request: `/ul/<token>`
+- Upload request: `/ul/<upload_token>` for the external party (upload, complete); `/ul/<view_token>/files`, `/file/<id>` and `/zip` for the requester
 - Admin: `/admin`
+
+**One token per role:** an upload request has two tokens. The upload link is sent to external parties, and it is often shared with several of them or forwarded. When the same token also opened the received files, everyone holding the upload link could download everything uploaded through it, including other uploaders' files. The requester's view link now uses its own token, and the upload token does not open it. The routes stay the same, and the token decides the role. Requests created before the view token existed keep using their upload token as the view token until they expire, so links in mails already sent keep working.
 
 **Alternatives considered:**
 - **JWTs:** Stateless tokens that embed expiry and metadata. Revocation is complex (requires a denylist). Not appropriate when we need server-side revocation control.
@@ -225,7 +227,7 @@ This document is intended as a living record. When a decision is revisited or re
 **Notification events:**
 1. Recipient(s): transfer available (one mail per address)
 2. Sender: confirmation of transfer creation
-3. Sender: per-recipient download notification (each time a recipient downloads, including repeat downloads, with timestamp)
+3. Sender: per-recipient download notification, with timestamp. At most one per recipient and file per hour; a request that resumes a download (a `Range` not starting at byte 0) is not a new download. Every counted download, repeats included, is still recorded for the expiry summary.
 4. Sender: expiry summary — when a transfer expires, a single summary mail lists every recipient with the exact timestamp of each individual download (not just the first), plus the total count. Recipients who never opened the link are explicitly listed as "never downloaded". Example format:
 
    alice@client.com (3 downloads)
@@ -319,10 +321,20 @@ UPDATE transfers
 SET status = 'active', activated_at = unixepoch()
 WHERE id = ?
   AND status = 'pending'
-  AND (SELECT COUNT(*) FROM files
-       WHERE transfer_id = ? AND status != 'complete') = 0;
+  AND CASE
+        WHEN expected_files IS NOT NULL THEN
+          (SELECT COUNT(*) FROM files
+           WHERE transfer_id = ? AND status = 'complete') >= expected_files
+        ELSE
+          (SELECT COUNT(*) FROM files
+           WHERE transfer_id = ? AND status != 'complete') = 0
+      END;
 ```
 SQLite serialises writes. Only one goroutine can win this UPDATE. The winner checks `RowsAffected() == 1` and proceeds to enqueue mails. All others see 0 and do nothing.
+
+**Why `expected_files`:** the browser uploads files one after another, and a file's row is only created when its upload starts. Checking "no incomplete rows" therefore activated a multi-file transfer as soon as its first file completed, and recipients were mailed a one-file list. `POST /send` now stores how many files the sender announced, and activation waits for that many complete files. It checks "at least", not "exactly": a TUS client that restarts an upload after a 404 leaves the old row `uploading`, and that row must not block the transfer. Transfers created before this column existed have `expected_files = NULL` and keep the old rule.
+
+**Consequences:** an active transfer accepts no new uploads (`ValidateForTUS` requires `pending`). Pending transfers expire like active ones, so an abandoned multi-file upload is still cleaned up. They get no expiry summary, because no link was ever sent.
 
 **Alternatives considered:**
 - **Application-level mutex:** Works but requires shared state between goroutines and complicates testing.
@@ -470,15 +482,17 @@ Pre-issuing tokens per file would require a separate round-trip before the TUS u
 
 ---
 
-## DEC-028: Stalled-upload cleanup removes both content file and .info sidecar
+## DEC-028: File removal goes through one function, and a failed removal is retried
 
-**Decision:** The stalled-upload cleanup job explicitly removes both the partial file content (`os.Remove(storagePath)`) and the TUS resumption sidecar (`os.Remove(storagePath + ".info")`). Both operations are attempted regardless of whether the other succeeds.
+**Decision:** Every place that deletes an upload's data (expiry cleanup, stalled-upload cleanup, admin delete) calls `storage.PurgeUpload`. It removes all four paths an upload can leave behind: the logical `storage_path` (a real file only for legacy local uploads), the flat TUS file `<tus_upload_id>`, and the `.info` sidecar of each. A missing path counts as removed. Only when all removals succeed is the row's `tus_upload_id` cleared. The row is marked `deleted` either way. Every cleanup run then retries rows that are `deleted` but still have a `tus_upload_id`.
 
-**Rationale:** The `.info` sidecar is a JSON file created by `tusd` alongside every upload. It contains the upload metadata and offset used to resume an interrupted upload. If only the content file is deleted and the `.info` file remains, `tusd` will report the upload as resumable. The next resume attempt by the browser will succeed at the TUS protocol level (the server accepts the PATCH) but fail at the filesystem level when trying to write to the now-missing content file. This produces a confusing error for the user rather than a clean "please start a new upload" state.
+**Rationale:** The data of a TUS upload lives at the flat `<tus_upload_id>`, not at `storage_path`. When each caller removed paths itself, the stalled-upload cleanup removed only `storage_path` and leaked every stalled upload, up to 600 GB each. A single function makes that mistake impossible to repeat.
 
-Removing both files atomically (or as close to it as possible on a filesystem) ensures the upload is cleanly gone from both the application's and TUS's perspective.
+The `.info` sidecar must go too. With only the content file removed, `tusd` still reports the upload as resumable, and the next resume fails confusingly at the filesystem level instead of cleanly starting a new upload.
 
-**Error handling:** If one removal fails (e.g. the content file was already deleted by a previous partial cleanup), the job logs the error and still attempts the other removal. It does not abort the entire cleanup job.
+**Why the row is marked deleted before the data is confirmed gone:** the download link must stop working immediately, not after a storage retry. A cleared `tus_upload_id` is the separate "physically gone" marker, so no schema change was needed. It also lets the retry find leaks from before this decision, including on SMB, where there is no orphan scan.
+
+**Error handling:** a failed removal is logged and does not abort the run. The file keeps its `tus_upload_id`, is retried on the next run, and stays visible in a WARN log line with count and size until it succeeds.
 
 ---
 
@@ -531,6 +545,23 @@ Removing both files atomically (or as close to it as possible on a filesystem) e
 **Decision:** Virus scanning of uploaded files is explicitly out of scope for the initial release. ClamAV integration may be added as an optional feature in a future version.
 
 **Rationale:** Adding ClamAV introduces a significant operational dependency (ClamAV daemon, signature updates, memory requirements) that is not justified for the initial deployment. The primary threat model is not malicious file content but server compromise and lateral network movement — both addressed by the DMZ architecture and container hardening. If a future deployment requires virus scanning, it can be added as an optional pre-upload hook in the TUS handler without breaking changes to the existing architecture.
+
+---
+
+## DEC-035: Folders and many files are packed into one ZIP in the browser
+
+**Decision:** When the user selects or drops a folder, or more files than `limits.max_files_per_transfer`, the browser packs everything into one ZIP before uploading. It uses `client-zip`, vendored in `static/files/client-zip.js`, and applies no compression. The ZIP keeps the folder structure and is uploaded over TUS as a single stream of known length. Fewer loose files are still uploaded one by one.
+
+**The problem:** a colleague tried to send a folder, and then its 1600 files. Folders could not be selected, and a dropped folder is not a readable file. The file list was sent as two form fields per file, so 1600 files meant 3202 multipart parts, and Go refuses more than 1000 by default. The server then fell back to parsing an empty form and answered "Sender name is required". Even with that fixed, a transfer holds at most 50 files.
+
+**Why pack instead of raising the limit and keeping the files loose:** a folder with hundreds of files (an image sequence, a memory card) is used as a whole. One ZIP keeps the server, the mails and the download page unchanged. It also avoids thousands of sequential TUS requests, and the recipient gets one download with the structure intact. Not compressing costs no CPU on media that does not compress anyway, and it makes the archive size exactly predictable (`predictLength`). TUS needs that size before the first byte, because the server does not support deferred length.
+
+**Also changed:** the file list of `POST /send` is one JSON field (`files`), so the number of files no longer hits the multipart part limit. A multipart body that fails to parse is reported as such, instead of falling back to an empty form.
+
+**Limits and risks:**
+- `client-zip` marks every archive "version 4.5 needed to extract" (ZIP64 capable). The built-in extractors of Windows and macOS and 7-Zip handle this; some very old tools do not.
+- A packed upload is a stream and cannot resume after a page reload. Loose files cannot resume after a reload either (see the audit, M10).
+- The recipient cannot download a single file from a packed folder.
 
 ---
 

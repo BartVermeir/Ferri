@@ -20,6 +20,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -52,6 +53,11 @@ type homePageData struct {
 	WelcomeMessage string
 	Mode           string // "send" or "request"
 	Error          string // request panel validation error
+	// Limits for upload.js: above MaxFiles files, or with a folder, the
+	// browser packs everything into one ZIP (DEC-035); MaxUploadBytes caps
+	// each upload, the ZIP included. The server enforces both again.
+	MaxFiles       int
+	MaxUploadBytes int64
 }
 
 // renderHomePage renders the combined send/request page (send.html).
@@ -69,6 +75,8 @@ func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.S
 		WelcomeMessage: settings.WelcomeMessage,
 		Mode:           mode,
 		Error:          errMsg,
+		MaxFiles:       cfg.Limits.MaxFilesPerTransfer,
+		MaxUploadBytes: cfg.Limits.MaxUploadBytes,
 	})
 }
 
@@ -88,11 +96,19 @@ func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 // Validates input, creates the transfer in the DB, returns JSON {transfer_id}.
 func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// The JS client sends FormData which the browser encodes as multipart/form-data.
-		// ParseMultipartForm handles this. It also calls ParseForm internally so
-		// URL-encoded fallback submissions work too.
+		// The JS client sends FormData, which the browser encodes as
+		// multipart/form-data. Only a non-multipart body may fall back to
+		// ParseForm: a multipart body that fails to parse (e.g. Go's limit of
+		// 1000 parts, hit by the old two-fields-per-file format at 500 files)
+		// used to fall through with every field empty and report "Sender name
+		// is required" (audit M12).
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
-			if err2 := r.ParseForm(); err2 != nil {
+			if !errors.Is(err, http.ErrNotMultipart) {
+				slog.Warn("send: parse multipart form", "error", err)
+				jsonError(w, "Could not read the form. Please reload the page and try again.", http.StatusBadRequest)
+				return
+			}
+			if err := r.ParseForm(); err != nil {
 				jsonError(w, "Invalid form data", http.StatusBadRequest)
 				return
 			}
@@ -157,20 +173,16 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			}
 		}
 
-		// Parse file metadata from form — browser JS sends one entry per file:
-		// filenames[]=foo.mov&filenames[]=bar.mxf&sizes[]=12345&sizes[]=67890
-		filenames := r.Form["filenames[]"]
-		sizesStr := r.Form["sizes[]"]
-
-		if len(filenames) == 0 {
+		announced, err := parseAnnouncedFiles(r)
+		if err != nil {
+			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(announced) == 0 {
 			jsonError(w, "At least one file is required", http.StatusBadRequest)
 			return
 		}
-		if len(filenames) != len(sizesStr) {
-			jsonError(w, "Filenames and sizes count mismatch", http.StatusBadRequest)
-			return
-		}
-		if len(filenames) > cfg.Limits.MaxFilesPerTransfer {
+		if len(announced) > cfg.Limits.MaxFilesPerTransfer {
 			jsonError(w, fmt.Sprintf("Maximum %d files per transfer", cfg.Limits.MaxFilesPerTransfer),
 				http.StatusBadRequest)
 			return
@@ -178,14 +190,14 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		// Parse and validate file sizes
 		var files []store.CreateFileInput
-		for i, name := range filenames {
-			name = strings.TrimSpace(name)
+		for _, a := range announced {
+			name := strings.TrimSpace(a.Name)
 			if name == "" {
 				name = "unnamed"
 			}
 
-			size, err := strconv.ParseInt(sizesStr[i], 10, 64)
-			if err != nil || size < 0 {
+			size := a.Size
+			if size < 0 {
 				jsonError(w, fmt.Sprintf("Invalid file size for %s", name), http.StatusBadRequest)
 				return
 			}
@@ -230,6 +242,7 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			PasswordHash:     passwordHash,
 			ExpiresAt:        expiresAt,
 			Recipients:       recipients,
+			ExpectedFiles:    len(files),
 			NotifyRecipients: !linkOnly,
 			// Link-only already makes the sender the sole recipient.
 			SenderLink: !linkOnly,
@@ -266,6 +279,40 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 }
 
 // ── Validation helpers ────────────────────────────────────────────────────────
+
+// announcedFile is one file the browser is about to upload over TUS.
+type announcedFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// parseAnnouncedFiles reads the file list of POST /send: one JSON field
+// `files` ([{"name":…,"size":…}]). One field, however many files — the old
+// format used two form fields per file and broke at 500 files on Go's
+// multipart part limit. That old format (filenames[] + sizes[]) is still
+// accepted for a page that was open during a deploy.
+func parseAnnouncedFiles(r *http.Request) ([]announcedFile, error) {
+	if raw := r.FormValue("files"); raw != "" {
+		var list []announcedFile
+		if err := json.Unmarshal([]byte(raw), &list); err != nil {
+			return nil, errors.New("Invalid file list")
+		}
+		return list, nil
+	}
+	names, sizes := r.Form["filenames[]"], r.Form["sizes[]"]
+	if len(names) != len(sizes) {
+		return nil, errors.New("Filenames and sizes count mismatch")
+	}
+	list := make([]announcedFile, 0, len(names))
+	for i, name := range names {
+		size, err := strconv.ParseInt(sizes[i], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("Invalid file size for %s", name)
+		}
+		list = append(list, announcedFile{Name: name, Size: size})
+	}
+	return list, nil
+}
 
 // isValidEmail is a minimal email validator. It checks for the presence of
 // exactly one '@' with non-empty local and domain parts. Full RFC 5322

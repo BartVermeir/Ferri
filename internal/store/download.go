@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/BartVermeir/Ferri/internal/token"
 )
@@ -53,6 +54,21 @@ func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua
 		)
 		return err
 	})
+}
+
+// DownloadedWithin reports whether the recipient already has a download event
+// for this file within the given window. Used to send at most one download
+// notification per recipient and file per window: a download manager or a
+// browser retrying a big file must not flood the sender's inbox.
+func (s *DownloadStore) DownloadedWithin(recipientID, fileID string, window time.Duration) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM download_events
+		WHERE recipient_id = ? AND file_id = ?
+		  AND downloaded_at > unixepoch() - ?`,
+		recipientID, fileID, int64(window.Seconds()),
+	).Scan(&n)
+	return n > 0, err
 }
 
 // GetDownloadHistory returns all download events for a transfer,

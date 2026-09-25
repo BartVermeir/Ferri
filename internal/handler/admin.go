@@ -266,28 +266,15 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 			return
 		}
 
-		// Remove files from storage.
-		// Files are stored flat by TUS as <tus_upload_id> on the backend.
-		// storage_path holds the logical path; TUSUploadID holds the actual filename.
-		// Mirror the same fallback logic used in the download handler.
+		// Remove files from storage. A failed removal keeps the file's
+		// tus_upload_id, so the cleanup job retries it on its next run.
 		files, err := stores.Transfers.GetFilesByTransferID(id)
 		if err != nil {
 			slog.Error("admin: get files for delete", "id", id, "error", err)
 		} else {
 			for _, f := range files {
-				if err := mgr.Remove(f.StoragePath); err != nil {
-					slog.Warn("admin: remove StoragePath", "path", f.StoragePath, "error", err)
-				}
-				if err := mgr.Remove(f.StoragePath + ".info"); err != nil {
-					slog.Warn("admin: remove StoragePath.info", "path", f.StoragePath+".info", "error", err)
-				}
-				if f.TUSUploadID.Valid {
-					if err := mgr.Remove(f.TUSUploadID.String); err != nil {
-						slog.Warn("admin: remove TUSUploadID", "tus_id", f.TUSUploadID.String, "error", err)
-					}
-					if err := mgr.Remove(f.TUSUploadID.String + ".info"); err != nil {
-						slog.Warn("admin: remove TUSUploadID.info", "tus_id", f.TUSUploadID.String+".info", "error", err)
-					}
+				if err := storage.PurgeUpload(mgr, stores.Files, store.TransferFiles, f.ID, f.StoragePath, f.TUSUploadID.String); err != nil {
+					slog.Warn("admin: remove file failed, cleanup job will retry", "file", f.ID, "error", err)
 				}
 			}
 		}
@@ -317,25 +304,14 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			return
 		}
 
-		// Mirror download handler fallback: try storage_path first, then TUSUploadID
+		// Same as transfers: a failed removal is retried by the cleanup job.
 		files, err := stores.Requests.GetFiles(id)
 		if err != nil {
 			slog.Error("admin: get request files for delete", "id", id, "error", err)
 		} else {
 			for _, f := range files {
-				if err := mgr.Remove(f.StoragePath); err != nil {
-					slog.Warn("admin: remove request StoragePath", "path", f.StoragePath, "error", err)
-				}
-				if err := mgr.Remove(f.StoragePath + ".info"); err != nil {
-					slog.Warn("admin: remove request StoragePath.info", "path", f.StoragePath+".info", "error", err)
-				}
-				if f.TUSUploadID.Valid {
-					if err := mgr.Remove(f.TUSUploadID.String); err != nil {
-						slog.Warn("admin: remove request TUSUploadID", "tus_id", f.TUSUploadID.String, "error", err)
-					}
-					if err := mgr.Remove(f.TUSUploadID.String + ".info"); err != nil {
-						slog.Warn("admin: remove request TUSUploadID.info", "tus_id", f.TUSUploadID.String+".info", "error", err)
-					}
+				if err := storage.PurgeUpload(mgr, stores.Files, store.RequestFiles, f.ID, f.StoragePath, f.TUSUploadID.String); err != nil {
+					slog.Warn("admin: remove file failed, cleanup job will retry", "file", f.ID, "error", err)
 				}
 			}
 		}

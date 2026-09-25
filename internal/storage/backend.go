@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -88,6 +89,50 @@ func (m *Manager) Remove(path string) error {
 	b := m.backend
 	m.mu.RUnlock()
 	return b.Remove(path)
+}
+
+// RemoveUpload removes every file an upload can leave on the backend: the
+// logical storage_path (only a real file for legacy local uploads) and the flat
+// TUS file <tus_upload_id>, each with its .info sidecar. Empty arguments are
+// skipped — Remove("") would resolve to the storage root itself. A path that
+// does not exist counts as removed, so calling this twice is safe.
+//
+// Returns the joined errors of the removals that failed; nil means nothing of
+// this upload is left. All deletion code (cleanup, stalled uploads, admin
+// delete) goes through here so no caller can forget one of the paths again.
+func (m *Manager) RemoveUpload(storagePath, tusUploadID string) error {
+	var paths []string
+	if storagePath != "" {
+		paths = append(paths, storagePath, storagePath+".info")
+	}
+	if tusUploadID != "" {
+		paths = append(paths, tusUploadID, tusUploadID+".info")
+	}
+	var errs []error
+	for _, p := range paths {
+		if err := m.Remove(p); err != nil {
+			errs = append(errs, fmt.Errorf("remove %s: %w", p, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// PurgeUpload removes one file's data (RemoveUpload) and, only once that fully
+// succeeded, clears its tus_upload_id (store.FilesStore.MarkPurged). On
+// failure the id stays, which is how the cleanup job knows to retry it
+// (jobs.Scheduler.purgeLeftovers). Callers still mark the row deleted either
+// way: the download link must stop working now, not after the retry.
+func PurgeUpload(m *Manager, files *store.FilesStore, table store.FileTable, fileID, storagePath, tusUploadID string) error {
+	if err := m.RemoveUpload(storagePath, tusUploadID); err != nil {
+		return err
+	}
+	if tusUploadID == "" {
+		return nil
+	}
+	if err := files.MarkPurged(table, fileID); err != nil {
+		return fmt.Errorf("mark purged: %w", err)
+	}
+	return nil
 }
 
 // RemoveAll deletes a directory and all its contents.

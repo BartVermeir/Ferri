@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -34,6 +37,7 @@ func newAdminRouter(cfg *config.Config, stores *store.Stores, mgr *storage.Manag
 		r.Use(appMiddleware.AdminAuth(cfg))
 		r.Get("/admin", AdminDashboard(cfg, stores))
 		r.Post("/admin/transfers/{id}/delete", AdminTransferDelete(cfg, stores, mgr))
+		r.Post("/admin/requests/{id}/delete", AdminRequestDelete(cfg, stores, mgr))
 		r.Post("/admin/logout", AdminLogout(cfg))
 	})
 	return r
@@ -198,5 +202,91 @@ func TestAdminTransferDelete_WithSessionCookieProceeds(t *testing.T) {
 	}
 	if deleted == nil || deleted.Status != "deleted" {
 		t.Fatalf("transfer status = %+v, want deleted", deleted)
+	}
+}
+
+// Admin delete must remove the flat TUS file (<tus_upload_id> + .info), where
+// the data really lives, and mark it purged. Both delete buttons, one test.
+func TestAdminDelete_RemovesFlatTUSFiles(t *testing.T) {
+	cfg := newTestConfig()
+	d := newTestDB(t)
+	stores := store.New(d)
+	mgr, root := newTestManager(t)
+	r := newAdminRouter(cfg, stores, mgr)
+	cookie := adminSessionCookie(t, cfg)
+
+	res, err := stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+		Recipients: []string{"bob@example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Transfers.CreateFileRow("tf", res.TransferID, "a.mov", "transfers/"+res.TransferID+"/tf", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Transfers.SetTUSUploadID("tf", "tus-transfer"); err != nil {
+		t.Fatal(err)
+	}
+	requestID, _, err := stores.Requests.Create(store.CreateRequestInput{
+		RequesterEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Requests.CreateFileRow("rf", requestID, "b.mov", "requests/"+requestID+"/rf", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Requests.SetTUSUploadID("rf", "tus-request"); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"tus-transfer", "tus-transfer.info", "tus-request", "tus-request.info"} {
+		writeStorageFile(t, root, name, []byte("data"))
+	}
+
+	for _, path := range []string{"/admin/transfers/" + res.TransferID + "/delete", "/admin/requests/" + requestID + "/delete"} {
+		req := withOrigin(httptest.NewRequest(http.MethodPost, path, nil), cfg)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("POST %s: status = %d, want 303", path, rr.Code)
+		}
+	}
+
+	for _, name := range []string{"tus-transfer", "tus-transfer.info", "tus-request", "tus-request.info"} {
+		if _, err := os.Stat(filepath.Join(root, name)); !os.IsNotExist(err) {
+			t.Errorf("%s still on storage (stat err = %v)", name, err)
+		}
+	}
+	left, err := stores.Files.ListUnpurged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Errorf("files not marked purged: %+v", left)
+	}
+}
+
+// The dashboard's "view files" link must use the view token, not the upload
+// token that external parties hold (audit M1).
+func TestAdminDashboard_ViewFilesLinkUsesViewToken(t *testing.T) {
+	cfg := newTestConfig()
+	stores := newTestStores(t)
+	mgr, root := newTestManager(t)
+	r := newAdminRouter(cfg, stores, mgr)
+	uploadTok, _, _ := mustCreateUploadRequestWithFile(t, stores, root, "")
+	viewTok := viewTokenOf(t, stores, uploadTok)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.AddCookie(adminSessionCookie(t, cfg))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	if !strings.Contains(body, "/ul/"+viewTok+"/files") {
+		t.Fatalf("dashboard lacks the view link, body: %s", body)
+	}
+	if strings.Contains(body, "/ul/"+uploadTok+"/files") {
+		t.Fatalf("dashboard links /files with the upload token")
 	}
 }

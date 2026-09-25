@@ -1,6 +1,9 @@
 package store
 
-import "database/sql"
+import (
+	"database/sql"
+	"fmt"
+)
 
 type FilesStore struct {
 	db *sql.DB
@@ -54,4 +57,67 @@ func (s *FilesStore) TransferOrRequestExists(transferID, requestToken string) (b
 		}
 	}
 	return false, nil
+}
+
+// FileTable names one of the two file tables. Only these two values reach SQL.
+type FileTable string
+
+const (
+	TransferFiles FileTable = "files"
+	RequestFiles  FileTable = "upload_request_files"
+)
+
+// Unpurged is a file row marked deleted whose data may still be on storage.
+//
+// A deleted row keeps its tus_upload_id until the physical removal succeeded;
+// MarkPurged then clears it. So status = 'deleted' with a tus_upload_id means
+// "gone for the app, possibly still on disk" — the cleanup job retries those.
+type Unpurged struct {
+	Table       FileTable
+	ID          string
+	StoragePath string
+	TUSUploadID string
+	SizeBytes   int64
+}
+
+// ListUnpurged returns deleted file rows, from both tables, that still carry a
+// tus_upload_id: failed removals, and uploads deleted before removal was fixed
+// to include the flat TUS file.
+func (s *FilesStore) ListUnpurged() ([]Unpurged, error) {
+	rows, err := s.db.Query(`
+		SELECT 'files', id, storage_path, tus_upload_id, size_bytes FROM files
+		WHERE status = 'deleted' AND tus_upload_id IS NOT NULL AND tus_upload_id != ''
+		UNION ALL
+		SELECT 'upload_request_files', id, storage_path, tus_upload_id, size_bytes FROM upload_request_files
+		WHERE status = 'deleted' AND tus_upload_id IS NOT NULL AND tus_upload_id != ''
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []Unpurged
+	for rows.Next() {
+		var u Unpurged
+		if err := rows.Scan(&u.Table, &u.ID, &u.StoragePath, &u.TUSUploadID, &u.SizeBytes); err != nil {
+			return nil, err
+		}
+		list = append(list, u)
+	}
+	return list, rows.Err()
+}
+
+// MarkPurged records that a file's data is physically gone by clearing its
+// tus_upload_id. Call only after storage.Manager.RemoveUpload returned nil.
+func (s *FilesStore) MarkPurged(table FileTable, fileID string) error {
+	var query string
+	switch table {
+	case TransferFiles:
+		query = `UPDATE files SET tus_upload_id = NULL WHERE id = ?`
+	case RequestFiles:
+		query = `UPDATE upload_request_files SET tus_upload_id = NULL WHERE id = ?`
+	default:
+		return fmt.Errorf("MarkPurged: unknown file table %q", table)
+	}
+	_, err := s.db.Exec(query, fileID)
+	return err
 }

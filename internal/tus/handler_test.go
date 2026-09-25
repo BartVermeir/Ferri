@@ -170,3 +170,21 @@ func TestPreUploadCreate_MissingMetadataRejected(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// Once a transfer is live, recipients have been mailed its file list; the TUS
+// endpoint must not let anyone add files to it (403).
+func TestPreUploadCreate_ActiveTransferRejected(t *testing.T) {
+	h, _, stores := newTestHandler(t)
+	transferID := mustCreatePendingTransfer(t, stores)
+	if _, err := stores.Transfers.TryActivate(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, _, err := h.preUploadCreate(tusd.HookEvent{Upload: tusd.FileInfo{
+		Size:     10,
+		MetaData: tusd.MetaData{"transfer_id": transferID, "filename": "late.bin"},
+	}})
+	if err == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, err = %v, want 403 for an active transfer", resp.StatusCode, err)
+	}
+}

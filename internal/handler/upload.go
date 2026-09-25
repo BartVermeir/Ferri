@@ -16,6 +16,7 @@ package handler
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"html"
 	"io"
@@ -42,19 +43,24 @@ const uploadPasswordCookie = "ferri_ul_auth"
 // ── Upload page ───────────────────────────────────────────────────────────────
 
 // UploadPage handles GET /ul/:token.
-// If the request is completed, shows the uploaded files instead of the upload form.
+// A completed request shows the uploader the thank-you page again, never the
+// received files: those are for the requester's view link only (audit M1).
 func UploadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
 		settings := appMiddleware.GetSettings(r)
 
-		req, err := stores.Requests.GetByUploadToken(tok)
+		req, err := stores.Requests.GetLiveByUploadToken(tok)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 		if req == nil {
 			renderUploadNotFound(w, settings)
+			return
+		}
+		if req.Status == "completed" {
+			renderUploadComplete(w, req, settings)
 			return
 		}
 
@@ -65,28 +71,7 @@ func UploadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			}
 		}
 
-		// If already completed, show the uploaded files
-		if req.Status == "completed" {
-			files, err := stores.Requests.GetFiles(req.ID)
-			if err != nil {
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-			renderPage(w, "request_download.html", struct {
-				baseData
-				Request      *store.UploadRequest
-				Files        []store.UploadRequestFile
-				DownloadBase string
-			}{
-				baseData:     baseData{PageTitle: req.Title, Settings: settings},
-				Request:      req,
-				Files:        files,
-				DownloadBase: "/ul/" + tok,
-			})
-			return
-		}
-
-		renderUploadPage(w, tok, req, settings)
+		renderUploadPage(w, cfg, tok, req, settings)
 	}
 }
 
@@ -96,7 +81,7 @@ func UploadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		tok := chi.URLParam(r, "token")
 		settings := appMiddleware.GetSettings(r)
 
-		req, err := stores.Requests.GetByUploadToken(tok)
+		req, err := stores.Requests.GetLiveByUploadToken(tok)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
@@ -106,7 +91,9 @@ func UploadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		if !req.PasswordHash.Valid {
+		// No password, or the upload was finished meanwhile: the upload page
+		// shows the form or the thank-you page.
+		if !req.PasswordHash.Valid || req.Status == "completed" {
 			http.Redirect(w, r, "/ul/"+tok, http.StatusSeeOther)
 			return
 		}
@@ -119,17 +106,59 @@ func UploadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		http.SetCookie(w, &http.Cookie{
-			Name:     uploadPasswordCookie + "_" + tok,
-			Value:    req.PasswordHash.String,
-			Path:     "/ul/" + tok,
-			HttpOnly: true,
-			Secure:   cfg.Server.SecureCookies,
-			SameSite: http.SameSiteStrictMode,
-		})
-
+		setUploadPasswordCookie(w, cfg, tok, req.PasswordHash.String)
 		http.Redirect(w, r, "/ul/"+tok, http.StatusSeeOther)
 	}
+}
+
+// RequestFilesPassword handles POST /ul/:token/files — the password form shown
+// on the requester's file listing posts back to that URL. Unlike UploadPassword
+// it takes the view token (GetViewableByViewToken), and it sets the cookie for
+// that token's path so the listing, files and ZIP open.
+func RequestFilesPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok := chi.URLParam(r, "token")
+		settings := appMiddleware.GetSettings(r)
+
+		req, err := stores.Requests.GetViewableByViewToken(tok)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if req == nil {
+			renderUploadNotFound(w, settings)
+			return
+		}
+
+		if !req.PasswordHash.Valid {
+			http.Redirect(w, r, "/ul/"+tok+"/files", http.StatusSeeOther)
+			return
+		}
+
+		submitted := r.FormValue("password")
+		if err := bcrypt.CompareHashAndPassword(
+			[]byte(req.PasswordHash.String), []byte(submitted),
+		); err != nil {
+			renderUploadPasswordPage(w, tok, settings, "Incorrect password.")
+			return
+		}
+
+		setUploadPasswordCookie(w, cfg, tok, req.PasswordHash.String)
+		http.Redirect(w, r, "/ul/"+tok+"/files", http.StatusSeeOther)
+	}
+}
+
+// setUploadPasswordCookie unlocks every /ul/:token/* route (upload page, file
+// listing, single file, ZIP) for the browser session.
+func setUploadPasswordCookie(w http.ResponseWriter, cfg *config.Config, tok, bcryptHash string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     uploadPasswordCookie + "_" + tok,
+		Value:    bcryptHash,
+		Path:     "/ul/" + tok,
+		HttpOnly: true,
+		Secure:   cfg.Server.SecureCookies,
+		SameSite: http.SameSiteStrictMode,
+	})
 }
 
 // ── Upload complete ───────────────────────────────────────────────────────────
@@ -162,14 +191,14 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// Verify at least one file was uploaded before marking complete.
 		// Without this, a user who bypasses the JS can mark a request complete
 		// with zero files, causing a misleading "files received" notification.
-		files, err := stores.Requests.GetFiles(req.ID)
+		files, err := waitForRequestFiles(r.Context(), stores.Requests, req.ID)
 		if err != nil {
 			slog.Error("upload complete: get files", "request_id", req.ID, "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 		if len(files) == 0 {
-			renderUploadPage(w, tok, req, settings)
+			renderUploadPage(w, cfg, tok, req, settings)
 			return
 		}
 
@@ -210,6 +239,52 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	}
 }
 
+// requestFilesSettleTimeout bounds how long UploadComplete waits for the TUS
+// completion hook to mark the request's files complete. A variable so tests
+// can shorten it.
+var requestFilesSettleTimeout = 5 * time.Second
+
+const requestFilesSettlePoll = 50 * time.Millisecond
+
+// waitForRequestFiles returns the request's files once none is still
+// 'uploading', or whatever is there when the timeout runs out.
+//
+// Why wait at all: upload.js submits /complete as soon as the last PATCH is
+// answered, but tusd hands the completion event to our hook goroutine before
+// that answer and the hook marks the file complete in parallel. When the
+// browser wins that race, the last file is still 'uploading' here and would be
+// left out of the "files received" mail. Normally the hook needs milliseconds.
+// A stray 'uploading' row (an attempt the uploader abandoned) never settles;
+// then this costs the full timeout once and the mail lists the complete files.
+func waitForRequestFiles(ctx context.Context, requests *store.RequestStore, requestID string) ([]store.UploadRequestFile, error) {
+	deadline := time.Now().Add(requestFilesSettleTimeout)
+	for {
+		files, err := requests.GetFiles(requestID)
+		if err != nil {
+			return nil, err
+		}
+		pending := 0
+		for _, f := range files {
+			if f.Status != "complete" {
+				pending++
+			}
+		}
+		if pending == 0 {
+			return files, nil
+		}
+		if time.Now().After(deadline) {
+			slog.Warn("upload complete: files still uploading after wait, mailing the complete ones",
+				"request_id", requestID, "still_uploading", pending, "waited", requestFilesSettleTimeout)
+			return files, nil
+		}
+		select {
+		case <-ctx.Done():
+			return files, nil
+		case <-time.After(requestFilesSettlePoll):
+		}
+	}
+}
+
 // ── Password cookie ───────────────────────────────────────────────────────────
 
 func uploadPasswordValid(r *http.Request, tok, bcryptHash string) bool {
@@ -245,7 +320,9 @@ type uploadCompleteMail struct {
 }
 
 func (u uploadCompleteMail) viewURL() string {
-	return u.BaseURL + "/ul/" + u.Request.UploadToken + "/files"
+	// The view token, not the upload token: the upload link went to external
+	// parties and must not open the received files (audit M1).
+	return u.BaseURL + "/ul/" + u.Request.ViewPathToken() + "/files"
 }
 
 func (u uploadCompleteMail) requestLabel() string {
@@ -307,7 +384,7 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 		tok := chi.URLParam(r, "token")
 		settings := appMiddleware.GetSettings(r)
 
-		req, err := stores.Requests.GetByUploadTokenAny(tok)
+		req, err := stores.Requests.GetViewableByViewToken(tok)
 		if err != nil || req == nil {
 			renderUploadNotFound(w, settings)
 			return
@@ -346,7 +423,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 		tok := chi.URLParam(r, "token")
 		fileID := chi.URLParam(r, "fileID")
 
-		req, err := stores.Requests.GetByUploadTokenAny(tok)
+		req, err := stores.Requests.GetViewableByViewToken(tok)
 		if err != nil || req == nil {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return
@@ -391,7 +468,7 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
 
-		req, err := stores.Requests.GetByUploadTokenAny(tok)
+		req, err := stores.Requests.GetViewableByViewToken(tok)
 		if err != nil || req == nil {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return
@@ -470,15 +547,19 @@ func findFileInStorage(storagePath, ferriFileID string) string {
 	return ""
 }
 
-func renderUploadPage(w http.ResponseWriter, tok string, req *store.UploadRequest, settings *store.Settings) {
+func renderUploadPage(w http.ResponseWriter, cfg *config.Config, tok string, req *store.UploadRequest, settings *store.Settings) {
 	renderPage(w, "upload.html", struct {
 		baseData
-		Request     *store.UploadRequest
-		CompleteURL string
+		Request        *store.UploadRequest
+		CompleteURL    string
+		MaxFiles       int   // above this, or with a folder, upload.js packs one ZIP (DEC-035)
+		MaxUploadBytes int64 // per upload, the ZIP included
 	}{
-		baseData:    baseData{PageTitle: req.Title, Settings: settings},
-		Request:     req,
-		CompleteURL: "/ul/" + tok + "/complete",
+		baseData:       baseData{PageTitle: req.Title, Settings: settings},
+		Request:        req,
+		CompleteURL:    "/ul/" + tok + "/complete",
+		MaxFiles:       cfg.Limits.MaxFilesPerTransfer,
+		MaxUploadBytes: cfg.Limits.MaxUploadBytes,
 	})
 }
 
@@ -494,14 +575,19 @@ func renderUploadPasswordPage(w http.ResponseWriter, tok string, settings *store
 	})
 }
 
+// renderUploadNotFound shares not_found.html with renderNotFound. It used to
+// render upload_complete.html, which ignores .Message and told visitors of a
+// dead link "Your files have been received".
 func renderUploadNotFound(w http.ResponseWriter, settings *store.Settings) {
+	// Headers MUST be set before WriteHeader — after WriteHeader they are ignored.
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusNotFound)
-	renderPage(w, "upload_complete.html", struct {
+	renderPage(w, "not_found.html", struct {
 		baseData
 		Message string
 	}{
-		baseData: baseData{PageTitle: "Not found", Settings: settings},
-		Message:  "This upload link has expired or does not exist.",
+		baseData: baseData{PageTitle: "Link not available", Settings: settings},
+		Message:  "This upload link has expired or does not exist. Ask the person who sent it for a new link.",
 	})
 }
 

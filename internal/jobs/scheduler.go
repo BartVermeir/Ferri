@@ -140,8 +140,10 @@ func (s *Scheduler) runExpiryJob() {
 		}
 
 		// Build and enqueue expiry summary mail if enabled and from-address is configured.
+		// Not for a transfer that never went live (upload abandoned while
+		// pending): nobody was sent a link, so "never opened" would mislead.
 		settings := s.stores.Settings.Get()
-		if settings.ExpirySummary && settings.MailFromAddress != "" {
+		if t.ActivatedAt.Valid && settings.ExpirySummary && settings.MailFromAddress != "" {
 			if err := s.enqueueExpirySummary(t); err != nil {
 				slog.Error("expiry job: enqueue summary", "transfer", t.ID, "error", err)
 			}
@@ -242,18 +244,11 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 			slog.Error("cleanup job: get files", "transfer", t.ID, "error", err)
 		} else {
 			for _, f := range files {
-				// StoragePath is a logical path (transfers/<id>/<file_id>) that does
-				// not exist on SMB — only attempt it for local storage fallback.
-				removeFile(s.mgr, f.StoragePath, t.ID)
-				removeFile(s.mgr, f.StoragePath+".info", t.ID)
-				if f.TUSUploadID.Valid {
-					// Actual file location on both local and SMB backends.
-					removeFile(s.mgr, f.TUSUploadID.String, t.ID)
-					removeFile(s.mgr, f.TUSUploadID.String+".info", t.ID)
-				} else {
+				if !f.TUSUploadID.Valid {
 					slog.Warn("cleanup job: file has no tus_upload_id, may be orphaned on storage",
 						"transfer", t.ID, "file", f.ID, "storage_path", f.StoragePath)
 				}
+				s.removeAndPurge(store.TransferFiles, f.ID, f.StoragePath, f.TUSUploadID.String)
 			}
 		}
 		// Best-effort removal of (empty) transfer directory
@@ -287,15 +282,11 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 			slog.Error("cleanup job: get request files", "request", r.ID, "error", err)
 		} else {
 			for _, f := range files {
-				removeFile(s.mgr, f.StoragePath, r.ID)
-				removeFile(s.mgr, f.StoragePath+".info", r.ID)
-				if f.TUSUploadID.Valid {
-					removeFile(s.mgr, f.TUSUploadID.String, r.ID)
-					removeFile(s.mgr, f.TUSUploadID.String+".info", r.ID)
-				} else {
+				if !f.TUSUploadID.Valid {
 					slog.Warn("cleanup job: request file has no tus_upload_id, may be orphaned on storage",
 						"request", r.ID, "file", f.ID, "storage_path", f.StoragePath)
 				}
+				s.removeAndPurge(store.RequestFiles, f.ID, f.StoragePath, f.TUSUploadID.String)
 			}
 		}
 		if err := s.mgr.RemoveAll("requests/" + r.ID); err != nil {
@@ -311,6 +302,9 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 
 	// Clean up stalled uploads (independent of transfer expiry)
 	s.cleanupStalled()
+
+	// Retry every deleted file whose data is not confirmed gone yet.
+	s.purgeLeftovers()
 
 	if totalTransfers > 0 {
 		slog.Info("cleanup job: complete",
@@ -331,10 +325,11 @@ func (s *Scheduler) cleanupStalled() {
 
 	var removed int
 	for _, f := range stalledFiles {
-		// Remove both the content file and the TUS .info sidecar.
-		// If only the content file is removed, TUS believes the upload can be resumed.
-		removeFile(s.mgr, f.StoragePath, f.ID)
-		removeFile(s.mgr, f.StoragePath+".info", f.ID)
+		// The data lives at the flat <tus_upload_id>, not at storage_path — this
+		// used to remove only storage_path, leaking every stalled upload.
+		// Both content and .info go: with only the content gone, tusd would
+		// still offer the upload for resumption (DEC-028).
+		s.removeAndPurge(store.TransferFiles, f.ID, f.StoragePath, f.TUSUploadID.String)
 
 		if err := s.stores.Transfers.MarkFileDeleted(f.ID); err != nil {
 			slog.Error("cleanup job: mark stalled deleted", "file", f.ID, "error", err)
@@ -351,8 +346,7 @@ func (s *Scheduler) cleanupStalled() {
 	}
 	var removedReq int
 	for _, f := range stalledReqFiles {
-		removeFile(s.mgr, f.StoragePath, f.ID)
-		removeFile(s.mgr, f.StoragePath+".info", f.ID)
+		s.removeAndPurge(store.RequestFiles, f.ID, f.StoragePath, f.TUSUploadID.String)
 		if err := s.stores.Requests.MarkFileDeleted(f.ID); err != nil {
 			slog.Error("cleanup job: mark stalled request file deleted", "file", f.ID, "error", err)
 			continue
@@ -365,15 +359,44 @@ func (s *Scheduler) cleanupStalled() {
 	}
 }
 
-// removeFile removes a single file from storage, logging a warning if it fails.
-// "Not found" errors are ignored — the file may already have been removed.
-func removeFile(mgr interface{ Remove(string) error }, path, contextID string) {
-	if err := mgr.Remove(path); err != nil {
-		slog.Warn("cleanup job: remove file failed",
-			"path", path,
-			"context", contextID,
-			"error", err,
-		)
+// removeAndPurge wraps storage.PurgeUpload with logging; a failure is retried
+// by purgeLeftovers on every later cleanup run. Returns whether the data is gone.
+func (s *Scheduler) removeAndPurge(table store.FileTable, fileID, storagePath, tusUploadID string) bool {
+	if err := storage.PurgeUpload(s.mgr, s.stores.Files, table, fileID, storagePath, tusUploadID); err != nil {
+		slog.Warn("cleanup job: remove file failed, will retry next run",
+			"table", table, "file", fileID, "error", err)
+		return false
+	}
+	return true
+}
+
+// purgeLeftovers retries the physical removal of every deleted file row that
+// still has a tus_upload_id. That covers removals that failed earlier (e.g. an
+// SMB hiccup) and all stalled uploads deleted before removal included the flat
+// TUS file — on SMB there is no orphan scan to catch those otherwise.
+func (s *Scheduler) purgeLeftovers() {
+	leftovers, err := s.stores.Files.ListUnpurged()
+	if err != nil {
+		slog.Error("cleanup job: list unpurged files", "error", err)
+		return
+	}
+	var purged, waiting int
+	var purgedBytes, waitingBytes int64
+	for _, u := range leftovers {
+		if s.removeAndPurge(u.Table, u.ID, u.StoragePath, u.TUSUploadID) {
+			purged++
+			purgedBytes += u.SizeBytes
+		} else {
+			waiting++
+			waitingBytes += u.SizeBytes
+		}
+	}
+	if purged > 0 {
+		slog.Info("cleanup job: purged leftover files", "count", purged, "gb", float64(purgedBytes)/1_073_741_824)
+	}
+	if waiting > 0 {
+		slog.Warn("cleanup job: deleted files still on storage, will retry next run",
+			"count", waiting, "gb", float64(waitingBytes)/1_073_741_824)
 	}
 }
 

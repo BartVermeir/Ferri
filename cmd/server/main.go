@@ -141,6 +141,7 @@ func main() {
 	r.With(authLimiter.Middleware).Post("/ul/{token}", handler.UploadPassword(cfg, stores))
 	r.Post("/ul/{token}/complete", handler.UploadComplete(cfg, stores))
 	r.Get("/ul/{token}/files", handler.RequestDownloadPage(cfg, stores))
+	r.With(authLimiter.Middleware).Post("/ul/{token}/files", handler.RequestFilesPassword(cfg, stores))
 	r.Get("/ul/{token}/file/{fileID}", handler.RequestDownloadFile(cfg, stores, storageMgr))
 	r.Get("/ul/{token}/zip", handler.RequestDownloadZIP(cfg, stores, storageMgr))
 	// TUS: use http.StripPrefix so tusd sees the path without /tus prefix

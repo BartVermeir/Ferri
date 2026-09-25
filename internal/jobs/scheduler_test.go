@@ -6,6 +6,7 @@ package jobs
 // in-memory SQLite DB and a real local storage backend.
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,5 +140,256 @@ func TestCleanupJob_LeavesNonExpiredTransfersAlone(t *testing.T) {
 	}
 	if transfer.Status != "pending" {
 		t.Fatalf("transfer status = %q, want unchanged (pending)", transfer.Status)
+	}
+}
+
+// ── Physical removal of the flat TUS files (audit H1) ────────────────────────
+
+type purgeFixture struct {
+	t      *testing.T
+	d      *sql.DB
+	stores *store.Stores
+	root   string
+	s      *Scheduler
+}
+
+func newPurgeFixture(t *testing.T) *purgeFixture {
+	t.Helper()
+	d, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := db.Migrate(d); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	stores := store.New(d)
+	root := t.TempDir()
+	mgr := storage.NewManager(storage.NewLocalBackend(root))
+	return &purgeFixture{t: t, d: d, stores: stores, root: root, s: NewScheduler(newCleanupTestConfig(), stores, mgr)}
+}
+
+// writeTUS puts a flat TUS upload (<id> + <id>.info) on storage, the layout
+// both tusd's filestore and Ferri's SMB store use.
+func (f *purgeFixture) writeTUS(tusID string) {
+	f.t.Helper()
+	for _, name := range []string{tusID, tusID + ".info"} {
+		if err := os.WriteFile(filepath.Join(f.root, name), []byte("partial"), 0o644); err != nil {
+			f.t.Fatal(err)
+		}
+	}
+}
+
+func (f *purgeFixture) assertGone(tusID string) {
+	f.t.Helper()
+	for _, name := range []string{tusID, tusID + ".info"} {
+		if _, err := os.Stat(filepath.Join(f.root, name)); !os.IsNotExist(err) {
+			f.t.Errorf("%s still on storage (stat err = %v)", name, err)
+		}
+	}
+}
+
+// tusID returns the file row's tus_upload_id, "" when NULL.
+func (f *purgeFixture) tusID(table, fileID string) string {
+	f.t.Helper()
+	var id sql.NullString
+	if err := f.d.QueryRow(`SELECT tus_upload_id FROM `+table+` WHERE id = ?`, fileID).Scan(&id); err != nil {
+		f.t.Fatal(err)
+	}
+	return id.String
+}
+
+func (f *purgeFixture) transferFile(fileID, tusID string) string {
+	f.t.Helper()
+	res, err := f.stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+		Recipients: []string{"bob@example.com"},
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.stores.Transfers.CreateFileRow(fileID, res.TransferID, "big.mov", "transfers/"+res.TransferID+"/"+fileID, 1000); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.stores.Transfers.SetTUSUploadID(fileID, tusID); err != nil {
+		f.t.Fatal(err)
+	}
+	f.writeTUS(tusID)
+	return res.TransferID
+}
+
+func (f *purgeFixture) requestFile(fileID, tusID string) {
+	f.t.Helper()
+	requestID, _, err := f.stores.Requests.Create(store.CreateRequestInput{
+		RequesterEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.stores.Requests.CreateFileRow(fileID, requestID, "big.mov", "requests/"+requestID+"/"+fileID, 1000); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := f.stores.Requests.SetTUSUploadID(fileID, tusID); err != nil {
+		f.t.Fatal(err)
+	}
+	f.writeTUS(tusID)
+}
+
+// Stalled uploads used to lose only their (non-existent) storage_path; the
+// real data at <tus_upload_id> stayed on storage forever.
+func TestCleanupStalled_RemovesFlatTUSFiles(t *testing.T) {
+	f := newPurgeFixture(t)
+	f.transferFile("tf", "tus-transfer")
+	f.requestFile("rf", "tus-request")
+	for _, table := range []string{"files", "upload_request_files"} {
+		if _, err := f.d.Exec(`UPDATE ` + table + ` SET created_at = unixepoch() - 72*3600`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	f.s.cleanupStalled()
+
+	f.assertGone("tus-transfer")
+	f.assertGone("tus-request")
+	if id := f.tusID("files", "tf"); id != "" {
+		t.Errorf("transfer file tus_upload_id = %q, want NULL (purged)", id)
+	}
+	if id := f.tusID("upload_request_files", "rf"); id != "" {
+		t.Errorf("request file tus_upload_id = %q, want NULL (purged)", id)
+	}
+}
+
+// Expired transfers go through the same removal.
+func TestCleanupJob_ExpiredTransferRemovesFlatTUSFile(t *testing.T) {
+	f := newPurgeFixture(t)
+	transferID := f.transferFile("tf", "tus-transfer")
+	if err := f.stores.Transfers.SetFileComplete("tf", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.Exec(`UPDATE transfers SET status = 'expired', expired_at = unixepoch() - 1000000 WHERE id = ?`, transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	f.s.runCleanupJob()
+
+	f.assertGone("tus-transfer")
+	if id := f.tusID("files", "tf"); id != "" {
+		t.Errorf("tus_upload_id = %q, want NULL (purged)", id)
+	}
+}
+
+// Rows deleted before the fix still point at data on storage. The next
+// cleanup run must find and remove it — on SMB nothing else would.
+func TestCleanupJob_PurgesLeftoversFromBeforeTheFix(t *testing.T) {
+	f := newPurgeFixture(t)
+	f.transferFile("tf", "tus-transfer")
+	f.requestFile("rf", "tus-request")
+	if _, err := f.d.Exec(`UPDATE files SET status = 'deleted'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.Exec(`UPDATE upload_request_files SET status = 'deleted'`); err != nil {
+		t.Fatal(err)
+	}
+
+	f.s.runCleanupJob()
+
+	f.assertGone("tus-transfer")
+	f.assertGone("tus-request")
+	left, err := f.stores.Files.ListUnpurged()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("still unpurged after cleanup: %+v", left)
+	}
+}
+
+// A removal that fails keeps its tus_upload_id and is retried next run.
+func TestCleanupJob_RetriesFailedRemoval(t *testing.T) {
+	f := newPurgeFixture(t)
+	f.transferFile("tf", "tus-transfer")
+	if _, err := f.d.Exec(`UPDATE files SET status = 'deleted'`); err != nil {
+		t.Fatal(err)
+	}
+	// Replace the data file with a non-empty directory: Remove fails on it.
+	blocker := filepath.Join(f.root, "tus-transfer")
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(blocker, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	f.s.runCleanupJob()
+	if id := f.tusID("files", "tf"); id != "tus-transfer" {
+		t.Fatalf("after failed removal tus_upload_id = %q, want it kept for retry", id)
+	}
+
+	// The obstacle goes away (an empty directory is removable); next run succeeds.
+	if err := os.Remove(filepath.Join(blocker, "inside")); err != nil {
+		t.Fatal(err)
+	}
+	f.s.runCleanupJob()
+	f.assertGone("tus-transfer")
+	if id := f.tusID("files", "tf"); id != "" {
+		t.Fatalf("after successful retry tus_upload_id = %q, want NULL", id)
+	}
+}
+
+// ── Expiry of pending transfers (audit L7, needed by the H2 fix) ─────────────
+
+// An abandoned (pending) transfer expires like any other, but its sender gets
+// no "who downloaded what" summary: no link was ever sent. A transfer that did
+// go live still gets one.
+func TestExpiryJob_PendingExpiresWithoutSummary(t *testing.T) {
+	f := newPurgeFixture(t)
+	if err := f.stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(title string) string {
+		res, err := f.stores.Transfers.Create(store.CreateTransferInput{
+			Title: title, SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+			Recipients: []string{"bob@example.com"}, NotifyRecipients: true, ExpectedFiles: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.TransferID
+	}
+	pending, live := mk("never sent"), mk("was live")
+	if err := f.stores.Transfers.CreateFileRow("lf", live, "a.mov", "p", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.stores.Transfers.SetFileComplete("lf", 1); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := f.stores.Transfers.TryActivate(live); err != nil || !ok {
+		t.Fatalf("activate: %v %v", ok, err)
+	}
+	if _, err := f.d.Exec(`UPDATE transfers SET expires_at = unixepoch() - 60`); err != nil {
+		t.Fatal(err)
+	}
+
+	f.s.runExpiryJob()
+
+	for _, id := range []string{pending, live} {
+		tr, err := f.stores.Transfers.GetByID(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tr.Status != "expired" {
+			t.Errorf("transfer %q status = %q, want expired", tr.Title, tr.Status)
+		}
+	}
+	items, err := f.stores.Mail.FetchPending(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || !strings.Contains(items[0].Subject, "was live") {
+		var subjects []string
+		for _, it := range items {
+			subjects = append(subjects, it.Subject)
+		}
+		t.Fatalf("summaries = %q, want exactly one, for the transfer that was live", subjects)
 	}
 }
