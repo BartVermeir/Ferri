@@ -144,7 +144,7 @@ func (s *Scheduler) runExpiryJob() {
 		// pending): nobody was sent a link, so "never opened" would mislead.
 		settings := s.stores.Settings.Get()
 		if t.ActivatedAt.Valid && settings.ExpirySummary && settings.MailFromAddress != "" {
-			if err := s.enqueueExpirySummary(t); err != nil {
+			if err := s.enqueueSummary(t, time.Time{}); err != nil {
 				slog.Error("expiry job: enqueue summary", "transfer", t.ID, "error", err)
 			}
 		}
@@ -168,8 +168,29 @@ func (s *Scheduler) runExpiryJob() {
 	}
 }
 
-// enqueueExpirySummary builds and enqueues the expiry summary mail for a transfer.
-func (s *Scheduler) enqueueExpirySummary(t store.Transfer) error {
+// EnqueueDeletionSummary sends the sender the "who downloaded what" summary
+// when an admin deletes a transfer by hand. Call it before deleting: the
+// file list is empty afterwards. Only for a transfer that is live now: an
+// expired one already had its summary, a pending one never reached anyone.
+// Same switch as the expiry summary. Returns whether a mail was queued.
+func (s *Scheduler) EnqueueDeletionSummary(transferID string) (bool, error) {
+	t, err := s.stores.Transfers.GetByID(transferID)
+	if err != nil || t == nil {
+		return false, err
+	}
+	settings := s.stores.Settings.Get()
+	if t.Status != "active" || !t.ActivatedAt.Valid || !settings.ExpirySummary || settings.MailFromAddress == "" {
+		return false, nil
+	}
+	if err := s.enqueueSummary(*t, time.Now()); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// enqueueSummary builds and enqueues the summary mail for a transfer that
+// expired (deletedAt zero) or that an admin deleted at deletedAt.
+func (s *Scheduler) enqueueSummary(t store.Transfer, deletedAt time.Time) error {
 	history, err := s.stores.Downloads.GetHistoryForTransfer(t.ID)
 	if err != nil {
 		return err
@@ -191,9 +212,14 @@ func (s *Scheduler) enqueueExpirySummary(t store.Transfer) error {
 		Transfer:   t,
 		History:    history,
 		GraceHours: s.cfg.Jobs.CleanupGraceHours,
+		DeletedAt:  deletedAt,
 	}
+	// Only complete files: a dead 'uploading' row (a lost TUS create) was
+	// never part of the transfer the recipients saw.
 	for _, f := range dbFiles {
-		e.Files = append(e.Files, mail.FileItem{Name: f.OriginalName, Size: f.SizeBytes})
+		if f.Status == "complete" {
+			e.Files = append(e.Files, f)
+		}
 	}
 
 	title := "your transfer"
@@ -201,6 +227,9 @@ func (s *Scheduler) enqueueExpirySummary(t store.Transfer) error {
 		title = `"` + t.Title + `"`
 	}
 	subject := "Expired: " + title
+	if !deletedAt.IsZero() {
+		subject = "Deleted: " + title
+	}
 	return s.stores.Mail.Enqueue(nil, t.SenderEmail, subject, buildExpirySummaryHTML(e), buildExpirySummaryText(e))
 }
 
@@ -418,8 +447,125 @@ type expirySummary struct {
 	Loc        *time.Location
 	Transfer   store.Transfer
 	History    []store.RecipientHistory
-	Files      []mail.FileItem
+	Files      []store.File // complete files, in upload order
 	GraceHours int
+	DeletedAt  time.Time // set when an admin deleted the transfer; zero = it expired
+}
+
+func (e expirySummary) fileItems() []mail.FileItem {
+	items := make([]mail.FileItem, 0, len(e.Files))
+	for _, f := range e.Files {
+		items = append(items, mail.FileItem{Name: f.OriginalName, Size: f.SizeBytes})
+	}
+	return items
+}
+
+// recipientSummary is what the summary says about one recipient: a status
+// ("3 of 5 files"), one line per downloaded file with its download times,
+// and the files not downloaded. HTML and text render the same summary.
+type recipientSummary struct {
+	Label   string
+	Status  string
+	Lines   []summaryLine
+	Missing []string
+}
+
+type summaryLine struct {
+	What  string
+	Times string // "11 Sep 13:14, 12 Sep 09:02 (2×)"
+}
+
+// recipients builds the per-recipient summaries. A ZIP download records one
+// event per file with the same time; when every file shows exactly the same
+// times the lines collapse into one "All files" line instead of repeating the
+// same time for each of 50 files.
+func (e expirySummary) recipients() []recipientSummary {
+	var out []recipientSummary
+	for _, h := range e.History {
+		byFile := make(map[string][]int64)
+		byName := make(map[string][]int64) // events whose file row is gone
+		var names []string
+		known := make(map[string]bool, len(e.Files))
+		for _, f := range e.Files {
+			known[f.ID] = true
+		}
+		for _, ev := range h.Events {
+			if ev.FileID.Valid && known[ev.FileID.String] {
+				byFile[ev.FileID.String] = append(byFile[ev.FileID.String], ev.DownloadedAt)
+				continue
+			}
+			if _, seen := byName[ev.OriginalName]; !seen {
+				names = append(names, ev.OriginalName)
+			}
+			byName[ev.OriginalName] = append(byName[ev.OriginalName], ev.DownloadedAt)
+		}
+
+		rs := recipientSummary{Label: e.label(h)}
+		downloaded := 0
+		for _, f := range e.Files {
+			if times, ok := byFile[f.ID]; ok {
+				downloaded++
+				rs.Lines = append(rs.Lines, summaryLine{What: f.OriginalName, Times: e.formatTimes(times)})
+			} else {
+				rs.Missing = append(rs.Missing, f.OriginalName)
+			}
+		}
+		if downloaded == len(e.Files) && downloaded > 1 && sameTimes(rs.Lines) {
+			rs.Lines = []summaryLine{{What: "All files", Times: rs.Lines[0].Times}}
+		}
+		for _, n := range names {
+			rs.Lines = append(rs.Lines, summaryLine{What: n, Times: e.formatTimes(byName[n])})
+		}
+
+		total := len(e.Files)
+		switch {
+		case len(rs.Lines) == 0:
+			rs.Status = "nothing downloaded"
+			rs.Missing = nil // "nothing downloaded" already says it
+		case total <= 1 || downloaded == 0:
+			rs.Status = "downloaded"
+		case downloaded == total:
+			rs.Status = fmt.Sprintf("all %d files", total)
+		default:
+			rs.Status = fmt.Sprintf("%d of %d files", downloaded, total)
+		}
+		out = append(out, rs)
+	}
+	return out
+}
+
+// formatTimes lists download times per minute, oldest first; several
+// downloads in the same minute show once with a count.
+func (e expirySummary) formatTimes(unix []int64) string {
+	var parts []string
+	last, count := "", 0
+	flush := func() {
+		if count == 1 {
+			parts = append(parts, last)
+		} else if count > 1 {
+			parts = append(parts, fmt.Sprintf("%s (%d×)", last, count))
+		}
+	}
+	for _, u := range unix {
+		t := time.Unix(u, 0).In(e.Loc).Format("2 Jan 15:04")
+		if t == last {
+			count++
+			continue
+		}
+		flush()
+		last, count = t, 1
+	}
+	flush()
+	return strings.Join(parts, ", ")
+}
+
+func sameTimes(lines []summaryLine) bool {
+	for _, l := range lines[1:] {
+		if l.Times != lines[0].Times {
+			return false
+		}
+	}
+	return true
 }
 
 // label names a history row: the sender's own link and the one shared link
@@ -441,55 +587,65 @@ func (e expirySummary) intro() string {
 	if e.Transfer.Title != "" {
 		title = "Your transfer \"" + e.Transfer.Title + "\""
 	}
+	if !e.DeletedAt.IsZero() {
+		return fmt.Sprintf("%s was deleted by an administrator on %s. The download links no longer work.",
+			title, mail.FormatDate(e.DeletedAt, e.Loc))
+	}
 	return fmt.Sprintf("%s expired on %s. The download links no longer work.",
 		title, mail.FormatDate(e.Transfer.ExpiresAt, e.Loc))
 }
 
 func (e expirySummary) cleanupNote() string {
-	return fmt.Sprintf("The files will be permanently deleted after a grace period of %d hours. You are receiving this summary because expiry summaries are switched on for transfers you send with %s.",
-		e.GraceHours, mail.CompanyName(e.Settings))
+	files := fmt.Sprintf("The files will be permanently deleted after a grace period of %d hours.", e.GraceHours)
+	if !e.DeletedAt.IsZero() {
+		files = "The files have been deleted."
+	}
+	return fmt.Sprintf("%s You are receiving this summary because expiry summaries are switched on for transfers you send with %s.",
+		files, mail.CompanyName(e.Settings))
 }
 
-// buildExpirySummaryHTML renders the expiry summary mail as HTML.
-// Format (architecture.md §8):
+// buildExpirySummaryHTML renders the expiry summary mail as HTML. Per
+// recipient: which files they downloaded and when, and which not
+// (recipients()). Format (architecture.md §8):
 //
-//	Transfer "Project week 23" expired on 16 May 2026.
+//	bob@client.com: 3 of 5 files
+//	  • a.mov: 11 Sep 13:14, 12 Sep 09:02
+//	  • b.mov: 11 Sep 13:14
+//	  Not downloaded: d.mov, e.mov
 //
-//	alice@client.com (3 downloads)
-//	  • 11 May 13:14
-//	  • 11 May 14:48
-//
-//	bob@client.com
-//	  Never opened.
+//	dave@client.com: nothing downloaded
 func buildExpirySummaryHTML(e expirySummary) string {
 	var rows strings.Builder
-	for _, h := range e.History {
-		var detail string
-		if h.DownloadCount == 0 {
-			detail = `<span style="color:#aaa;">Never opened</span>`
-		} else {
-			var timestamps []string
-			for _, ev := range h.Events {
-				timestamps = append(timestamps, time.Unix(ev.DownloadedAt, 0).In(e.Loc).Format("2 Jan 15:04"))
-			}
-			detail = fmt.Sprintf(`<span style="color:#555;">%d download(s)</span><br><span style="color:#aaa;font-size:12px;">%s</span>`,
-				h.DownloadCount, strings.Join(timestamps, ", "))
+	for _, rs := range e.recipients() {
+		bottom := "4px"
+		if len(rs.Lines) == 0 && len(rs.Missing) == 0 {
+			bottom = "16px"
 		}
-		rows.WriteString(fmt.Sprintf(
-			`<tr><td style="padding:9px 0;font-size:13px;color:#333;border-bottom:1px solid #f0f0ec;vertical-align:top;">%s</td>`+
-				`<td style="padding:9px 0 9px 12px;font-size:13px;text-align:right;border-bottom:1px solid #f0f0ec;">%s</td></tr>`,
-			html.EscapeString(e.label(h)), detail,
-		))
+		fmt.Fprintf(&rows, `<p style="margin:0 0 %s;font-size:13px;color:#333;"><strong>%s</strong>: %s</p>`,
+			bottom, html.EscapeString(rs.Label), html.EscapeString(rs.Status))
+		if len(rs.Lines) == 0 && len(rs.Missing) == 0 {
+			continue
+		}
+		rows.WriteString(`<ul style="margin:0 0 16px;padding-left:18px;font-size:13px;color:#555;line-height:1.6;">`)
+		for _, l := range rs.Lines {
+			fmt.Fprintf(&rows, `<li style="word-break:break-all;">%s: <span style="color:#888;">%s</span></li>`,
+				html.EscapeString(l.What), html.EscapeString(l.Times))
+		}
+		if len(rs.Missing) > 0 {
+			fmt.Fprintf(&rows, `<li style="color:#999;list-style:none;margin-left:-18px;">Not downloaded: %s</li>`,
+				html.EscapeString(strings.Join(rs.Missing, ", ")))
+		}
+		rows.WriteString(`</ul>`)
 	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(e.Transfer.SenderName))
 	fmt.Fprintf(&b, `<p style="margin:0 0 20px;">%s Here is who downloaded what.</p>`, html.EscapeString(e.intro()))
-	b.WriteString(`<p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.04em;">Downloads</p>`)
-	fmt.Fprintf(&b, `<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 20px;">%s</table>`, rows.String())
+	b.WriteString(`<p style="margin:0 0 10px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.04em;">Downloads</p>`)
+	b.WriteString(rows.String())
 	if len(e.Files) > 0 {
-		b.WriteString(`<p style="margin:0 0 6px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.04em;">Files</p>`)
-		b.WriteString(mail.FileListHTML(e.Files))
+		b.WriteString(`<p style="margin:20px 0 6px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.04em;">Files</p>`)
+		b.WriteString(mail.FileListHTML(e.fileItems()))
 	}
 	b.WriteString(mail.NoteHTML(e.cleanupNote()))
 
@@ -499,21 +655,18 @@ func buildExpirySummaryHTML(e expirySummary) string {
 func buildExpirySummaryText(e expirySummary) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Hello %s,\n\n%s Here is who downloaded what.\n\n", e.Transfer.SenderName, e.intro())
-	for _, h := range e.History {
-		if h.DownloadCount == 0 {
-			b.WriteString(fmt.Sprintf("%s\n  Never opened.\n\n", e.label(h)))
-		} else {
-			b.WriteString(fmt.Sprintf("%s (%d download(s))\n", e.label(h), h.DownloadCount))
-			for _, ev := range h.Events {
-				b.WriteString(fmt.Sprintf("  • %s\n",
-					time.Unix(ev.DownloadedAt, 0).In(e.Loc).Format("2 Jan 15:04"),
-				))
-			}
-			b.WriteString("\n")
+	for _, rs := range e.recipients() {
+		fmt.Fprintf(&b, "%s: %s\n", rs.Label, rs.Status)
+		for _, l := range rs.Lines {
+			fmt.Fprintf(&b, "  • %s: %s\n", l.What, l.Times)
 		}
+		if len(rs.Missing) > 0 {
+			fmt.Fprintf(&b, "  Not downloaded: %s\n", strings.Join(rs.Missing, ", "))
+		}
+		b.WriteString("\n")
 	}
 	if len(e.Files) > 0 {
-		b.WriteString("Files:\n" + mail.FileListText(e.Files) + "\n")
+		b.WriteString("Files:\n" + mail.FileListText(e.fileItems()) + "\n")
 	}
 	fmt.Fprintf(&b, "--\n%s\n", e.cleanupNote())
 	return b.String()

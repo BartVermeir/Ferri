@@ -81,6 +81,9 @@ type ExpiryOption struct {
 type LimitsConfig struct {
 	MaxUploadBytes       int64 `yaml:"max_upload_bytes"`
 	MaxFilesPerTransfer  int   `yaml:"max_files_per_transfer"`
+	// MinFreeBytes: a new upload is refused when it would leave less than
+	// this free on the storage. Hard stop: a full share breaks every upload.
+	MinFreeBytes int64 `yaml:"min_free_bytes"`
 }
 
 type JobsConfig struct {
@@ -119,6 +122,7 @@ func Defaults() *Config {
 		Limits: LimitsConfig{
 			MaxUploadBytes:      644_245_094_400, // 600 GB
 			MaxFilesPerTransfer: 50,
+			MinFreeBytes:        53_687_091_200, // 50 GB
 		},
 		Jobs: JobsConfig{
 			ExpiryIntervalMinutes: 60,
@@ -256,6 +260,9 @@ func (c *Config) validate() error {
 	}
 	if c.Limits.MaxFilesPerTransfer <= 0 {
 		c.Limits.MaxFilesPerTransfer = d.Limits.MaxFilesPerTransfer
+	}
+	if c.Limits.MinFreeBytes <= 0 {
+		c.Limits.MinFreeBytes = d.Limits.MinFreeBytes
 	}
 	if c.Server.ShutdownTimeoutSeconds <= 0 {
 		c.Server.ShutdownTimeoutSeconds = d.Server.ShutdownTimeoutSeconds

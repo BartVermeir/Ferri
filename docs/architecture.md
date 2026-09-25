@@ -243,7 +243,10 @@ The browser JS sends either `X-Transfer-Id` or `X-Upload-Request-Token` as a TUS
    the configured limit, the callback returns HTTP 413 (Request Entity Too Large)
    before any storage is allocated. This is the only reliable place to enforce
    the size limit — checking after upload would waste disk space and bandwidth.
-5. If any check fails: returns the appropriate HTTP error — no bytes written,
+5. Checks free space on storage: the upload plus `limits.min_free_bytes` must
+   fit, else HTTP 507. For a transfer, also checks it has fewer than twice the
+   files `/send` announced (DEC-036).
+6. If any check fails: returns the appropriate HTTP error — no bytes written,
    no storage allocated, no database rows created
 
 **On every TUS PATCH (chunk received):**
@@ -590,16 +593,22 @@ All mail goes through the `mail_queue` table. No synchronous sends.
 ### Expiry summary format
 
 ```
-Transfer "Project week 23" expired on 16 May 2026.
+Your transfer "Project week 23" expired on Sat 16 May 2026, 23:59. The download links no longer work. Here is who downloaded what.
 
-alice@client.com (3 downloads)
-  • 11 May 13:14
-  • 11 May 14:48
-  • 13 May 09:40
+alice@client.com: 2 of 3 files
+  • a.mov: 11 May 13:14, 13 May 09:40
+  • b.mov: 11 May 13:14 (2×)
+  Not downloaded: c.mov
 
-bob@client.com
-  Never opened.
+carol@client.com: all 3 files
+  • All files: 11 May 14:48
+
+bob@client.com: nothing downloaded
 ```
+
+The same summary goes out when an admin deletes a live transfer (`POST /admin/transfers/{id}/delete`, `Scheduler.EnqueueDeletionSummary`, queued before the delete): subject "Deleted: …", intro "was deleted by an administrator on …", and "The files have been deleted." instead of the grace period. An expired transfer already had its summary and a pending one never reached anyone, so neither gets one.
+
+Per recipient: which files, when, and which not. A ZIP records one event per file with the same time; when every file has exactly the same times the lines collapse into "All files". Several downloads in the same minute show once with a count. Only complete files count as the transfer's files. "Nothing downloaded", not "never opened": opening the page is not recorded.
 
 Uses `download_events.original_name` (denormalised) so filenames are correct even after files are deleted from storage.
 
@@ -653,6 +662,7 @@ expiry_options:
 limits:
   max_upload_bytes: 644245094400          # 600 GB
   max_files_per_transfer: 50
+  min_free_bytes: 53687091200             # 50 GB
 
 jobs:
   expiry_interval_minutes: 60

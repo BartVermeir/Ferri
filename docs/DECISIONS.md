@@ -136,7 +136,7 @@ This document is intended as a living record. When a decision is revisited or re
 **Notifications sent:**
 1. To recipient(s): transfer available (includes download link)
 2. To sender: confirmation that transfer was created
-3. To sender: notification when a recipient downloads (first download per recipient)
+3. To sender: notification when a recipient downloads (at most one per recipient and transfer per hour; see DEC-012)
 4. To requester: upload request completed by external party
 
 **Alternatives considered:**
@@ -227,15 +227,15 @@ This document is intended as a living record. When a decision is revisited or re
 **Notification events:**
 1. Recipient(s): transfer available (one mail per address)
 2. Sender: confirmation of transfer creation
-3. Sender: per-recipient download notification, with timestamp. At most one per recipient and file per hour; a request that resumes a download (a `Range` not starting at byte 0) is not a new download. Every counted download, repeats included, is still recorded for the expiry summary.
-4. Sender: expiry summary — when a transfer expires, a single summary mail lists every recipient with the exact timestamp of each individual download (not just the first), plus the total count. Recipients who never opened the link are explicitly listed as "never downloaded". Example format:
+3. Sender: per-recipient download notification, with timestamp. At most one per recipient and transfer per hour, however many files the transfer holds: 5000 files downloaded within the hour give one mail, five transfers give five, and a download the next day mails again. A recipient row belongs to one transfer, so "per recipient" is per recipient per transfer. The mail names the file that triggered it and says further downloads within the hour are not mailed. `RecordDownload` checks for an earlier download inside the transaction that records the new one, so simultaneous downloads cannot both mail. A request that resumes a download (a `Range` not starting at byte 0) is not a new download. Every counted download, repeats included, is still recorded for the expiry summary.
+4. Sender: expiry summary — when a transfer expires, or when an admin deletes a live transfer by hand (subject "Deleted: …", no grace period; not for an already expired or a pending transfer), a single summary mail lists every recipient with, per file, the time of each download (not just the first), and the files they did not download. Recipients who downloaded nothing are listed explicitly. A ZIP download, which records every file at the same time, shows as one "All files" line. Example format (architecture.md §8):
 
-   alice@client.com (3 downloads)
-     • 11 mei 13:14
-     • 11 mei 14:48
-     • 13 mei 09:40
+   alice@client.com: 2 of 3 files
+     • a.mov: 11 May 13:14, 13 May 09:40
+     • b.mov: 11 May 13:14
+     Not downloaded: c.mov
 
-   bob@client.com — never opened
+   bob@client.com: nothing downloaded
 5. Upload requester: notification when the external party completes their upload
 
 ---
@@ -504,6 +504,8 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 **Edge case:** A client that lies about `Upload-Length` (sends a small value but then PATCHes more data) is handled by `tusd` itself — it rejects PATCH requests that would exceed the declared `Upload-Length`. The combination of our check at create-time and tusd's enforcement during transfer closes both attack vectors.
 
+**Gotcha:** the callback must refuse with a `tusd.Error` (`rejectWith` in `internal/tus/handler.go`). For any other error tusd drops the returned response and answers 500, which tus-js-client retries and then reports as "unexpected response". The response body is the plain message, which `upload.js` shows to the user.
+
 ---
 
 ## DEC-030: transfer.ActivatedAt is sql.NullInt64 — nil-check required before time.Unix
@@ -564,6 +566,27 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 - `client-zip` marks every archive "version 4.5 needed to extract" (ZIP64 capable). The built-in extractors of Windows and macOS and 7-Zip handle this; some very old tools do not.
 - A packed upload is a stream and cannot resume after a page reload. Loose files cannot resume after a reload either (see the audit, M10).
 - The recipient cannot download a single file from a packed folder.
+
+---
+
+## DEC-036: 600 GB per transfer is a warning; only free space is a hard stop
+
+**Decision:** Ferri checks three things before an upload starts. Only the free-space check is a hard stop that users can meet in normal use.
+- **Per upload:** `limits.max_upload_bytes` (600 GB) stays a hard limit per uploaded file (DEC-029). A packed folder is one upload, so a ZIP over 600 GB is refused in the browser before anything is sent.
+- **Per transfer or request:** no limit on the total size, and none on the number of files. When loose files add up to more than 600 GB, the send page and the upload page ask "Upload them anyway?", and on yes the upload goes ahead.
+- **Free space:** a new upload is refused (HTTP 507) when it would leave less than `limits.min_free_bytes` (default 50 GB) free on the storage. If the storage cannot report its free space, the upload goes ahead and a WARN is logged.
+- **Announced files:** a transfer takes at most twice the number of files `/send` announced. This is not a limit for users, because every new attempt creates a new transfer.
+
+**Rationale:** 600 GB per transfer is what users are told, not a rule the business needs enforced. A 1600-file folder was the first real test, so a limit on the number of files would block exactly the case DEC-035 solves. A full share, by contrast, breaks every upload at once, including other people's, and no warning can prevent that. Letting uploads through when the free space is unknown keeps one SMB server without that query from stopping all uploads.
+
+**Why twice and not exactly the announced number:** when a create response is lost, tus-js-client posts again. The first POST then leaves a dead `uploading` row. With an exact cap, that row would take the place of the transfer's last real file, and the transfer would never go live.
+
+**Considered and rejected (2026-09-25):** limits per upload request on the number of files (200) or total size (1 TB). The per-request columns `max_files` and `max_total_bytes` in `upload_requests` remain unused.
+
+**Limits and risks:**
+- The free-space check sees the space at the start of an upload, not what running uploads will still write. The 50 GB margin has to absorb that.
+- A 600 GB upload needs 650 GB free, because the upload plus the 50 GB margin must fit.
+- On SMB, a unit of free space is go-smb2's `BlockSize()` (bytes per sector) times `FragmentSize()` (sectors per unit). Using `BlockSize()` alone under-reports the space, usually by a factor of 8.
 
 ---
 

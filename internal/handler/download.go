@@ -52,7 +52,8 @@ const zipCopyBufSize = 1 << 20 // 1MB
 const downloadPasswordCookie = "ferri_dl_auth"
 
 // downloadNotifyWindow: at most one download notification per recipient and
-// file within this window. Every counted download is still recorded.
+// transfer within this window, whatever the number of files. Every counted
+// download is still recorded for the expiry summary.
 const downloadNotifyWindow = time.Hour
 
 // countsAsDownload reports whether a file request starts a download, as
@@ -226,22 +227,19 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 			ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
 			ua := r.Header.Get("User-Agent")
 
-			recent, err := stores.Downloads.DownloadedWithin(recipient.ID, targetFile.ID, downloadNotifyWindow)
+			_, recent, err := stores.Downloads.RecordDownload(
+				recipient.ID, targetFile.ID, targetFile.OriginalName, ip, ua, downloadNotifyWindow,
+			)
 			if err != nil {
-				logDownloadError("check recent download", err, fileID)
-			}
-			if _, err := stores.Downloads.RecordDownload(
-				recipient.ID, targetFile.ID, targetFile.OriginalName, ip, ua,
-			); err != nil {
 				// Log but continue — a recording failure should not block the download
 				logDownloadError("record download event", err, fileID)
 			}
-			notify = !recent
+			notify = err == nil && !recent
 		}
 
-		// Enqueue download notification mail if enabled, at most once per
-		// downloadNotifyWindow. Not for the sender's own link: telling the
-		// sender they downloaded their own file is noise.
+		// Enqueue the download notification if enabled, at most once per
+		// recipient per downloadNotifyWindow. Not for the sender's own link:
+		// telling the sender they downloaded their own file is noise.
 		if notify && settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
 			n := downloadNotice(cfg, settings, transfer, recipient, targetFile.OriginalName)
 			subject := fmt.Sprintf("Downloaded: %s", targetFile.OriginalName)
@@ -439,6 +437,17 @@ func (n downloadNoticeData) who() string {
 	return n.Who
 }
 
+// laterNote explains why the mail names one file: further downloads from the
+// same transfer within downloadNotifyWindow are not mailed. It points to the
+// expiry summary only when that mail is switched on.
+func (n downloadNoticeData) laterNote() string {
+	note := "Further downloads from this transfer in the next hour are not mailed separately."
+	if n.Settings != nil && n.Settings.ExpirySummary {
+		note += " The summary you get when the transfer expires lists every download."
+	}
+	return note
+}
+
 func buildDownloadNotifyHTML(n downloadNoticeData) string {
 	// Recipient email, filename (client TUS metadata) and title are all
 	// attacker-influenced, so they MUST be HTML-escaped before interpolation.
@@ -451,6 +460,7 @@ func buildDownloadNotifyHTML(n downloadNoticeData) string {
   <tr><td style="padding:3px 16px 3px 0;color:#888;">Available until</td><td style="padding:3px 0;">%s</td></tr>
 </table>`,
 		html.EscapeString(mail.FormatDate(n.At, n.Loc)), html.EscapeString(mail.FormatDate(n.Transfer.ExpiresAt, n.Loc)))
+	fmt.Fprintf(&b, `<p style="margin:0 0 20px;font-size:13px;color:#555;">%s</p>`, html.EscapeString(n.laterNote()))
 	b.WriteString(mail.NoteHTML("You are receiving this email because download notifications are switched on for transfers you send with " + mail.CompanyName(n.Settings) + "."))
 
 	preheader := fmt.Sprintf("%s downloaded %s.", n.who(), n.What)
@@ -458,10 +468,10 @@ func buildDownloadNotifyHTML(n downloadNoticeData) string {
 }
 
 func buildDownloadNotifyText(n downloadNoticeData) string {
-	return fmt.Sprintf("Hello %s,\n\n%s downloaded %s from %s.\n\nDownloaded:      %s\nAvailable until: %s\n\n--\nYou are receiving this email because download notifications are switched on for transfers you send with %s.\n",
+	return fmt.Sprintf("Hello %s,\n\n%s downloaded %s from %s.\n\nDownloaded:      %s\nAvailable until: %s\n\n%s\n\n--\nYou are receiving this email because download notifications are switched on for transfers you send with %s.\n",
 		n.Transfer.SenderName, n.who(), n.What, transferLabel(n.Transfer),
 		mail.FormatDate(n.At, n.Loc), mail.FormatDate(n.Transfer.ExpiresAt, n.Loc),
-		mail.CompanyName(n.Settings))
+		n.laterNote(), mail.CompanyName(n.Settings))
 }
 
 // ── Logging helper ────────────────────────────────────────────────────────────
@@ -494,24 +504,22 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		// Record a download event for each file in the ZIP — before streaming
 		// so events are captured even if the client disconnects mid-download.
 		// The ZIP is streamed without Range support, so every GET is a download.
-		// Notify only if at least one file was not downloaded within the
-		// window: a repeated ZIP download must not mail the sender again.
+		// Same rule as a single file: notify only if this recipient downloaded
+		// nothing from the transfer within the window. Only the first event
+		// decides; the ones after it see this ZIP's own events.
 		ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
 		ua := r.Header.Get("User-Agent")
 
 		notify := false
-		for _, f := range files {
-			recent, err := stores.Downloads.DownloadedWithin(recipient.ID, f.ID, downloadNotifyWindow)
+		for i, f := range files {
+			_, recent, err := stores.Downloads.RecordDownload(
+				recipient.ID, f.ID, f.OriginalName, ip, ua, downloadNotifyWindow,
+			)
 			if err != nil {
-				logDownloadError("zip: check recent download", err, f.ID)
-			}
-			if !recent {
-				notify = true
-			}
-			if _, err := stores.Downloads.RecordDownload(
-				recipient.ID, f.ID, f.OriginalName, ip, ua,
-			); err != nil {
 				logDownloadError("zip: record download event", err, f.ID)
+			}
+			if i == 0 {
+				notify = err == nil && !recent
 			}
 		}
 

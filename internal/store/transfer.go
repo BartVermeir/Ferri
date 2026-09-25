@@ -522,6 +522,20 @@ func (s *TransferStore) ValidateForTUS(transferID string) (bool, error) {
 }
 
 
+// CountFiles returns how many live (not deleted) file rows a transfer has, and
+// the number of files /send announced for it (NULL for pre-004 transfers).
+func (s *TransferStore) CountFiles(transferID string) (int, sql.NullInt64, error) {
+	var count int
+	var expected sql.NullInt64
+	err := s.db.QueryRow(`
+		SELECT (SELECT COUNT(*) FROM files WHERE transfer_id = t.id AND status != 'deleted'),
+		       t.expected_files
+		FROM transfers t WHERE t.id = ?`,
+		transferID,
+	).Scan(&count, &expected)
+	return count, expected, err
+}
+
 // CreateFileRow inserts a new file row for a transfer, called from the TUS
 // PreUploadCreateCallback before any bytes are written.
 func (s *TransferStore) CreateFileRow(fileID, transferID, originalName, storagePath string, sizeBytes int64) error {

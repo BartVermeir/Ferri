@@ -219,6 +219,23 @@ func (b *SMBBackend) TUSStore() tusd.DataStore {
 	return newSMBTUSStore(share, basePath)
 }
 
+// FreeSpace returns the bytes available to this user on the share
+// (the caller-available units, which respect quotas). Gotcha: go-smb2's
+// BlockSize is the sector size and FragmentSize the sectors per allocation
+// unit, so one unit is BlockSize × FragmentSize bytes.
+func (b *SMBBackend) FreeSpace() (uint64, error) {
+	var free uint64
+	err := b.withShare(func(s *smb2.Share) error {
+		fi, err := s.Statfs(b.smbPath(""))
+		if err != nil {
+			return err
+		}
+		free = fi.AvailableBlockCount() * fi.FragmentSize() * fi.BlockSize()
+		return nil
+	})
+	return free, err
+}
+
 // TestConnection checks connectivity and write access.
 func (b *SMBBackend) TestConnection() error {
 	probeRel := path.Join(strings.Trim(b.cfg.BasePath, "/"), ".ferri-probe")

@@ -170,7 +170,7 @@ func main() {
 			r.Post("/admin/cleanup", handler.AdminForceCleanup(cfg, scheduler))
 			r.Post("/admin/orphans/clean", handler.AdminOrphanClean(cfg, stores))
 			r.Get("/admin/transfers", handler.AdminTransfers(cfg, stores))
-			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores, storageMgr))
+			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores, storageMgr, scheduler))
 			r.Post("/admin/requests/{id}/delete", handler.AdminRequestDelete(cfg, stores, storageMgr))
 			r.Get("/admin/mail", handler.AdminMail(cfg, stores))
 					r.Post("/admin/mail/{id}/retry", handler.AdminMailRetry(cfg, stores))

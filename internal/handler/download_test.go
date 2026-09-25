@@ -355,3 +355,92 @@ func TestDownloadZIP_RepeatWithinHourMailsOnce(t *testing.T) {
 		t.Fatalf("3 ZIP downloads of 1 file: events = %d, mails = %d, want 3 and 1", events, mails)
 	}
 }
+
+// One transfer, one mail per hour: a recipient downloading every file of a
+// transfer and the ZIP on top within the hour mails the sender once; a
+// download hours later mails again. A second transfer to the same address is
+// a new recipient row, so its own mail. The dedupe used to be per file, so a
+// 50-file transfer meant 50 mails.
+func TestDownloadNotify_OneMailPerTransferPerHour(t *testing.T) {
+	d := newTestDB(t)
+	stores := store.New(d)
+	mgr, root := newTestManager(t)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	r := newDownloadRouter(newTestConfig(), stores, mgr)
+
+	createTransfer := func(names ...string) (tok string, fileIDs []string) {
+		t.Helper()
+		var files []store.CreateFileInput
+		for _, n := range names {
+			files = append(files, store.CreateFileInput{OriginalName: n, StoragePath: "transfers/multi/" + n, SizeBytes: 5})
+		}
+		res, err := stores.Transfers.Create(store.CreateTransferInput{
+			Title: "Multi", SenderName: "Alice", SenderEmail: "alice@example.com",
+			ExpiresAt: time.Now().Add(24 * time.Hour), Recipients: []string{"bob@example.com"},
+			Files: files, NotifyRecipients: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, f := range res.Files {
+			writeStorageFile(t, root, "transfers/multi/"+names[i], []byte("hello"))
+			if err := stores.Transfers.SetFileComplete(f.FileID, 5); err != nil {
+				t.Fatal(err)
+			}
+			fileIDs = append(fileIDs, f.FileID)
+		}
+		if ok, err := stores.Transfers.TryActivate(res.TransferID); err != nil || !ok {
+			t.Fatalf("activate: %v %v", ok, err)
+		}
+		return res.Recipients[0].DownloadToken, fileIDs
+	}
+	get := func(path string) {
+		t.Helper()
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d", path, rr.Code)
+		}
+	}
+	mails := func() int {
+		t.Helper()
+		var n int
+		if err := d.QueryRow(`SELECT COUNT(*) FROM mail_queue WHERE subject LIKE 'Downloaded:%'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	tok, ids := createTransfer("a.jpg", "b.jpg", "c.jpg")
+	for _, id := range ids {
+		get("/dl/" + tok + "/file/" + id)
+	}
+	get("/dl/" + tok + "/zip")
+	if n := mails(); n != 1 {
+		t.Fatalf("3 files + ZIP of one transfer: %d mails, want 1", n)
+	}
+
+	var body string
+	if err := d.QueryRow(`SELECT body_text FROM mail_queue WHERE subject LIKE 'Downloaded:%'`).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, "not mailed separately") {
+		t.Errorf("mail does not explain that later downloads are not mailed:\n%s", body)
+	}
+
+	if _, err := d.Exec(`UPDATE download_events SET downloaded_at = unixepoch() - 7200`); err != nil {
+		t.Fatal(err)
+	}
+	get("/dl/" + tok + "/file/" + ids[0])
+	if n := mails(); n != 2 {
+		t.Fatalf("download two hours later: %d mails, want 2", n)
+	}
+
+	tok2, ids2 := createTransfer("d.jpg")
+	get("/dl/" + tok2 + "/file/" + ids2[0])
+	if n := mails(); n != 3 {
+		t.Fatalf("after a download from a second transfer: %d mails, want 3", n)
+	}
+}

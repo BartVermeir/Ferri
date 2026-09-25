@@ -129,7 +129,7 @@
             <td>
               <form method="POST" action="/admin/transfers/{{.ID}}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm"
-                  data-confirm="Delete this transfer and all its files? This cannot be undone.">
+                  data-confirm="Delete this transfer and all its files? This cannot be undone. If the transfer is live, the sender gets a summary of who downloaded what.">
                   Delete
                 </button>
               </form>

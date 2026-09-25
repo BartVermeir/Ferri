@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/jobs"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
@@ -36,7 +37,7 @@ func newAdminRouter(cfg *config.Config, stores *store.Stores, mgr *storage.Manag
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.AdminAuth(cfg))
 		r.Get("/admin", AdminDashboard(cfg, stores))
-		r.Post("/admin/transfers/{id}/delete", AdminTransferDelete(cfg, stores, mgr))
+		r.Post("/admin/transfers/{id}/delete", AdminTransferDelete(cfg, stores, mgr, jobs.NewScheduler(cfg, stores, mgr)))
 		r.Post("/admin/requests/{id}/delete", AdminRequestDelete(cfg, stores, mgr))
 		r.Post("/admin/logout", AdminLogout(cfg))
 	})
@@ -288,5 +289,106 @@ func TestAdminDashboard_ViewFilesLinkUsesViewToken(t *testing.T) {
 	}
 	if strings.Contains(body, "/ul/"+uploadTok+"/files") {
 		t.Fatalf("dashboard links /files with the upload token")
+	}
+}
+
+// Deleting a live transfer by hand sends the sender the same "who downloaded
+// what" summary an expiry does. Not for an expired transfer (it already had
+// one), not for a pending one (it never reached anyone), and not when expiry
+// summaries are switched off.
+func TestAdminDelete_SendsSummaryForLiveTransferOnly(t *testing.T) {
+	cfg := newTestConfig()
+	d := newTestDB(t)
+	stores := store.New(d)
+	mgr, _ := newTestManager(t)
+	r := newAdminRouter(cfg, stores, mgr)
+	cookie := adminSessionCookie(t, cfg)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	mk := func(title string, live bool) (transferID, recipientID, fileID string) {
+		t.Helper()
+		res, err := stores.Transfers.Create(store.CreateTransferInput{
+			Title: title, SenderName: "Alice", SenderEmail: "alice@example.com",
+			ExpiresAt: time.Now().Add(24 * time.Hour), Recipients: []string{"bob@example.com"},
+			Files:            []store.CreateFileInput{{OriginalName: title + ".mov", StoragePath: "p/" + title, SizeBytes: 1}},
+			NotifyRecipients: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if live {
+			if err := stores.Transfers.SetFileComplete(res.Files[0].FileID, 1); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := stores.Transfers.TryActivate(res.TransferID); err != nil || !ok {
+				t.Fatalf("activate: %v %v", ok, err)
+			}
+		}
+		return res.TransferID, res.Recipients[0].RecipientID, res.Files[0].FileID
+	}
+	del := func(id string) {
+		t.Helper()
+		req := withOrigin(httptest.NewRequest(http.MethodPost, "/admin/transfers/"+id+"/delete", nil), cfg)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusSeeOther {
+			t.Fatalf("delete %s: status = %d, want 303", id, rr.Code)
+		}
+	}
+	summaries := func() []store.MailItem {
+		t.Helper()
+		items, err := stores.Mail.FetchPending(50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []store.MailItem
+		for _, it := range items {
+			if strings.HasPrefix(it.Subject, "Deleted:") || strings.HasPrefix(it.Subject, "Expired:") {
+				out = append(out, it)
+			}
+		}
+		return out
+	}
+
+	live, bob, file := mk("live", true)
+	if _, _, err := stores.Downloads.RecordDownload(bob, file, "live.mov", "", "", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	expired, _, _ := mk("expired", true)
+	if err := stores.Transfers.SetExpired(expired); err != nil {
+		t.Fatal(err)
+	}
+	pending, _, _ := mk("pending", false)
+
+	for _, id := range []string{live, expired, pending} {
+		del(id)
+	}
+	got := summaries()
+	if len(got) != 1 || got[0].Subject != `Deleted: "live"` {
+		var subjects []string
+		for _, it := range got {
+			subjects = append(subjects, it.Subject)
+		}
+		t.Fatalf("summaries = %q, want exactly one, `Deleted: \"live\"`", subjects)
+	}
+	for _, want := range []string{"was deleted by an administrator", "bob@example.com: downloaded", "live.mov", "The files have been deleted."} {
+		if !strings.Contains(got[0].BodyText, want) {
+			t.Errorf("summary misses %q:\n%s", want, got[0].BodyText)
+		}
+	}
+	if strings.Contains(got[0].BodyText, "grace period") {
+		t.Error("deletion summary talks about a grace period")
+	}
+
+	if err := stores.Settings.Save("mail.expiry_summary", "false"); err != nil {
+		t.Fatal(err)
+	}
+	off, _, _ := mk("off", true)
+	del(off)
+	if n := len(summaries()); n != 1 {
+		t.Fatalf("with expiry summaries switched off: %d summaries, want still 1", n)
 	}
 }

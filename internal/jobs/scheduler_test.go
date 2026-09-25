@@ -393,3 +393,117 @@ func TestExpiryJob_PendingExpiresWithoutSummary(t *testing.T) {
 		t.Fatalf("summaries = %q, want exactly one, for the transfer that was live", subjects)
 	}
 }
+
+// ── Expiry summary content ───────────────────────────────────────────────────
+
+// The summary says per recipient which files they downloaded and when, and
+// which not. It used to list bare timestamps ("who downloaded what" without
+// the what), counted a ZIP of 3 files as 3 downloads, and showed a recipient
+// who took 2 of 3 files the same as one who took everything.
+func TestExpirySummary_WhoDownloadedWhat(t *testing.T) {
+	f := newPurgeFixture(t)
+	if err := f.stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.stores.Transfers.Create(store.CreateTransferInput{
+		Title: "Project", SenderName: "Alice", SenderEmail: "alice@example.com",
+		ExpiresAt:  time.Now().Add(24 * time.Hour),
+		Recipients: []string{"bob@example.com", "carol@example.com", "dave@example.com"},
+		Files: []store.CreateFileInput{
+			{OriginalName: "a.mov", StoragePath: "p/a", SizeBytes: 1},
+			{OriginalName: "b.mov", StoragePath: "p/b", SizeBytes: 1},
+			{OriginalName: "c.mov", StoragePath: "p/c", SizeBytes: 1},
+		},
+		NotifyRecipients: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID := map[string]string{}
+	for i, name := range []string{"a.mov", "b.mov", "c.mov"} {
+		fileID[name] = res.Files[i].FileID
+		if err := f.stores.Transfers.SetFileComplete(res.Files[i].FileID, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, err := f.stores.Transfers.TryActivate(res.TransferID); err != nil || !ok {
+		t.Fatalf("activate: %v %v", ok, err)
+	}
+	// A dead row from a lost TUS create: never part of the transfer.
+	if err := f.stores.Transfers.CreateFileRow("ghost", res.TransferID, "ghost.mov", "p/ghost", 1); err != nil {
+		t.Fatal(err)
+	}
+	recipient := map[string]string{}
+	for _, r := range res.Recipients {
+		recipient[r.Email] = r.RecipientID
+	}
+
+	day1 := time.Date(2026, 9, 11, 13, 14, 0, 0, time.UTC).Unix()
+	day2 := time.Date(2026, 9, 12, 9, 2, 0, 0, time.UTC).Unix()
+	download := func(email, file string, at int64) {
+		t.Helper()
+		id, _, err := f.stores.Downloads.RecordDownload(recipient[email], fileID[file], file, "", "", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.d.Exec(`UPDATE download_events SET downloaded_at = ? WHERE id = ?`, at, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	download("bob@example.com", "a.mov", day1)
+	download("bob@example.com", "a.mov", day2)
+	download("bob@example.com", "b.mov", day1)
+	download("bob@example.com", "b.mov", day1+20) // same minute
+	for _, file := range []string{"a.mov", "b.mov", "c.mov"} {
+		download("carol@example.com", file, day1) // one ZIP
+	}
+
+	if _, err := f.d.Exec(`UPDATE transfers SET expires_at = unixepoch() - 60`); err != nil {
+		t.Fatal(err)
+	}
+	f.s.runExpiryJob()
+
+	items, err := f.stores.Mail.FetchPending(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d mails, want the one summary", len(items))
+	}
+	text, htmlBody := items[0].BodyText, items[0].BodyHTML
+
+	for _, want := range []string{
+		"bob@example.com: 2 of 3 files\n  • a.mov: 11 Sep 13:14, 12 Sep 09:02\n  • b.mov: 11 Sep 13:14 (2×)\n  Not downloaded: c.mov\n",
+		"carol@example.com: all 3 files\n  • All files: 11 Sep 13:14\n",
+		"dave@example.com: nothing downloaded\n\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text summary misses:\n%s\n--- got:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "ghost.mov") {
+		t.Error("the dead upload row shows up in the summary")
+	}
+	for _, want := range []string{"2 of 3 files", "All files", "Not downloaded: c.mov", "nothing downloaded", "11 Sep 13:14 (2×)"} {
+		if !strings.Contains(htmlBody, want) {
+			t.Errorf("HTML summary misses %q", want)
+		}
+	}
+}
+
+// File names come from the uploader's browser and must be escaped in HTML.
+func TestExpirySummary_EscapesNames(t *testing.T) {
+	e := expirySummary{
+		Loc:      time.UTC,
+		Transfer: store.Transfer{NotifyRecipients: true},
+		Files:    []store.File{{ID: "f1", OriginalName: "<b>x</b>.mov", Status: "complete"}},
+		History: []store.RecipientHistory{{
+			Email:  "bob@example.com",
+			Events: []store.DownloadEvent{{FileID: sql.NullString{String: "f1", Valid: true}, OriginalName: "<b>x</b>.mov", DownloadedAt: 1}},
+		}},
+	}
+	out := buildExpirySummaryHTML(e)
+	if strings.Contains(out, "<b>x</b>") || !strings.Contains(out, "&lt;b&gt;x&lt;/b&gt;.mov") {
+		t.Fatalf("file name not escaped in HTML summary:\n%s", out)
+	}
+}

@@ -258,12 +258,21 @@ func AdminTransfers(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 // AdminTransferDelete handles POST /admin/transfers/:id/delete.
 // Hard-deletes: removes all files from storage, marks records deleted in DB.
-func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
+func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.Manager, summaries deletionSummarizer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if id == "" {
 			http.Error(w, "Missing transfer ID", http.StatusBadRequest)
 			return
+		}
+
+		// The sender's "who downloaded what" summary, before anything is
+		// deleted (the file list is empty afterwards). A failure must not
+		// stop the delete.
+		if sent, err := summaries.EnqueueDeletionSummary(id); err != nil {
+			slog.Error("admin: enqueue deletion summary", "id", id, "error", err)
+		} else if sent {
+			slog.Info("admin: deletion summary queued", "id", id)
 		}
 
 		// Remove files from storage. A failed removal keeps the file's
@@ -292,6 +301,11 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 		slog.Info("admin: transfer hard-deleted", "id", id)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}
+}
+
+// deletionSummarizer is the part of jobs.Scheduler the delete handler needs.
+type deletionSummarizer interface {
+	EnqueueDeletionSummary(transferID string) (bool, error)
 }
 
 // AdminRequestDelete handles POST /admin/requests/:id/delete.

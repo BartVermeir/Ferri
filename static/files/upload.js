@@ -119,6 +119,19 @@
     return [{ source: cz.makeZip(entries).getReader(), name: zipName(collection, title), size: size, packed: collection.count() }];
   }
 
+  // confirmLargeTotal: loose files can each be under the limit and still add
+  // up to more. That is allowed after a warning: 600 GB per transfer is what
+  // users are told, not a hard rule (DEC-036). A packed ZIP is one upload, so
+  // for it the limit stays hard (buildUploads).
+  function confirmLargeTotal(uploads, limits) {
+    if (uploads.length === 1 && uploads[0].packed) return true;
+    var total = uploads.reduce(function (sum, u) { return sum + u.size; }, 0);
+    if (total <= limits.maxBytes) return true;
+    return window.confirm('Together these files are ' + formatSize(total) +
+      ', more than the usual maximum of ' + formatSize(limits.maxBytes) +
+      ' per transfer. Upload them anyway?');
+  }
+
   // ── File drop zone ───────────────────────────────────────────────────────────
 
   // Files from the plain file picker have no folder: path is the file name.
@@ -303,6 +316,7 @@
         showResult(resultEl, 'error', err.message);
         return;
       }
+      if (!confirmLargeTotal(uploads, limits)) return;
 
       setSubmitState(form, true);
       if (progWrap) progWrap.style.display = '';
@@ -393,6 +407,7 @@
         showResult(resultEl, 'error', err.message);
         return;
       }
+      if (!confirmLargeTotal(uploads, limits)) return;
 
       startBtn.disabled = true;
       if (progWrap) progWrap.style.display = '';
@@ -452,8 +467,16 @@
 
           onSuccess: function () { uploadNext(); },
 
+          // tus-js-client's default, except that a full server (507) is
+          // not retried: it will not have room seconds later either.
+          onShouldRetry: function (error) {
+            var status = httpStatus(error);
+            if (status === 507) return false;
+            return (status < 400 || status >= 500 || status === 409 || status === 423) && navigator.onLine !== false;
+          },
+
           onError: function (error) {
-            reject(new Error(item.name + ': ' + (error.message || error)));
+            reject(new Error(item.name + ': ' + serverReason(error)));
           },
         };
         if (!(item.source instanceof Blob)) {
@@ -465,6 +488,22 @@
 
       uploadNext();
     });
+  }
+
+  function httpStatus(error) {
+    return error && error.originalResponse ? error.originalResponse.getStatus() : 0;
+  }
+
+  // serverReason: the server's own text for a refusal it explains (a 4xx, or
+  // 507 storage full) instead of tus-js-client's "unexpected response …".
+  // Anything else, such as a proxy's HTML error page, keeps the tus message.
+  function serverReason(error) {
+    var status = httpStatus(error);
+    var body = error && error.originalResponse ? (error.originalResponse.getBody() || '').trim() : '';
+    if (body && body.charAt(0) !== '<' && ((status >= 400 && status < 500) || status === 507)) {
+      return body;
+    }
+    return (error && error.message) || String(error);
   }
 
   // ── UI helpers ───────────────────────────────────────────────────────────────

@@ -48,6 +48,9 @@ type Backend interface {
 	// TestConnection verifies the backend is accessible and writable.
 	TestConnection() error
 
+	// FreeSpace returns the bytes still available to Ferri on the storage.
+	FreeSpace() (uint64, error)
+
 	// Type returns "local" or "smb".
 	Type() string
 
@@ -176,6 +179,14 @@ func (m *Manager) TestConnection() error {
 	b := m.backend
 	m.mu.RUnlock()
 	return b.TestConnection()
+}
+
+// FreeSpace delegates to the active backend's FreeSpace.
+func (m *Manager) FreeSpace() (uint64, error) {
+	m.mu.RLock()
+	b := m.backend
+	m.mu.RUnlock()
+	return b.FreeSpace()
 }
 
 // Swap replaces the active backend. The old backend is closed gracefully.

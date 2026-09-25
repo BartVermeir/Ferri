@@ -7,7 +7,9 @@ package tus
 //   PreUploadCreateCallback — fires before any bytes are written.
 //     Reads transfer_id or upload_request_token from TUS metadata.
 //     Validates: record exists, correct status, not expired.
-//     Enforces Upload-Length against limits.max_upload_bytes.
+//     Enforces Upload-Length against limits.max_upload_bytes, the free space
+//     on storage (limits.min_free_bytes) and, for transfers, the number of
+//     files /send announced.
 //     Creates a Ferri file row and injects the file ID into TUS metadata
 //     so subsequent hooks can find it without a DB lookup by TUS upload ID.
 //
@@ -25,6 +27,7 @@ package tus
 //   Request files:  <storage_path>/requests/<request_id>/<file_id>
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"html"
@@ -158,6 +161,20 @@ func (h *Handler) preCreateTransferFile(
 			fmt.Sprintf("file size %d exceeds limit of %d bytes", uploadLength, h.cfg.Limits.MaxUploadBytes))
 	}
 
+	count, expected, err := h.stores.Transfers.CountFiles(transferID)
+	if err != nil {
+		slog.Error("tus: count transfer files", "transfer_id", transferID, "error", err)
+		return rejectWith(http.StatusInternalServerError, "internal error")
+	}
+	if max := maxTransferFileRows(expected, h.cfg.Limits.MaxFilesPerTransfer); count >= max {
+		slog.Warn("tus: transfer file limit reached", "transfer_id", transferID, "files", count, "max", max)
+		return rejectWith(http.StatusForbidden, "This transfer already has all the files it announced.")
+	}
+
+	if h.freeSpaceShort(uploadLength) {
+		return rejectWith(http.StatusInsufficientStorage, msgStorageFull)
+	}
+
 	originalName := stringMeta(meta, "filename")
 	if originalName == "" {
 		originalName = "unnamed"
@@ -207,6 +224,10 @@ func (h *Handler) preCreateRequestFile(
 			fmt.Sprintf("file size %d exceeds limit of %d bytes", uploadLength, h.cfg.Limits.MaxUploadBytes))
 	}
 
+	if h.freeSpaceShort(uploadLength) {
+		return rejectWith(http.StatusInsufficientStorage, msgStorageFull)
+	}
+
 	originalName := stringMeta(meta, "filename")
 	if originalName == "" {
 		originalName = "unnamed"
@@ -236,6 +257,40 @@ func (h *Handler) preCreateRequestFile(
 		},
 	}, nil
 }
+
+// maxTransferFileRows is how many file rows a transfer may get: twice what
+// /send announced. Not the exact count, because tus-js-client re-POSTs when a
+// create response is lost, leaving a dead 'uploading' row behind; an exact cap
+// would then refuse the transfer's last real file and it would never go live.
+// Pre-004 transfers (no expected_files) fall back to max_files_per_transfer.
+func maxTransferFileRows(expected sql.NullInt64, maxFilesPerTransfer int) int {
+	n := maxFilesPerTransfer
+	if expected.Valid {
+		n = int(expected.Int64)
+	}
+	return 2 * n
+}
+
+// freeSpaceShort reports whether an upload would leave less than
+// limits.min_free_bytes free on storage: a full share breaks every upload at
+// once. When the backend cannot report its free space the upload goes ahead
+// (logged): failing closed would stop all uploads on such a server.
+func (h *Handler) freeSpaceShort(uploadLength int64) bool {
+	free, err := h.mgr.FreeSpace()
+	if err != nil {
+		slog.Warn("tus: cannot read free space on storage, allowing upload", "error", err)
+		return false
+	}
+	if free < uint64(uploadLength)+uint64(h.cfg.Limits.MinFreeBytes) {
+		slog.Warn("tus: not enough free space on storage", "free_bytes", free,
+			"upload_bytes", uploadLength, "min_free_bytes", h.cfg.Limits.MinFreeBytes)
+		return true
+	}
+	return false
+}
+
+// Shown to internal senders and external uploaders alike, so it names no one.
+const msgStorageFull = "The server does not have enough free space for this file right now. Please try again later."
 
 // ── Created hook ──────────────────────────────────────────────────────────────
 
@@ -460,11 +515,17 @@ func (h *Handler) recordPatchActivity(r *http.Request) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// rejectWith refuses an upload from the pre-create hook. The error must be a
+// tusd.Error: for any other error tusd drops the returned response and answers
+// 500, which tus-js-client then retries and shows as "unexpected response".
+// The body is msg alone, so upload.js can show it to the user as is.
 func rejectWith(status int, msg string) (tusd.HTTPResponse, tusd.FileInfoChanges, error) {
-	return tusd.HTTPResponse{
+	resp := tusd.HTTPResponse{
 		StatusCode: status,
-		Body:       msg,
-	}, tusd.FileInfoChanges{}, fmt.Errorf("%s", msg)
+		Body:       msg + "\n",
+		Header:     tusd.HTTPHeader{"Content-Type": "text/plain; charset=utf-8"},
+	}
+	return resp, tusd.FileInfoChanges{}, tusd.Error{ErrorCode: "ERR_UPLOAD_REJECTED", Message: msg, HTTPResponse: resp}
 }
 
 func stringMeta(meta tusd.MetaData, key string) string {
@@ -656,7 +717,7 @@ func confirmNote(settings *store.Settings, hasSenderLink bool) string {
 		parts = append(parts, "Downloads through your own link are not counted as recipient downloads.")
 	}
 	if settings != nil && settings.NotifyOnDownload {
-		parts = append(parts, "You will get an email when a recipient downloads a file (at most once an hour per file).")
+		parts = append(parts, "You will get an email when a recipient downloads from this transfer (at most one per recipient per hour, however many files).")
 	}
 	if settings != nil && settings.ExpirySummary {
 		parts = append(parts, "When the transfer expires you will receive a summary of who downloaded what.")

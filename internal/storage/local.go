@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/tus/tusd/v2/pkg/filestore"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
@@ -96,6 +97,16 @@ func (b *LocalBackend) MkdirAll(path string) error {
 // TUSStore returns the tusd.DataStore for this backend.
 func (b *LocalBackend) TUSStore() tusd.DataStore {
 	return b.store
+}
+
+// FreeSpace returns the bytes available to unprivileged users on the
+// filesystem holding root (Bavail, not Bfree: the container runs as UID 1000).
+func (b *LocalBackend) FreeSpace() (uint64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(b.root, &st); err != nil {
+		return 0, err
+	}
+	return uint64(st.Bavail) * uint64(st.Bsize), nil
 }
 
 // TestConnection checks that the root directory is readable and writable.

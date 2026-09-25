@@ -75,3 +75,13 @@ func TestRemoveUpload_ReportsFailure(t *testing.T) {
 		t.Fatal("expected an error for a path that could not be removed")
 	}
 }
+
+func TestLocalBackend_FreeSpace(t *testing.T) {
+	free, err := NewLocalBackend(t.TempDir()).FreeSpace()
+	if err != nil {
+		t.Fatalf("FreeSpace: %v", err)
+	}
+	if free == 0 {
+		t.Fatal("FreeSpace = 0 on a writable temp dir")
+	}
+}

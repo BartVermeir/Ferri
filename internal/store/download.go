@@ -23,9 +23,14 @@ type DownloadEvent struct {
 }
 
 // RecordDownload inserts a download event and updates the recipient's counters.
-// Runs in a single transaction. Returns the inserted event ID.
-func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua string) (string, error) {
-	eventID := token.Generate()
+// Runs in a single transaction. Returns the inserted event ID, and recent =
+// true when the recipient already downloaded something within window before
+// this one. A recipient row belongs to one transfer, so the sender gets at
+// most one download notification per recipient and transfer per window,
+// however many files it holds. Checking inside the same transaction (the pool
+// has one connection) means two simultaneous downloads cannot both mail.
+func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua string, window time.Duration) (eventID string, recent bool, err error) {
+	eventID = token.Generate()
 
 	// file_id is a nullable FK in the schema — convert empty string to nil so
 	// the DB receives NULL rather than an empty string foreign key.
@@ -34,7 +39,17 @@ func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua
 		fileIDVal = fileID
 	}
 
-	return eventID, txFunc(s.db, func(tx *sql.Tx) error {
+	err = txFunc(s.db, func(tx *sql.Tx) error {
+		var n int
+		if err := tx.QueryRow(`
+			SELECT COUNT(*) FROM download_events
+			WHERE recipient_id = ? AND downloaded_at > unixepoch() - ?`,
+			recipientID, int64(window.Seconds()),
+		).Scan(&n); err != nil {
+			return err
+		}
+		recent = n > 0
+
 		if _, err := tx.Exec(`
 			INSERT INTO download_events (id, recipient_id, file_id, original_name, ip_address, user_agent)
 			VALUES (?, ?, ?, ?, ?, ?)`,
@@ -54,21 +69,7 @@ func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua
 		)
 		return err
 	})
-}
-
-// DownloadedWithin reports whether the recipient already has a download event
-// for this file within the given window. Used to send at most one download
-// notification per recipient and file per window: a download manager or a
-// browser retrying a big file must not flood the sender's inbox.
-func (s *DownloadStore) DownloadedWithin(recipientID, fileID string, window time.Duration) (bool, error) {
-	var n int
-	err := s.db.QueryRow(`
-		SELECT COUNT(*) FROM download_events
-		WHERE recipient_id = ? AND file_id = ?
-		  AND downloaded_at > unixepoch() - ?`,
-		recipientID, fileID, int64(window.Seconds()),
-	).Scan(&n)
-	return n > 0, err
+	return eventID, recent, err
 }
 
 // GetDownloadHistory returns all download events for a transfer,
