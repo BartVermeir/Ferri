@@ -222,14 +222,15 @@
     });
   }
 
-  // Long lists (a folder of 1600 files) show the first rows only.
-  var LIST_PREVIEW = 100;
+  // Past this many rows the list scrolls on its own, so a folder of 1800
+  // files does not push the upload button far down the page.
+  var LIST_VISIBLE_ROWS = 20;
 
   function renderFileList(collection, listEl, noteEl, limits) {
     if (noteEl) {
       if (collection.count() > 0 && shouldPack(collection, limits)) {
         noteEl.textContent = collection.count() + ' file(s) will be sent as one ZIP file (' +
-          formatSize(collection.totalSize()) + '), folders included.';
+          formatSize(collection.totalSize()) + ')' + (collection.hasFolder() ? ', folders included.' : '.');
         noteEl.hidden = false;
       } else {
         noteEl.hidden = true;
@@ -237,7 +238,7 @@
     }
     if (!listEl) return;
     listEl.innerHTML = '';
-    collection.items.slice(0, LIST_PREVIEW).forEach(function (it, i) {
+    collection.items.forEach(function (it, i) {
       var li = document.createElement('li');
       li.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:#f8f8f6;border-radius:6px;margin-top:6px;font-size:13px;';
       li.innerHTML =
@@ -251,12 +252,21 @@
       });
       listEl.appendChild(li);
     });
-    if (collection.count() > LIST_PREVIEW) {
-      var more = document.createElement('li');
-      more.style.cssText = 'padding:8px 12px;font-size:13px;color:#888;';
-      more.textContent = '… and ' + (collection.count() - LIST_PREVIEW) + ' more';
-      listEl.appendChild(more);
-    }
+    limitListHeight(listEl);
+  }
+
+  // limitListHeight caps the list at LIST_VISIBLE_ROWS rows, measured from
+  // the rendered rows rather than a fixed pixel height, plus a sliver of the
+  // next row so it is visible that the list scrolls.
+  function limitListHeight(listEl) {
+    listEl.style.maxHeight = '';
+    listEl.style.overflowY = '';
+    var rows = listEl.children;
+    if (rows.length <= LIST_VISIBLE_ROWS) return;
+    var top = listEl.getBoundingClientRect().top;
+    var cut = rows[LIST_VISIBLE_ROWS].getBoundingClientRect().top;
+    listEl.style.maxHeight = Math.round(cut - top + 14) + 'px';
+    listEl.style.overflowY = 'auto';
   }
 
   // ── Send page ────────────────────────────────────────────────────────────────

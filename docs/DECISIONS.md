@@ -556,6 +556,8 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 **Why pack instead of raising the limit and keeping the files loose:** a folder with hundreds of files (an image sequence, a memory card) is used as a whole. One ZIP keeps the server, the mails and the download page unchanged. It also avoids thousands of sequential TUS requests, and the recipient gets one download with the structure intact. Not compressing costs no CPU on media that does not compress anyway, and it makes the archive size exactly predictable (`predictLength`). TUS needs that size before the first byte, because the server does not support deferred length.
 
+**Considered and rejected (2026-09-25):** a threshold for folders too (keep a folder's files separate below e.g. 100), a "send as one ZIP" checkbox for the sender, and always keeping files separate with a much higher limit. Loose files already stay separate up to the limit, and that covers the need to download single files. A folder is treated as a whole.
+
 **Also changed:** the file list of `POST /send` is one JSON field (`files`), so the number of files no longer hits the multipart part limit. A multipart body that fails to parse is reported as such, instead of falling back to an empty form.
 
 **Limits and risks:**
