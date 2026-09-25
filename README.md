@@ -23,7 +23,7 @@ Self-hosted file transfer tool. Send large files to external recipients, or requ
 
 - Docker Engine 24.0 or later
 - Docker Compose v2 (`docker compose`, not `docker-compose`)
-- An SMTP relay (e.g. a hosted relay service,Postfix, Office 365 SMTP relay)
+- An SMTP relay (e.g. a hosted relay service, Postfix, Office 365 SMTP relay)
 - Storage: a local path, or an SMB/CIFS share (configured via the admin panel after first run)
 
 ---

@@ -1000,7 +1000,7 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/smtp.example.com/587' && echo "por
 **If the SMTP connection succeeds but mails still fail:**
 Check the `error_message` column in `mail_queue` for the exact SMTP error. Common causes:
 - Wrong username or password → check `.env`
-- From-address not verified at your SMTP provider → verify the domain in your SMTP provider account
+- From-address not verified at your SMTP provider → verify the domain in your provider account
 - Rate limiting → check your SMTP provider's usage dashboard
 
 **Reset all failed mails to retry:**

@@ -560,7 +560,7 @@ The file argument must implement `io.ReadSeeker`. `os.File` satisfies this. The 
 
 **Content-Disposition and filename encoding:**
 
-Filenames in a media context routinely contain non-ASCII characters and special characters (`Séquence finale.mov`, `Recording — day 1.mxf`). A bare `filename="<original_name>"` header breaks for these.
+Media filenames routinely contain non-ASCII characters and special characters (`Séquence finale.mov`, `Recording — day 1.mxf`). A bare `filename="<original_name>"` header breaks for these.
 
 The handler sets both the legacy ASCII fallback and the RFC 5987 encoded parameter:
 

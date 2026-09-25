@@ -149,7 +149,7 @@ This document is intended as a living record. When a decision is revisited or re
 
 **Rationale:**
 - Single-administrator, single-organization deployment. There is no redundancy or horizontal scaling requirement.
-- Storage is on an external NFS share (NAS), so data is not at risk if the application container restarts.
+- Storage is on an external NFS or SMB share, so data is not at risk if the application container restarts.
 - Docker Compose is the simplest operational model that Docker-literate administrators can maintain.
 - A single `docker-compose.yml` with clear comments is more maintainable than Helm charts or Kubernetes manifests for this use case.
 
@@ -216,9 +216,9 @@ This document is intended as a living record. When a decision is revisited or re
 
 ---
 
-## DEC-012: Mail — SMTP relay (any provider)
+## DEC-012: Mail — any standard SMTP relay
 
-**Decision:** The SMTP implementation uses standard SMTP (host, port, username, password, TLS). Hosted relay services and any equivalent relay (Postfix, Exchange, Office 365 SMTP relay) are supported out of the box.
+**Decision:** The SMTP implementation uses standard SMTP (host, port, username, password, TLS). Hosted relay services and on-premises relays (Postfix, Exchange, Office 365 SMTP relay) are supported out of the box.
 
 **Per-recipient mails:** When a transfer is addressed to multiple recipients, each recipient receives a separate mail with their own context. This allows the sender to receive per-recipient download notifications.
 
