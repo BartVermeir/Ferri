@@ -8,7 +8,7 @@ import (
 func TestClean(t *testing.T) {
 	cases := map[string]string{
 		"img.jpg":                 "img.jpg",
-		"Series/day1/img001.jpg":   "Series/day1/img001.jpg",
+		"Series/day1/img001.jpg":  "Series/day1/img001.jpg",
 		"../../etc/passwd":        "etc/passwd",
 		"/abs/path.mov":           "abs/path.mov",
 		`C:\Users\me\clip.mov`:    "C:/Users/me/clip.mov",

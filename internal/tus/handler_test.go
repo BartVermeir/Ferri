@@ -306,8 +306,8 @@ func TestPreUploadCreate_StoresCleanFolderPath(t *testing.T) {
 	transferID := mustCreatePendingTransfer(t, stores)
 	for name, want := range map[string]string{
 		"Series/day1/img001.jpg": "Series/day1/img001.jpg",
-		"../../etc/passwd":      "etc/passwd",
-		`\\server\share\x.mov`:  "server/share/x.mov",
+		"../../etc/passwd":       "etc/passwd",
+		`\\server\share\x.mov`:   "server/share/x.mov",
 	} {
 		_, changes, err := h.preUploadCreate(tusd.HookEvent{Upload: tusd.FileInfo{
 			Size: 10, MetaData: tusd.MetaData{"transfer_id": transferID, "filename": name},
