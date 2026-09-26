@@ -462,12 +462,15 @@
       var index = 0;
       var totalBytes = uploads.reduce(function (sum, u) { return sum + u.size; }, 0);
       var doneBytes = 0;
+      var sentBytes = 0;
+      var speed = speedMeter();
 
       function uploadNext() {
         if (index >= uploads.length) { resolve(); return; }
 
         var item = uploads[index];
         var num = index + 1;
+        var itemBytes = -1;
         index++;
 
         var options = {
@@ -485,9 +488,17 @@
           metadata: Object.assign({ filename: item.name }, extraMeta),
 
           onProgress: function (bytesUploaded) {
+            // Only bytes sent in this session count toward the speed: a
+            // resumed file starts at the server's offset, a retried chunk
+            // starts lower again.
+            if (itemBytes >= 0 && bytesUploaded > itemBytes) sentBytes += bytesUploaded - itemBytes;
+            itemBytes = bytesUploaded;
+            var rate = speed(sentBytes);
+
             var pct = totalBytes > 0 ? Math.floor((doneBytes + bytesUploaded) / totalBytes * 100) : 0;
             if (onProgress) onProgress(pct, 'Uploading ' + item.name + ' (' + num + '/' + uploads.length + ', ' +
-              formatSize(doneBytes + bytesUploaded) + ' of ' + formatSize(totalBytes) + ')');
+              formatSize(doneBytes + bytesUploaded) + ' of ' + formatSize(totalBytes) +
+              (rate > 0 ? ', ' + formatSize(Math.round(rate)) + '/s' : '') + ')');
           },
 
           onSuccess: function () {
@@ -518,6 +529,29 @@
 
       uploadNext();
     });
+  }
+
+  // speedMeter returns a function that takes the bytes sent so far and gives
+  // bytes per second over the last SPEED_WINDOW_MS, 0 until that is known.
+  // The value changes at most every SPEED_REFRESH_MS, so it stays readable.
+  var SPEED_WINDOW_MS = 5000;
+  var SPEED_REFRESH_MS = 1000;
+
+  function speedMeter() {
+    var samples = [];
+    var shown = 0;
+    var shownAt = 0;
+    return function (bytes) {
+      var now = Date.now();
+      samples.push({ t: now, bytes: bytes });
+      while (samples.length > 1 && now - samples[1].t >= SPEED_WINDOW_MS) samples.shift();
+      var dt = now - samples[0].t;
+      if (now - shownAt >= SPEED_REFRESH_MS && dt >= SPEED_REFRESH_MS) {
+        shown = (bytes - samples[0].bytes) * 1000 / dt;
+        shownAt = now;
+      }
+      return shown;
+    };
   }
 
   function httpStatus(error) {
