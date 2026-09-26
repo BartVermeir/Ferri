@@ -130,6 +130,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		uploadURL := cfg.Server.BaseURL + "/ul/" + uploadToken
 		viewURL := cfg.Server.BaseURL + "/ul/" + created.ViewPathToken() + "/files"
+		manageURL := cfg.Server.BaseURL + "/manage/" + created.ManageToken.String
 
 		slog.Info("upload request created",
 			"requester", requesterEmail,
@@ -138,22 +139,25 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		)
 
 		// Render result page with the upload link
-		renderRequestResult(w, uploadURL, viewURL, settings)
+		renderRequestResult(w, uploadURL, viewURL, manageURL, settings)
 	}
 }
 
 // ── Template rendering ────────────────────────────────────────────────────────
 
-// renderRequestResult shows both links: the upload link for the external
-// party, and the requester's own view link. They differ on purpose (audit M1).
-func renderRequestResult(w http.ResponseWriter, uploadURL, viewURL string, settings *store.Settings) {
+// renderRequestResult shows the links: the upload link for the external
+// party, and the requester's own view link and manage link. The upload and
+// view link differ on purpose (audit M1).
+func renderRequestResult(w http.ResponseWriter, uploadURL, viewURL, manageURL string, settings *store.Settings) {
 	renderPage(w, "request_created.html", struct {
 		baseData
 		UploadURL string
 		ViewURL   string
+		ManageURL string
 	}{
 		baseData:  baseData{PageTitle: "Upload link created", Settings: settings},
 		UploadURL: uploadURL,
 		ViewURL:   viewURL,
+		ManageURL: manageURL,
 	})
 }

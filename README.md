@@ -13,7 +13,9 @@ Self-hosted file transfer tool. Send large files to external recipients, or requ
 - **Self-hosted** — your files stay on your own storage
 - **SMB/CIFS and local storage** — configure your storage backend via the admin panel; hot-swap without restart
 - **Branding** — configurable company name, logo, and colours via the admin panel
-- **Mail notifications** — recipients notified by email; sender notified on download; expiry summary on transfer expiry
+- **Mail notifications** — recipients notified by email; sender notified on download; expiry summary on transfer expiry; the requester is reminded when nothing was uploaded a day before a request expires
+- **Manage link** — the sender or requester sees who downloaded what, extends or deletes, from the internal network
+- **Admin alerts** — mail when the storage is almost full or unreachable, deleted files stay on it, or mails fail for good
 - **IP restriction** — only internal network users can create transfers; download links are publicly accessible
 - **Automatic cleanup** — expired transfers are removed from storage on a configurable schedule
 

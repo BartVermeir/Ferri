@@ -302,41 +302,48 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 			return
 		}
 
-		// The sender's "who downloaded what" summary, before anything is
-		// deleted (the file list is empty afterwards). A failure must not
-		// stop the delete.
-		if sent, err := summaries.EnqueueDeletionSummary(id); err != nil {
-			slog.Error("admin: enqueue deletion summary", "id", id, "error", err)
-		} else if sent {
-			slog.Info("admin: deletion summary queued", "id", id)
-		}
-
-		// Remove files from storage. A failed removal keeps the file's
-		// tus_upload_id, so the cleanup job retries it on its next run.
-		files, err := stores.Transfers.GetFilesByTransferID(id)
-		if err != nil {
-			slog.Error("admin: get files for delete", "id", id, "error", err)
-		} else {
-			for _, f := range files {
-				if err := storage.PurgeUpload(mgr, stores.Files, store.TransferFiles, f.ID, f.StoragePath, f.TUSUploadID.String); err != nil {
-					slog.Warn("admin: remove file failed, cleanup job will retry", "file", f.ID, "error", err)
-				}
-			}
-		}
-		_ = mgr.RemoveAll("transfers/" + id)
-
-		if err := stores.Transfers.MarkFilesDeleted(id); err != nil {
-			slog.Error("admin: mark files deleted", "id", id, "error", err)
-		}
-		if err := stores.Transfers.SoftDelete(id); err != nil {
-			slog.Error("admin: soft delete transfer", "id", id, "error", err)
+		if err := deleteTransferNow(stores, mgr, summaries, id, false); err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-
 		slog.Info("admin: transfer hard-deleted", "id", id)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}
+}
+
+// deleteTransferNow deletes a transfer at once, no grace period: the admin
+// delete and the sender's "Delete" on the manage page (bySender) both go
+// through here. First the sender's "who downloaded what" summary (the file
+// list is empty afterwards; a failure must not stop the delete), then the
+// files off storage. A failed removal keeps the file's tus_upload_id, so the
+// cleanup job retries it on its next run.
+func deleteTransferNow(stores *store.Stores, mgr *storage.Manager, summaries deletionSummarizer, id string, bySender bool) error {
+	if sent, err := summaries.EnqueueDeletionSummary(id, bySender); err != nil {
+		slog.Error("delete: enqueue deletion summary", "id", id, "error", err)
+	} else if sent {
+		slog.Info("delete: deletion summary queued", "id", id, "by_sender", bySender)
+	}
+
+	files, err := stores.Transfers.GetFilesByTransferID(id)
+	if err != nil {
+		slog.Error("delete: get files", "id", id, "error", err)
+	} else {
+		for _, f := range files {
+			if err := storage.PurgeUpload(mgr, stores.Files, store.TransferFiles, f.ID, f.StoragePath, f.TUSUploadID.String); err != nil {
+				slog.Warn("delete: remove file failed, cleanup job will retry", "file", f.ID, "error", err)
+			}
+		}
+	}
+	_ = mgr.RemoveAll("transfers/" + id)
+
+	if err := stores.Transfers.MarkFilesDeleted(id); err != nil {
+		slog.Error("delete: mark files deleted", "id", id, "error", err)
+	}
+	if err := stores.Transfers.SoftDelete(id); err != nil {
+		slog.Error("delete: soft delete transfer", "id", id, "error", err)
+		return err
+	}
+	return nil
 }
 
 // AdminTransferFiles handles GET /admin/transfers/{id}/files: the transfer's
@@ -400,7 +407,7 @@ func AdminTransferFile(cfg *config.Config, stores *store.Stores, mgr *storage.Ma
 
 // deletionSummarizer is the part of jobs.Scheduler the delete handler needs.
 type deletionSummarizer interface {
-	EnqueueDeletionSummary(transferID string) (bool, error)
+	EnqueueDeletionSummary(transferID string, bySender bool) (bool, error)
 }
 
 // AdminRequestDelete handles POST /admin/requests/:id/delete.
@@ -413,31 +420,39 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			return
 		}
 
-		// Same as transfers: a failed removal is retried by the cleanup job.
-		files, err := stores.Requests.GetFiles(id)
-		if err != nil {
-			slog.Error("admin: get request files for delete", "id", id, "error", err)
-		} else {
-			for _, f := range files {
-				if err := storage.PurgeUpload(mgr, stores.Files, store.RequestFiles, f.ID, f.StoragePath, f.TUSUploadID.String); err != nil {
-					slog.Warn("admin: remove file failed, cleanup job will retry", "file", f.ID, "error", err)
-				}
-			}
-		}
-		_ = mgr.RemoveAll("requests/" + id)
-
-		if err := stores.Requests.MarkFilesDeleted(id); err != nil {
-			slog.Error("admin: mark request files deleted", "id", id, "error", err)
-		}
-		if err := stores.Requests.SoftDelete(id); err != nil {
-			slog.Error("admin: mark request deleted", "id", id, "error", err)
+		if err := deleteRequestNow(stores, mgr, id); err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-
 		slog.Info("admin: upload request hard-deleted", "id", id)
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 	}
+}
+
+// deleteRequestNow deletes an upload request and its files at once, for the
+// admin and for the requester's manage page. Same as transfers: a failed
+// removal is retried by the cleanup job.
+func deleteRequestNow(stores *store.Stores, mgr *storage.Manager, id string) error {
+	files, err := stores.Requests.GetFiles(id)
+	if err != nil {
+		slog.Error("delete: get request files", "id", id, "error", err)
+	} else {
+		for _, f := range files {
+			if err := storage.PurgeUpload(mgr, stores.Files, store.RequestFiles, f.ID, f.StoragePath, f.TUSUploadID.String); err != nil {
+				slog.Warn("delete: remove file failed, cleanup job will retry", "file", f.ID, "error", err)
+			}
+		}
+	}
+	_ = mgr.RemoveAll("requests/" + id)
+
+	if err := stores.Requests.MarkFilesDeleted(id); err != nil {
+		slog.Error("delete: mark request files deleted", "id", id, "error", err)
+	}
+	if err := stores.Requests.SoftDelete(id); err != nil {
+		slog.Error("delete: mark request deleted", "id", id, "error", err)
+		return err
+	}
+	return nil
 }
 
 // ── Mail queue ────────────────────────────────────────────────────────────────
@@ -551,6 +566,25 @@ func validLogoURL(s string) bool {
 	return err == nil && u.Scheme == "https" && u.Host != ""
 }
 
+// maxAlertRecipients is a sanity limit, like maxRecipients on the send form.
+const maxAlertRecipients = 20
+
+// normalizeAlertRecipients turns the Alerts field (addresses separated by
+// commas or new lines) into "a@example.com, b@example.com", or returns a
+// message for the first invalid address. Empty is valid: no alerts.
+func normalizeAlertRecipients(raw string) (string, string) {
+	list := parseRecipients(raw)
+	if len(list) > maxAlertRecipients {
+		return "", fmt.Sprintf("At most %d alert recipients.", maxAlertRecipients)
+	}
+	for _, a := range list {
+		if !isValidEmail(a) {
+			return "", "Invalid alert recipient: " + a
+		}
+	}
+	return strings.Join(list, ", "), ""
+}
+
 // AdminSettingsSave handles POST /admin/settings.
 // Saves each setting key individually. Only known keys are accepted.
 func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
@@ -595,10 +629,17 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 			renderAdminSettings(w, cfg, settings, msg, false, "")
 			return
 		}
+		alertRecipients, msg := normalizeAlertRecipients(r.FormValue("alerts.recipients"))
+		if msg != "" {
+			settings := appMiddleware.GetSettings(r)
+			renderAdminSettings(w, cfg, settings, msg, false, "")
+			return
+		}
+		allowed["alerts.recipients"] = alertRecipients
 
 		// Settings are saved individually. If one fails, earlier saves are not
 		// rolled back — a partial update is possible. For independent key-value
-		// branding/UI settings this is acceptable; a retry saves all 12 again.
+		// branding/UI settings this is acceptable; a retry saves them all again.
 		var saveErr string
 		for key, value := range allowed {
 			if err := stores.Settings.Save(key, strings.TrimSpace(value)); err != nil {

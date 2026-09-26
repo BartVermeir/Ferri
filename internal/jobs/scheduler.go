@@ -42,10 +42,14 @@ func NewScheduler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 // It is safe to call only once; subsequent calls are no-ops.
 func (s *Scheduler) Start() {
 	s.startOnce.Do(func() {
-		s.wg.Add(3)
+		s.wg.Add(4)
 		go s.runLoop("mail", time.Duration(s.cfg.Jobs.MailIntervalMinutes)*time.Minute, s.runMailJob)
-		go s.runLoop("expiry", time.Duration(s.cfg.Jobs.ExpiryIntervalMinutes)*time.Minute, s.runExpiryJob)
+		go s.runLoop("expiry", time.Duration(s.cfg.Jobs.ExpiryIntervalMinutes)*time.Minute, func() {
+			s.runExpiryJob()
+			s.sendRequestReminders()
+		})
 		go s.runLoop("cleanup", time.Duration(s.cfg.Jobs.CleanupIntervalHours)*time.Hour, func() { s.runCleanupJob() })
+		go s.runLoop("alerts", alertInterval, s.runAlertJob)
 	})
 }
 
@@ -164,7 +168,7 @@ func (s *Scheduler) runExpiryJob() {
 		// pending): nobody was sent a link, so "never opened" would mislead.
 		settings := s.stores.Settings.Get()
 		if t.ActivatedAt.Valid && settings.ExpirySummary && settings.MailFromAddress != "" {
-			if err := s.enqueueSummary(t, time.Time{}); err != nil {
+			if err := s.enqueueSummary(t, time.Time{}, false); err != nil {
 				slog.Error("expiry job: enqueue summary", "transfer", t.ID, "error", err)
 			}
 		}
@@ -189,11 +193,12 @@ func (s *Scheduler) runExpiryJob() {
 }
 
 // EnqueueDeletionSummary sends the sender the "who downloaded what" summary
-// when an admin deletes a transfer by hand. Call it before deleting: the
-// file list is empty afterwards. Only for a transfer that is live now: an
-// expired one already had its summary, a pending one never reached anyone.
-// Same switch as the expiry summary. Returns whether a mail was queued.
-func (s *Scheduler) EnqueueDeletionSummary(transferID string) (bool, error) {
+// when a transfer is deleted by hand: by an admin, or by the sender on the
+// manage page (bySender). Call it before deleting: the file list is empty
+// afterwards. Only for a transfer that is live now: an expired one already
+// had its summary, a pending one never reached anyone. Same switch as the
+// expiry summary. Returns whether a mail was queued.
+func (s *Scheduler) EnqueueDeletionSummary(transferID string, bySender bool) (bool, error) {
 	t, err := s.stores.Transfers.GetByID(transferID)
 	if err != nil || t == nil {
 		return false, err
@@ -202,15 +207,16 @@ func (s *Scheduler) EnqueueDeletionSummary(transferID string) (bool, error) {
 	if t.Status != "active" || !t.ActivatedAt.Valid || !settings.ExpirySummary || settings.MailFromAddress == "" {
 		return false, nil
 	}
-	if err := s.enqueueSummary(*t, time.Now()); err != nil {
+	if err := s.enqueueSummary(*t, time.Now(), bySender); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 // enqueueSummary builds and enqueues the summary mail for a transfer that
-// expired (deletedAt zero) or that an admin deleted at deletedAt.
-func (s *Scheduler) enqueueSummary(t store.Transfer, deletedAt time.Time) error {
+// expired (deletedAt zero) or that was deleted at deletedAt, by an admin or
+// by the sender (bySender).
+func (s *Scheduler) enqueueSummary(t store.Transfer, deletedAt time.Time, bySender bool) error {
 	history, err := s.stores.Downloads.GetHistoryForTransfer(t.ID)
 	if err != nil {
 		return err
@@ -233,6 +239,7 @@ func (s *Scheduler) enqueueSummary(t store.Transfer, deletedAt time.Time) error 
 		History:    history,
 		GraceHours: s.cfg.Jobs.CleanupGraceHours,
 		DeletedAt:  deletedAt,
+		BySender:   bySender,
 	}
 	// Only complete files: a dead 'uploading' row (a lost TUS create) was
 	// never part of the transfer the recipients saw.
@@ -465,7 +472,8 @@ type expirySummary struct {
 	History    []store.RecipientHistory
 	Files      []store.File // complete files, in upload order
 	GraceHours int
-	DeletedAt  time.Time // set when an admin deleted the transfer; zero = it expired
+	DeletedAt  time.Time // set when the transfer was deleted by hand; zero = it expired
+	BySender   bool      // deleted by the sender on the manage page, not by an admin
 }
 
 func (e expirySummary) fileItems() []mail.FileItem {
@@ -620,8 +628,12 @@ func (e expirySummary) intro() string {
 		title = "Your transfer \"" + e.Transfer.Title + "\""
 	}
 	if !e.DeletedAt.IsZero() {
-		return fmt.Sprintf("%s was deleted by an administrator on %s. The download links no longer work.",
-			title, mail.FormatDate(e.DeletedAt, e.Loc))
+		by := "an administrator"
+		if e.BySender {
+			by = "you"
+		}
+		return fmt.Sprintf("%s was deleted by %s on %s. The download links no longer work.",
+			title, by, mail.FormatDate(e.DeletedAt, e.Loc))
 	}
 	return fmt.Sprintf("%s expired on %s. The download links no longer work.",
 		title, mail.FormatDate(e.Transfer.ExpiresAt, e.Loc))

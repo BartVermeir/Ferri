@@ -63,6 +63,10 @@ func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, stora
 		r.Post("/send", handler.SendCreate(cfg, stores))
 		r.Get("/request", handler.RequestPage(cfg, stores))
 		r.Post("/request", handler.RequestCreate(cfg, stores))
+		// Manage links (DEC-043): the token alone opens them, so internal only.
+		r.Get("/manage/{token}", handler.ManagePage(cfg, stores))
+		r.Post("/manage/{token}/extend", handler.ManageExtend(cfg, stores))
+		r.Post("/manage/{token}/delete", handler.ManageDelete(cfg, stores, storageMgr, scheduler))
 	})
 
 	// Admin routes (IP-restricted + session cookie)

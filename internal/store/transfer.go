@@ -27,6 +27,9 @@ type Transfer struct {
 	ExpiredAt        sql.NullInt64 // nullable epoch seconds
 	CreatedAt        time.Time
 	NotifyRecipients bool // false = link-only mode, skip notification emails
+	// ManageToken opens the sender's manage page (/manage/<token>). NULL for
+	// transfers from before migration 006.
+	ManageToken sql.NullString
 }
 
 // File represents a row in the files table.
@@ -86,9 +89,10 @@ type CreateFileInput struct {
 
 // CreateTransferResult holds the IDs generated during transfer creation.
 type CreateTransferResult struct {
-	TransferID string
-	Recipients []RecipientResult
-	Files      []FileResult
+	TransferID  string
+	ManageToken string
+	Recipients  []RecipientResult
+	Files       []FileResult
 }
 
 type RecipientResult struct {
@@ -108,6 +112,7 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 	err := txFunc(s.db, func(tx *sql.Tx) error {
 		transferID := token.Generate()
 		result.TransferID = transferID
+		result.ManageToken = token.Generate()
 
 		var passwordHash sql.NullString
 		if input.PasswordHash != "" {
@@ -122,8 +127,8 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 		_, err := tx.Exec(`
 			INSERT INTO transfers (id, title, message, sender_name, sender_email,
 			                       password_hash, status, expires_at, notify_recipients,
-			                       expected_files)
-			VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+			                       expected_files, manage_token)
+			VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
 			transferID,
 			input.Title,
 			input.Message,
@@ -133,6 +138,7 @@ func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult
 			input.ExpiresAt.Unix(),
 			boolToInt(input.NotifyRecipients),
 			expectedFiles,
+			result.ManageToken,
 		)
 		if err != nil {
 			return fmt.Errorf("insert transfer: %w", err)
@@ -197,7 +203,7 @@ func (s *TransferStore) GetByDownloadToken(tok string) (*Transfer, *Recipient, [
 	err := s.db.QueryRow(`
 		SELECT t.id, t.title, t.message, t.sender_name, t.sender_email,
 		       t.password_hash, t.status, t.expires_at, t.activated_at,
-		       t.expired_at, t.created_at, t.notify_recipients,
+		       t.expired_at, t.created_at, t.notify_recipients, t.manage_token,
 		       r.id, r.transfer_id, r.email, r.download_token, r.notified_at,
 		       r.first_download_at, r.download_count, r.created_at, r.is_sender
 		FROM recipients r
@@ -209,7 +215,7 @@ func (s *TransferStore) GetByDownloadToken(tok string) (*Transfer, *Recipient, [
 	).Scan(
 		&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
 		&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
-		&t.ExpiredAt, &tCreatedAt, &t.NotifyRecipients,
+		&t.ExpiredAt, &tCreatedAt, &t.NotifyRecipients, &t.ManageToken,
 		&r.ID, &r.TransferID, &r.Email, &r.DownloadToken, &r.NotifiedAt,
 		&r.FirstDownloadAt, &r.DownloadCount, &rCreatedAt, &r.IsSender,
 	)
@@ -318,7 +324,7 @@ func (s *TransferStore) GetExpired() ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
 		       password_hash, status, expires_at, activated_at, expired_at, created_at,
-		       notify_recipients
+		       notify_recipients, manage_token
 		FROM transfers
 		WHERE status IN ('pending', 'active') AND expires_at < unixepoch()`,
 	)
@@ -347,7 +353,7 @@ func (s *TransferStore) GetForCleanup(graceHours int) ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
 		       password_hash, status, expires_at, activated_at, expired_at, created_at,
-		       notify_recipients
+		       notify_recipients, manage_token
 		FROM transfers
 		WHERE (
 		        status = 'deleted'
@@ -553,12 +559,12 @@ func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
 	err := s.db.QueryRow(`
 		SELECT id, title, message, sender_name, sender_email,
 		       password_hash, status, expires_at, activated_at, expired_at, created_at,
-		       notify_recipients
+		       notify_recipients, manage_token
 		FROM transfers WHERE id = ?`, transferID,
 	).Scan(
 		&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
 		&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
-		&t.ExpiredAt, &createdAt, &notifyRecipients,
+		&t.ExpiredAt, &createdAt, &notifyRecipients, &t.ManageToken,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -570,6 +576,46 @@ func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
 	t.CreatedAt = time.Unix(createdAt, 0)
 	t.NotifyRecipients = notifyRecipients != 0
 	return &t, nil
+}
+
+// GetLiveByManageToken returns the transfer behind a manage link while it is
+// live: pending (still uploading) or active, and not past expires_at. An
+// expired or deleted transfer has nothing left to manage. Nil if not found.
+func (s *TransferStore) GetLiveByManageToken(tok string) (*Transfer, error) {
+	var id string
+	err := s.db.QueryRow(`
+		SELECT id FROM transfers
+		WHERE manage_token = ?
+		  AND status IN ('pending', 'active')
+		  AND expires_at > unixepoch()`,
+		tok,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetByID(id)
+}
+
+// ExtendExpiry moves a live transfer's expiry to expiresAt. Only later: the
+// manage page offers "extend", not "shorten". Returns false when nothing
+// changed (not live any more, or expiresAt is not later).
+func (s *TransferStore) ExtendExpiry(transferID string, expiresAt time.Time) (bool, error) {
+	result, err := s.db.Exec(`
+		UPDATE transfers SET expires_at = ?
+		WHERE id = ?
+		  AND status IN ('pending', 'active')
+		  AND expires_at > unixepoch()
+		  AND expires_at < ?`,
+		expiresAt.Unix(), transferID, expiresAt.Unix(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -625,7 +671,7 @@ func (s *TransferStore) filesByTransferID(transferID string) ([]File, error) {
 // expires_at and created_at are INTEGER (Unix epoch) in SQLite — scan into int64,
 // then convert to time.Time. Scanning directly into time.Time would fail at runtime.
 // The column list must match the queries in GetExpired / GetForCleanup /
-// ListActive / ListAll, including the trailing notify_recipients.
+// GetByID, including the trailing notify_recipients and manage_token.
 func scanTransfers(rows *sql.Rows) ([]Transfer, error) {
 	var list []Transfer
 	for rows.Next() {
@@ -635,7 +681,7 @@ func scanTransfers(rows *sql.Rows) ([]Transfer, error) {
 		if err := rows.Scan(
 			&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
 			&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
-			&t.ExpiredAt, &createdAt, &notifyRecipients,
+			&t.ExpiredAt, &createdAt, &notifyRecipients, &t.ManageToken,
 		); err != nil {
 			return nil, err
 		}

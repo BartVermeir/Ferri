@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,9 @@ type Settings struct {
 	MailFromAddress   string
 	NotifyOnDownload  bool
 	ExpirySummary     bool
+	// AlertRecipients: addresses that get the admin alerts (jobs/alerts.go),
+	// comma separated. Empty = no alerts.
+	AlertRecipients string
 
 	// Storage settings
 	// StorageType is "local" (default) or "smb".
@@ -137,6 +141,7 @@ func (s *SettingsStore) load() (*Settings, error) {
 		MailFromAddress:   kv["mail.from_address"],
 		NotifyOnDownload:  kv["mail.notify_on_download"] != "false",
 		ExpirySummary:     kv["mail.expiry_summary"] != "false",
+		AlertRecipients:   kv["alerts.recipients"],
 
 		StorageType:          orDefault(kv["storage.type"], "local"),
 		LocalPath:            kv["storage.local_path"],
@@ -161,6 +166,17 @@ func defaultSettings() *Settings {
 		NotifyOnDownload:  true,
 		ExpirySummary:     true,
 	}
+}
+
+// AlertRecipientList splits AlertRecipients into addresses.
+func (s *Settings) AlertRecipientList() []string {
+	var list []string
+	for _, a := range strings.Split(s.AlertRecipients, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			list = append(list, a)
+		}
+	}
+	return list
 }
 
 func orDefault(v, def string) string {

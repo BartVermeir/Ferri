@@ -433,6 +433,9 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 		BaseURL:     h.cfg.Server.BaseURL,
 		Settings:    settings,
 	}
+	if t.ManageToken.Valid && t.ManageToken.String != "" {
+		m.ManageURL = m.BaseURL + "/manage/" + t.ManageToken.String
+	}
 	for _, f := range dbFiles {
 		// A stray 'uploading' row (a TUS client that restarted an upload after
 		// a 404) is not part of what the recipients receive.
@@ -559,7 +562,10 @@ type transferMail struct {
 	Loc         *time.Location
 	BaseURL     string
 	Settings    *store.Settings
+	ManageURL   string // sender's manage page; empty for transfers from before migration 006
 }
+
+const confirmManageWhat = "Manage this transfer: see who downloaded what, extend it or delete it:"
 
 func (m transferMail) sender() string {
 	if m.SenderName != "" {
@@ -673,8 +679,11 @@ func buildConfirmHTML(m transferMail, recipients []string, senderURL string) str
 		b.WriteString(`<p style="margin:0 0 12px;font-size:13px;color:#555;">Your own link to the transfer, to check or download the files yourself:</p>`)
 		b.WriteString(mail.ButtonHTML(senderURL, "View transfer", m.Settings))
 	}
-	fmt.Fprintf(&b, `<p style="margin:0 0 8px;font-size:13px;color:#555;">Available until <strong>%s</strong>.</p>`,
+	fmt.Fprintf(&b, `<p style="margin:0 0 20px;font-size:13px;color:#555;">Available until <strong>%s</strong>.</p>`,
 		html.EscapeString(mail.FormatDate(m.ExpiresAt, m.Loc)))
+	if m.ManageURL != "" {
+		b.WriteString(mail.ManageLinkHTML(m.ManageURL, confirmManageWhat))
+	}
 	b.WriteString(mail.NoteHTML(confirmNote(m.Settings, senderURL != "")))
 
 	preheader := fmt.Sprintf("Sent to %s, available until %s.",
@@ -706,6 +715,9 @@ func buildConfirmText(m transferMail, recipients []string, senderURL string) str
 		fmt.Fprintf(&b, "\nYour own link to the transfer: %s\n", senderURL)
 	}
 	fmt.Fprintf(&b, "\nAvailable until %s.\n", mail.FormatDate(m.ExpiresAt, m.Loc))
+	if m.ManageURL != "" {
+		b.WriteString("\n" + mail.ManageLinkText(m.ManageURL, confirmManageWhat))
+	}
 	fmt.Fprintf(&b, "\n--\n%s\n", confirmNote(m.Settings, senderURL != ""))
 	return b.String()
 }

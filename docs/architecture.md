@@ -63,12 +63,13 @@ The application is a single Go binary. It has no runtime dependencies beyond the
 │   ├── db/
 │   │   ├── db.go                # Open connection, run migrations, startup hooks
 │   │   └── migrations/
-│   │       └── 001_initial.sql  # Base schema; 002–005 add columns (schema.sql = the sum)
+│   │       └── 001_initial.sql  # Base schema; 002–008 add columns/tables (schema.sql = the sum)
 │   ├── handler/
 │   │   ├── send.go              # POST /send — create transfer
 │   │   ├── download.go          # GET /dl/:token — download page + file serve
 │   │   ├── request.go           # POST /request — create upload request
 │   │   ├── upload.go            # GET /ul/:token — upload request page
+│   │   ├── manage.go            # GET/POST /manage/:token — sender's/requester's manage page
 │   │   ├── admin.go             # GET/POST /admin/* — admin UI
 │   │   └── health.go            # GET /health — liveness probe
 │   ├── middleware/
@@ -87,12 +88,15 @@ The application is a single Go binary. It has no runtime dependencies beyond the
 │   │       ├── expiry_summary.html
 │   │       └── upload_complete.html
 │   ├── jobs/
-│   │   └── scheduler.go         # Ticker-based background job runner
+│   │   ├── scheduler.go         # Ticker-based background job runner
+│   │   ├── reminder.go          # "Nothing uploaded yet" reminder to the requester
+│   │   └── alerts.go            # Admin alert mails (storage, leftovers, failed mails)
 │   ├── store/
 │   │   ├── transfer.go          # DB queries for transfers + files + recipients
 │   │   ├── download.go          # DB queries for download_events
 │   │   ├── request.go           # DB queries for upload_requests + upload_request_files
 │   │   ├── mail.go              # DB queries for mail_queue
+│   │   ├── alert.go             # DB queries for alert_state
 │   │   └── settings.go          # DB queries + in-memory cache for settings
 │   └── token/
 │       └── token.go             # Generate base58 tokens (crypto/rand)
@@ -102,6 +106,7 @@ The application is a single Go binary. It has no runtime dependencies beyond the
 │   │   ├── send.html
 │   │   ├── download.html
 │   │   ├── upload.html
+│   │   ├── manage.html          # Manage page (transfer or upload request)
 │   │   ├── password.html
 │   │   └── admin/
 │   │       ├── dashboard.html
@@ -164,9 +169,14 @@ A request from outside the allowlist gets the branded 403 page (`handler/forbidd
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
 | GET | `/` | `handler/send.go` | Combined send/request page (`?mode=request` opens the request tab) |
-| POST | `/send` | `handler/send.go` | Create transfer, returns JSON `{transfer_id, download_url?}` |
+| POST | `/send` | `handler/send.go` | Create transfer, returns JSON `{transfer_id, manage_url, download_url?}` |
 | GET | `/request` | `handler/request.go` | Same page, request tab selected |
 | POST | `/request` | `handler/request.go` | Create upload request |
+| GET | `/manage/:manage_token` | `handler/manage.go` | Manage page: status, files, who downloaded what (transfer) or the links (request) |
+| POST | `/manage/:manage_token/extend` | `handler/manage.go` | New expiry = now + one of `expiry_options`, only if at least an hour later |
+| POST | `/manage/:manage_token/delete` | `handler/manage.go` | Delete now, same code as the admin delete; a live transfer mails the sender the summary |
+
+**Manage link (DEC-043).** Every transfer and upload request gets a `manage_token` (migration 006). The sender gets the link in the confirmation mail and on the screen after the upload (link-only transfers only there, they get no mail); the requester on the "upload link created" page, in the reminder and in the "files received" mail. The token alone opens the page, so the routes sit behind the IP allowlist. Only live items can be managed (transfer `pending`/`active`, request `open`/`completed`, not past `expires_at`); anything else gets the 404 page. Extending does not mail recipients. Items created before migration 006 have no manage link.
 
 ### Admin routes (IP-restricted + session cookie)
 
@@ -452,6 +462,7 @@ SQLite file: `db.path` in config (default `/data/app.db`).
 | `upload_requests` | One row per upload request |
 | `upload_request_files` | One row per file received via upload request |
 | `mail_queue` | Persistent outbound mail queue with retry |
+| `alert_state` | Per alert kind: since when the condition holds, when it was last mailed |
 | `schema_migrations` | Tracks which migration files have been applied |
 | `settings` | Key-value runtime configuration |
 
@@ -611,6 +622,27 @@ All mail goes through the `mail_queue` table. No synchronous sends.
 | File downloaded | Download handler | Sender (if enabled) |
 | Expiry summary | Expiry job | Sender |
 | Upload request fulfilled | Upload complete handler | Requester |
+| Nothing uploaded yet | Expiry job (`jobs/reminder.go`) | Requester |
+| Admin alert | Alert job (`jobs/alerts.go`) | Addresses in `alerts.recipients` |
+
+The sender's confirmation, the "files received" mail and the reminder carry the manage link (`mail.ManageLinkHTML/Text`), with the note that it only opens from the internal network.
+
+### Reminder
+
+An open upload request that expires within 24 hours without a single complete file, and is at least 24 hours old, gets one reminder to the requester: the upload link to forward again and the manage link to extend. A request made for one day gets none. `reminded_at` (migration 007) marks it; extending clears it, so the new expiry gets its own reminder. The upload link goes to external parties by hand, so Ferri does not know their address.
+
+### Admin alerts
+
+Every 15 minutes, only while `alerts.recipients` holds an address and `mail.from_address` is set. At most one mail per kind per 24 hours (`alert_state.last_sent_at`), to every address. Subjects start with `[Alert] `.
+
+| Kind | Condition | Mailed |
+|---|---|---|
+| `storage_down` | `TestConnection` fails (not reachable or not writable) | once it lasted 30 minutes |
+| `low_space` | free space below 2 × `limits.min_free_bytes` | right away |
+| `leftovers` | deleted files still on storage (`ListUnpurged`) | once it lasted 24 hours |
+| `mail_failed` | mails that failed for good since the last alert, alert mails excluded | right away |
+
+`alert_state.since` keeps when a condition started and is cleared when it ends. A backend that cannot report its free space is logged, not alerted. If SMTP itself is down, no alert arrives either; the mail queue in the admin panel still shows the failures.
 
 ### Expiry summary format
 
@@ -628,7 +660,7 @@ carol@example.org: all 3 files
 bob@example.org: nothing downloaded
 ```
 
-The same summary goes out when an admin deletes a live transfer (`POST /admin/transfers/{id}/delete`, `Scheduler.EnqueueDeletionSummary`, queued before the delete): subject "Deleted: …", intro "was deleted by an administrator on …", and "The files have been deleted." instead of the grace period. An expired transfer already had its summary and a pending one never reached anyone, so neither gets one.
+The same summary goes out when a live transfer is deleted by hand (`Scheduler.EnqueueDeletionSummary`, queued before the delete): by an admin (`POST /admin/transfers/{id}/delete`, intro "was deleted by an administrator on …") or by the sender on the manage page (`POST /manage/{token}/delete`, "was deleted by you on …"). Subject "Deleted: …", and "The files have been deleted." instead of the grace period. An expired transfer already had its summary and a pending one never reached anyone, so neither gets one.
 
 Per recipient: which files, when, and which not. A ZIP records one event per file with the same time; when every file has exactly the same times the lines collapse into "All files". Several downloads in the same minute show once with a count. Only complete files count as the transfer's files. "Nothing downloaded", not "never opened": opening the page is not recorded.
 
@@ -716,6 +748,7 @@ jobs:
 | `mail.from_address` | *(empty)* | Must be set before mails work |
 | `mail.notify_on_download` | `true` | Notify sender on each download |
 | `mail.expiry_summary` | `true` | Send expiry summary on expiry |
+| `alerts.recipients` | *(empty)* | Addresses for the admin alerts, comma separated; empty = no alerts |
 
 ---
 
@@ -748,7 +781,13 @@ Backoff: 2m → 8m → 30m → 2h → failed.
    b. Query download_events (using denormalised original_name)
    c. INSERT mail_queue: expiry summary to sender
 3. Same for upload_requests WHERE status='open' AND expires_at < now()
+4. Reminders: open requests in their last 24 h, nothing uploaded, not reminded
+   (see §8 Reminder)
 ```
+
+### Alert job — every 15 minutes (fixed)
+
+Checks storage, free space, leftover files and failed mails, and mails the admin (see §8 Admin alerts). Does nothing while `alerts.recipients` is empty.
 
 ### Cleanup job — every 6 hours (configurable: `jobs.cleanup_interval_hours`)
 
@@ -814,7 +853,7 @@ Cleans up TUS uploads abandoned mid-way. Runs independently of transfer expiry.
 |---|---|---|
 | Network | DMZ firewall | Server cannot reach internal network if compromised |
 | TLS | Reverse proxy | Eavesdropping in transit |
-| IP allowlist | `middleware/ipallow.go` | Externals cannot create transfers |
+| IP allowlist | `middleware/ipallow.go` | Externals cannot create transfers or open manage links |
 | TUS token validation | `PreUploadCreateCallback` | Anonymous storage abuse via public TUS endpoint |
 | Admin auth | HMAC cookie, `subtle.ConstantTimeCompare` | Timing attacks, session forgery |
 | Token entropy | 256-bit random, base58 | Tokens cannot be guessed |

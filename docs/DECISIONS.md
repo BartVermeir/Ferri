@@ -637,4 +637,34 @@ The `.info` sidecar must go too. With only the content file removed, `tusd` stil
 
 ---
 
+## DEC-043: Manage link for the sender and the requester, internal network only
+
+**Decision:** Every transfer and upload request gets a `manage_token` (migration 006). `/manage/<token>` shows the status, the files and, for a transfer, per recipient which files were downloaded and when; for a request, the upload and view links. It can extend the expiry (now + one of `expiry_options`, at least an hour later than the current expiry; recipients are not mailed) and delete at once, through the same code as the admin delete (a live transfer mails the sender the "who downloaded what" summary, "deleted by you"). The routes sit behind the IP allowlist, like the send page. Only live items can be managed. Items from before migration 006 have no manage link.
+
+**Rationale:** only the admin could withdraw a transfer sent to the wrong person, or give a request more time. The token is enough to open the page, so it must not work from outside; senders create transfers on the internal network anyway. No login needed.
+
+**Alternatives rejected:** a login (SSO) with a "my transfers" page: much more work and depends on IT. Deleting as "expired" with the grace period: a transfer sent to the wrong person should be gone at once.
+
+---
+
+## DEC-044: "Nothing uploaded yet" reminder goes to the requester
+
+**Decision:** An open upload request that expires within 24 hours without a single complete file, and is at least 24 hours old, gets one reminder mail to the requester, with the upload link to forward again and the manage link to extend. `reminded_at` (migration 007) marks it; extending clears it.
+
+**Rationale:** Ferri does not know the external party's address: the requester sends the upload link by hand. A request made for one day would be reminded right after it was created, so it gets none.
+
+**Alternatives rejected:** an optional "send the link to" field, so Ferri mails the uploader and reminds them: a new invitation mail and form field for a smaller gain.
+
+---
+
+## DEC-045: Admin alerts by mail
+
+**Decision:** Addresses in the admin setting `alerts.recipients` get a mail when the storage cannot be reached or written for 30 minutes, has less than twice `limits.min_free_bytes` free, keeps deleted files for 24 hours, or when mails failed for good. Checked every 15 minutes; at most one mail per kind per 24 hours, state in `alert_state` (migration 008). Failed alert mails are not reported again. Empty = no alerts.
+
+**Rationale:** these problems only showed up as WARN lines in the logs, which nobody reads. The thresholds leave room to act: uploads are refused below `min_free_bytes`, and one failed storage check can be an SMB reconnect.
+
+**Known limit:** if SMTP itself is down, the alerts do not arrive either; the mail queue in the admin panel still shows the failures.
+
+---
+
 *This document is maintained alongside the codebase. All significant decisions must be recorded here before implementation begins.*

@@ -282,6 +282,9 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			"file_count":      len(files),
 			"recipient_count": len(result.Recipients),
 			"link_only":       linkOnly,
+			// Shown after the upload; for link-only transfers the only place
+			// the sender gets it, as they get no mail.
+			"manage_url": cfg.Server.BaseURL + "/manage/" + result.ManageToken,
 		}
 		// In link-only mode return the download URL so the JS can display it.
 		if linkOnly && len(result.Recipients) > 0 {

@@ -55,6 +55,7 @@ func testRouter(t *testing.T) http.Handler {
 func TestRouter_Routes(t *testing.T) {
 	want := []string{
 		"GET /", "POST /send", "GET /request", "POST /request",
+		"GET /manage/{token}", "POST /manage/{token}/extend", "POST /manage/{token}/delete",
 		"GET /health", "GET /favicon.ico", "* /static/*", "* /static/logo/*", "* /tus/*",
 		"GET /dl/{token}", "POST /dl/{token}", "GET /dl/{token}/file/{fileID}", "GET /dl/{token}/zip",
 		"GET /ul/{token}", "POST /ul/{token}", "POST /ul/{token}/complete",
@@ -117,6 +118,9 @@ func TestRouter_AccessRules(t *testing.T) {
 		{"send page from inside", "GET", "/", inside, nil, http.StatusOK},
 		{"admin from outside", "GET", "/admin", outside, nil, http.StatusForbidden},
 		{"admin without session", "GET", "/admin", inside, nil, http.StatusSeeOther},
+		{"manage page from outside", "GET", "/manage/nope", outside, nil, http.StatusForbidden},
+		{"manage delete from outside", "POST", "/manage/nope/delete", outside, nil, http.StatusForbidden},
+		{"unknown manage link from inside", "GET", "/manage/nope", inside, nil, http.StatusNotFound},
 		{"unknown download link", "GET", "/dl/nope", outside, nil, http.StatusNotFound},
 		{"requester password route exists (H3)", "POST", "/ul/nope/files", outside, nil, http.StatusNotFound},
 		{"TUS reaches the pre-create hook", "POST", "/tus/", outside, map[string]string{"Tus-Resumable": "1.0.0", "Upload-Length": "1"}, http.StatusBadRequest},

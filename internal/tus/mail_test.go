@@ -79,6 +79,13 @@ func TestEnqueueTransferMails_SenderGetsOwnLink(t *testing.T) {
 	if !strings.Contains(alice.Subject, "1 recipient") {
 		t.Fatalf("sender row must not count as a recipient, subject: %q", alice.Subject)
 	}
+	manageURL := "http://example.com/manage/" + res.ManageToken
+	if !strings.Contains(alice.BodyHTML, manageURL) || !strings.Contains(alice.BodyText, manageURL) {
+		t.Fatalf("sender confirmation should carry the manage link %s", manageURL)
+	}
+	if strings.Contains(bob.BodyHTML, "/manage/") || strings.Contains(bob.BodyText, "/manage/") {
+		t.Fatalf("recipient mail must not carry the manage link")
+	}
 }
 
 // A stray 'uploading' row is not part of what recipients receive.

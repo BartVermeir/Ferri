@@ -326,7 +326,8 @@
             if (progWrap) progWrap.style.display = 'none';
             return;
           }
-          attempt = { key: key, transferId: json.transfer_id, downloadUrl: json.download_url || null, uploaded: {} };
+          attempt = { key: key, transferId: json.transfer_id, downloadUrl: json.download_url || null,
+            manageUrl: json.manage_url || null, uploaded: {} };
         } catch (err) {
           showResult(resultEl, 'error', 'Network error. Please try again.');
           setSubmitState(form, false);
@@ -349,6 +350,7 @@
         return;
       }
       var downloadUrl = current.downloadUrl;
+      var manageUrl = current.manageUrl;
       attempt = null;
 
       if (progWrap) progWrap.style.display = 'none';
@@ -359,6 +361,7 @@
         showResult(resultEl, 'success',
           collection.count() + ' file(s) uploaded. Recipients will receive a download link by email.');
       }
+      if (manageUrl) appendManageLink(resultEl, manageUrl);
 
       form.reset();
       collection.clear();
@@ -629,6 +632,18 @@
         }
       });
     }
+  }
+
+  // appendManageLink adds the sender's manage page under the result. For a
+  // link-only transfer this is the only place the sender gets it.
+  function appendManageLink(el, url) {
+    if (!el) return;
+    var p = document.createElement('div');
+    p.style.cssText = 'margin-top:10px;font-size:12px;';
+    p.innerHTML = '<a href="' + escHtml(url) + '" target="_blank" rel="noopener" style="color:inherit;font-weight:500;">' +
+      'Manage this transfer</a>: see who downloaded what, extend it or delete it. ' +
+      'Keep this link; it only opens from the internal network.';
+    el.appendChild(p);
   }
 
   function setSubmitState(form, disabled) {

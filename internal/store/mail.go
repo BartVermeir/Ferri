@@ -172,6 +172,31 @@ func (s *MailStore) ListFailed(limit int) ([]MailItem, error) {
 	return scanMailItems(rows)
 }
 
+// FailedSince returns mails that failed for good at or after the given time
+// (their last attempt, in whole seconds: "at" so a failure in the same
+// second as the previous alert is reported twice rather than never), oldest
+// first, skipping mails whose subject starts
+// with skipSubjectPrefix: the admin alerts use it to leave out their own
+// failed alert mails, which would otherwise report themselves every day.
+func (s *MailStore) FailedSince(since time.Time, skipSubjectPrefix string) ([]MailItem, error) {
+	rows, err := s.db.Query(`
+		SELECT id, to_address, subject, body_html, body_text,
+		       status, attempts, max_attempts, last_attempt_at,
+		       next_attempt_at, error_message, created_at
+		FROM mail_queue
+		WHERE status = 'failed'
+		  AND last_attempt_at >= ?
+		  AND substr(subject, 1, length(?)) != ?
+		ORDER BY last_attempt_at ASC`,
+		since.Unix(), skipSubjectPrefix, skipSubjectPrefix,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMailItems(rows)
+}
+
 // Retry resets a failed mail to pending with attempts = 0.
 func (s *MailStore) Retry(id string) error {
 	_, err := s.db.Exec(`

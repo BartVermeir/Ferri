@@ -31,6 +31,11 @@ type UploadRequest struct {
 	CompletedAt   sql.NullInt64
 	ExpiredAt     sql.NullInt64
 	CreatedAt     time.Time
+	// ManageToken opens the requester's manage page (/manage/<token>). NULL
+	// for requests from before migration 006.
+	ManageToken sql.NullString
+	// RemindedAt: when the "nothing uploaded yet" reminder went out.
+	RemindedAt sql.NullInt64
 }
 
 // ViewPathToken is the token for the requester's routes (/ul/<token>/files).
@@ -74,6 +79,7 @@ func (s *RequestStore) Create(input CreateRequestInput) (string, string, error) 
 	id := token.Generate()
 	uploadToken := token.Generate()
 	viewToken := token.Generate()
+	manageToken := token.Generate()
 
 	var passwordHash sql.NullString
 	if input.PasswordHash != "" {
@@ -94,10 +100,10 @@ func (s *RequestStore) Create(input CreateRequestInput) (string, string, error) 
 		INSERT INTO upload_requests
 		  (id, title, message, requester_name, requester_email,
 		   upload_token, view_token, password_hash, max_files, max_total_bytes,
-		   status, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+		   status, expires_at, manage_token)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
 		id, input.Title, input.Message, input.RequesterName, input.RequesterEmail,
-		uploadToken, viewToken, passwordHash, maxFiles, maxBytes, input.ExpiresAt.Unix(),
+		uploadToken, viewToken, passwordHash, maxFiles, maxBytes, input.ExpiresAt.Unix(), manageToken,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("insert upload_request: %w", err)
@@ -114,7 +120,8 @@ func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
 	err := s.db.QueryRow(`
 		SELECT id, title, message, requester_name, requester_email,
 		       upload_token, view_token, password_hash, max_files, max_total_bytes,
-		       status, expires_at, completed_at, expired_at, created_at
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
 		FROM upload_requests
 		WHERE upload_token = ?
 		  AND status = 'open'
@@ -124,6 +131,7 @@ func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
 		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
 		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
 		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+		&r.ManageToken, &r.RemindedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -145,7 +153,8 @@ func (s *RequestStore) GetLiveByUploadToken(tok string) (*UploadRequest, error) 
 	err := s.db.QueryRow(`
 		SELECT id, title, message, requester_name, requester_email,
 		       upload_token, view_token, password_hash, max_files, max_total_bytes,
-		       status, expires_at, completed_at, expired_at, created_at
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
 		FROM upload_requests
 		WHERE upload_token = ?
 		  AND status IN ('open', 'completed')
@@ -155,6 +164,7 @@ func (s *RequestStore) GetLiveByUploadToken(tok string) (*UploadRequest, error) 
 		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
 		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
 		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+		&r.ManageToken, &r.RemindedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -182,7 +192,8 @@ func (s *RequestStore) GetViewableByViewToken(tok string) (*UploadRequest, error
 	err := s.db.QueryRow(`
 		SELECT id, title, message, requester_name, requester_email,
 		       upload_token, view_token, password_hash, max_files, max_total_bytes,
-		       status, expires_at, completed_at, expired_at, created_at
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
 		FROM upload_requests
 		WHERE (view_token = ? OR (view_token IS NULL AND upload_token = ?))
 		  AND status IN ('open', 'completed')
@@ -192,6 +203,7 @@ func (s *RequestStore) GetViewableByViewToken(tok string) (*UploadRequest, error
 		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
 		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
 		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+		&r.ManageToken, &r.RemindedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -202,6 +214,94 @@ func (s *RequestStore) GetViewableByViewToken(tok string) (*UploadRequest, error
 	r.ExpiresAt = time.Unix(expiresAt, 0)
 	r.CreatedAt = time.Unix(createdAt, 0)
 	return &r, nil
+}
+
+// GetLiveByManageToken returns the request behind a manage link while it is
+// live: open or completed, and not past expires_at. Nil if not found.
+func (s *RequestStore) GetLiveByManageToken(tok string) (*UploadRequest, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE manage_token = ?
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()`,
+		tok,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list, err := scanRequests(rows)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
+// ExtendExpiry moves a live request's expiry to expiresAt, only later (see
+// TransferStore.ExtendExpiry). It clears reminded_at, so the new expiry date
+// gets its own "nothing uploaded yet" reminder. Returns false when nothing
+// changed.
+func (s *RequestStore) ExtendExpiry(requestID string, expiresAt time.Time) (bool, error) {
+	result, err := s.db.Exec(`
+		UPDATE upload_requests SET expires_at = ?, reminded_at = NULL
+		WHERE id = ?
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()
+		  AND expires_at < ?`,
+		expiresAt.Unix(), requestID, expiresAt.Unix(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// GetDueForReminder returns open requests that expire within the next
+// `before`, have not received a single complete file, were not reminded yet,
+// and are at least `minAge` old — a request created for one day would
+// otherwise get its reminder right after it was made.
+func (s *RequestStore) GetDueForReminder(before, minAge time.Duration) ([]UploadRequest, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE status = 'open'
+		  AND reminded_at IS NULL
+		  AND expires_at > unixepoch()
+		  AND expires_at <= unixepoch() + ?
+		  AND created_at <= unixepoch() - ?
+		  AND NOT EXISTS (
+		        SELECT 1 FROM upload_request_files f
+		        WHERE f.upload_request_id = upload_requests.id AND f.status = 'complete'
+		      )`,
+		int64(before.Seconds()), int64(minAge.Seconds()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRequests(rows)
+}
+
+// ClaimReminder sets reminded_at if it is still NULL. Returns true for the
+// one caller that set it, so a reminder is never queued twice.
+func (s *RequestStore) ClaimReminder(requestID string) (bool, error) {
+	result, err := s.db.Exec(
+		`UPDATE upload_requests SET reminded_at = unixepoch() WHERE id = ? AND reminded_at IS NULL`,
+		requestID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
 }
 
 // Complete marks an upload request as completed.
@@ -237,7 +337,8 @@ func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
 		       upload_token, view_token, password_hash, max_files, max_total_bytes,
-		       status, expires_at, completed_at, expired_at, created_at
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
 		FROM upload_requests
 		WHERE status = 'open' AND expires_at < unixepoch()`,
 	)
@@ -254,7 +355,8 @@ func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
 		       upload_token, view_token, password_hash, max_files, max_total_bytes,
-		       status, expires_at, completed_at, expired_at, created_at
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
 		FROM upload_requests
 		WHERE (
 		        status = 'deleted'
@@ -420,6 +522,7 @@ func scanRequests(rows *sql.Rows) ([]UploadRequest, error) {
 			&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
 			&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
 			&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+			&r.ManageToken, &r.RemindedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -462,6 +565,7 @@ func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
 		SELECT r.id, r.title, r.message, r.requester_name, r.requester_email,
 		       r.upload_token, r.view_token, r.password_hash, r.max_files, r.max_total_bytes,
 		       r.status, r.expires_at, r.completed_at, r.expired_at, r.created_at,
+		       r.manage_token, r.reminded_at,
 		       COUNT(f.id)                    AS file_count,
 		       COALESCE(SUM(f.size_bytes), 0) AS total_bytes
 		FROM upload_requests r
@@ -485,6 +589,7 @@ func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
 			&rs.ID, &rs.Title, &rs.Message, &rs.RequesterName, &rs.RequesterEmail,
 			&rs.UploadToken, &rs.ViewToken, &rs.PasswordHash, &rs.MaxFiles, &rs.MaxTotalBytes,
 			&rs.Status, &expiresAt, &rs.CompletedAt, &rs.ExpiredAt, &createdAt,
+			&rs.ManageToken, &rs.RemindedAt,
 			&rs.FileCount, &rs.TotalBytes,
 		); err != nil {
 			return nil, err

@@ -310,6 +310,16 @@ func (u uploadCompleteMail) viewURL() string {
 	return u.BaseURL + "/ul/" + u.Request.ViewPathToken() + "/files"
 }
 
+// manageURL is empty for a request from before migration 006.
+func (u uploadCompleteMail) manageURL() string {
+	if !u.Request.ManageToken.Valid || u.Request.ManageToken.String == "" {
+		return ""
+	}
+	return u.BaseURL + "/manage/" + u.Request.ManageToken.String
+}
+
+const uploadCompleteManageWhat = "Need the files longer? Extend the request, or delete it, on its manage page:"
+
 func (u uploadCompleteMail) requestLabel() string {
 	if u.Request.Title != "" {
 		return `"` + u.Request.Title + `"`
@@ -337,8 +347,11 @@ func buildUploadCompleteHTML(u uploadCompleteMail) string {
 	b.WriteString(mail.QuoteHTML(u.Request.Message))
 	b.WriteString(mail.FileListHTML(u.Files))
 	b.WriteString(mail.ButtonHTML(u.viewURL(), "View uploaded files", u.Settings))
-	fmt.Fprintf(&b, `<p style="margin:0 0 8px;font-size:13px;color:#555;">The files are available until <strong>%s</strong>. After that date the link stops working.</p>`,
+	fmt.Fprintf(&b, `<p style="margin:0 0 20px;font-size:13px;color:#555;">The files are available until <strong>%s</strong>. After that date the link stops working.</p>`,
 		html.EscapeString(mail.FormatDate(u.Request.ExpiresAt, u.Loc)))
+	if m := u.manageURL(); m != "" {
+		b.WriteString(mail.ManageLinkHTML(m, uploadCompleteManageWhat))
+	}
 	b.WriteString(mail.NoteHTML(u.note()))
 
 	preheader := fmt.Sprintf("%s received for %s.", mail.Plural(len(u.Files), "file"), u.requestLabel())
@@ -355,8 +368,12 @@ func buildUploadCompleteText(u uploadCompleteMail) string {
 	if len(u.Files) > 0 {
 		b.WriteString("Files:\n" + mail.FileListText(u.Files) + "\n")
 	}
-	fmt.Fprintf(&b, "View files: %s\n\nThe files are available until %s. After that date the link stops working.\n\n--\n%s\n",
-		u.viewURL(), mail.FormatDate(u.Request.ExpiresAt, u.Loc), u.note())
+	fmt.Fprintf(&b, "View files: %s\n\nThe files are available until %s. After that date the link stops working.\n\n",
+		u.viewURL(), mail.FormatDate(u.Request.ExpiresAt, u.Loc))
+	if m := u.manageURL(); m != "" {
+		b.WriteString(mail.ManageLinkText(m, uploadCompleteManageWhat) + "\n")
+	}
+	fmt.Fprintf(&b, "--\n%s\n", u.note())
 	return b.String()
 }
 

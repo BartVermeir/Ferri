@@ -40,12 +40,14 @@ CREATE TABLE IF NOT EXISTS transfers (
     expired_at         INTEGER,                     -- set when status → expired
     notify_recipients  INTEGER NOT NULL DEFAULT 1,  -- 0 = link-only, skip notification emails
     expected_files     INTEGER,                     -- files /send announced; NULL before migration 004
+    manage_token       TEXT,                        -- sender's manage link; NULL before migration 006
     created_at      INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
 CREATE INDEX IF NOT EXISTS idx_transfers_status       ON transfers (status);
 CREATE INDEX IF NOT EXISTS idx_transfers_expires_at   ON transfers (expires_at);
 CREATE INDEX IF NOT EXISTS idx_transfers_sender_email ON transfers (sender_email);
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_transfers_manage_token ON transfers (manage_token);
 
 
 -- -------------------------------------------------------------
@@ -177,6 +179,8 @@ CREATE TABLE IF NOT EXISTS upload_requests (
     expires_at          INTEGER NOT NULL,
     completed_at        INTEGER,                    -- set when uploader clicks "done"
     expired_at          INTEGER,                    -- set when expiry job processes this
+    manage_token        TEXT,                       -- requester's manage link; NULL before migration 006
+    reminded_at         INTEGER,                    -- "nothing uploaded yet" reminder sent; cleared on extend
     created_at          INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
@@ -184,6 +188,7 @@ CREATE INDEX IF NOT EXISTS idx_upload_requests_status  ON upload_requests (statu
 CREATE INDEX IF NOT EXISTS idx_upload_requests_expiry  ON upload_requests (expires_at);
 CREATE INDEX IF NOT EXISTS idx_upload_requests_token   ON upload_requests (upload_token);
 CREATE UNIQUE INDEX IF NOT EXISTS uidx_upload_requests_view_token ON upload_requests (view_token);
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_upload_requests_manage_token ON upload_requests (manage_token);
 
 
 -- -------------------------------------------------------------
@@ -266,6 +271,19 @@ CREATE INDEX IF NOT EXISTS idx_mail_queue_sent_at ON mail_queue (last_attempt_at
 CREATE TABLE IF NOT EXISTS schema_migrations (
     filename    TEXT    NOT NULL PRIMARY KEY,   -- e.g. "001_initial.sql"
     applied_at  INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+
+-- -------------------------------------------------------------
+-- alert_state
+-- One row per kind of admin alert (jobs/alerts.go).
+-- since: when the condition was first seen, NULL = not active.
+-- last_sent_at: last alert mailed; at most one per kind per 24 h.
+-- -------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS alert_state (
+    kind          TEXT    NOT NULL PRIMARY KEY,
+    since         INTEGER,
+    last_sent_at  INTEGER
 );
 
 

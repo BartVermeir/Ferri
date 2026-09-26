@@ -300,7 +300,8 @@ app  | server listening on 0.0.0.0:8080
 2. Enter the `ADMIN_TOKEN` value from your `.env` file
 3. Navigate to Settings
 4. Set: company name, logo URL, colours, from-address for mail
-5. Send a test transfer to verify mail delivery
+5. Under Alerts, enter the address(es) that should hear about storage problems and failed mails (empty = no alerts)
+6. Send a test transfer to verify mail delivery
 
 ---
 

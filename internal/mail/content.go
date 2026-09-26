@@ -139,6 +139,21 @@ func ButtonHTML(url, label string, settings *store.Settings) string {
 		html.EscapeString(url), html.EscapeString(url))
 }
 
+// ManageLinkHTML renders the link to a manage page (/manage/<token>) as a
+// small paragraph: what the page does, the link, and that it only opens on
+// the internal network (the route sits behind the IP allowlist).
+func ManageLinkHTML(url, what string) string {
+	return fmt.Sprintf(`<p style="margin:0 0 20px;font-size:13px;color:#555;line-height:1.5;">%s<br><a href="%s" style="color:#555;word-break:break-all;">%s</a><br><span style="font-size:12px;color:#888;">%s</span></p>`,
+		html.EscapeString(what), html.EscapeString(url), html.EscapeString(url), manageNetworkNote)
+}
+
+// ManageLinkText is the plain-text counterpart of ManageLinkHTML.
+func ManageLinkText(url, what string) string {
+	return fmt.Sprintf("%s\n%s\n(%s)\n", what, url, manageNetworkNote)
+}
+
+const manageNetworkNote = "This page only opens from the internal network."
+
 // QuoteHTML renders a user-written message as a quoted block.
 func QuoteHTML(message string) string {
 	if message == "" {
