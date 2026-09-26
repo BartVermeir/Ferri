@@ -228,12 +228,12 @@ This document is intended as a living record. When a decision is revisited or re
 3. Sender: per-recipient download notification, with timestamp. At most one per recipient and transfer per hour, however many files the transfer holds: 5000 files downloaded within the hour give one mail, five transfers give five, and a download the next day mails again. A recipient row belongs to one transfer, so "per recipient" is per recipient per transfer. The mail names the file that triggered it and says further downloads within the hour are not mailed. `RecordDownload` checks for an earlier download inside the transaction that records the new one, so simultaneous downloads cannot both mail. A request that resumes a download (a `Range` not starting at byte 0) is not a new download. Every counted download, repeats included, is still recorded for the expiry summary.
 4. Sender: expiry summary — when a transfer expires, or when an admin deletes a live transfer by hand (subject "Deleted: …", no grace period; not for an already expired or a pending transfer), a single summary mail lists every recipient with, per file, the time of each download (not just the first), and the files they did not download. Recipients who downloaded nothing are listed explicitly. A ZIP download, which records every file at the same time, shows as one "All files" line. Example format (architecture.md §8):
 
-   alice@client.com: 2 of 3 files
+   alice@example.org: 2 of 3 files
      • a.mov: 11 May 13:14, 13 May 09:40
      • b.mov: 11 May 13:14
      Not downloaded: c.mov
 
-   bob@client.com: nothing downloaded
+   bob@example.org: nothing downloaded
 5. Upload requester: notification when the external party completes their upload
 
 ---
@@ -346,7 +346,7 @@ SQLite serialises writes. Only one goroutine can win this UPDATE. The winner che
 
 **The problem:** The cleanup job deletes files from disk and marks them `deleted` after a transfer expires. If `download_events` cascaded on file deletion, the entire download history would be wiped before (or simultaneously with) the expiry summary mail being generated — silently destroying the audit trail.
 
-**The solution:** `file_id` becomes NULL when the file is deleted. `original_name` is stored directly on the event row, so the expiry summary query can always reconstruct "alice downloaded Recording_day1.mxf on 11 May at 13:14" regardless of whether the file still exists.
+**The solution:** `file_id` becomes NULL when the file is deleted. `original_name` is stored directly on the event row, so the expiry summary query can always reconstruct "alice downloaded Recording_day1.mov on 11 May at 13:14" regardless of whether the file still exists.
 
 **Implication:** The expiry summary query reads `download_events.original_name`, not `files.original_name`. This is documented in the key queries section of architecture.md.
 
@@ -414,7 +414,7 @@ SQLite serialises writes. Only one goroutine can win this UPDATE. The winner che
 
 **Decision:** The download handler sets both a legacy ASCII `filename` parameter and a `filename*` parameter (RFC 5987, UTF-8 percent-encoded) in the `Content-Disposition` header.
 
-**The problem:** Media filenames routinely contain non-ASCII characters (`Séquence finale.mov`, `Recording — day 1.mxf`, `제작_최종.mov`). A bare `Content-Disposition: attachment; filename="Séquence finale.mov"` header is not valid per RFC 6266 and breaks in various browsers and download managers.
+**The problem:** Media filenames routinely contain non-ASCII characters (`Café scene.mov`, `Recording — day 1.mov`, `제작_최종.mov`). A bare `Content-Disposition: attachment; filename="Café scene.mov"` header is not valid per RFC 6266 and breaks in various browsers and download managers.
 
 **The solution:**
 ```

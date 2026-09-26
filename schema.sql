@@ -138,7 +138,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uidx_recipient_per_transfer
 --    header. This value is percent-encoded per RFC 5987 in the handler
 --    (filename* parameter) to correctly handle non-ASCII characters
 --    such as accented letters and em-dashes common in media
---    filenames (e.g. "Séquence finale.mov", "Recording — day 1.mxf").
+--    filenames (e.g. "Café scene.mov", "Recording — day 1.mov").
 -- -------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS download_events (
     id              TEXT    NOT NULL PRIMARY KEY,

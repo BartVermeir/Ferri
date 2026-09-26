@@ -94,7 +94,7 @@ func TestUniqueZipName(t *testing.T) {
 func TestSanitiseASCIIFilename(t *testing.T) {
 	tests := map[string]string{
 		"simple.mov":          "simple.mov",
-		"Séquence finale.mov": "S_quence finale.mov",
+		"Café scene.mov":      "Caf_ scene.mov",
 		`bad"name\with/slash`: "bad_name_with_slash",
 		"":                    "download",
 	}
@@ -106,11 +106,11 @@ func TestSanitiseASCIIFilename(t *testing.T) {
 }
 
 func TestBuildContentDisposition(t *testing.T) {
-	got := buildContentDisposition("Séquence finale.mov")
+	got := buildContentDisposition("Café scene.mov")
 	if !strings.HasPrefix(got, "attachment; ") {
 		t.Fatalf("missing attachment disposition: %q", got)
 	}
-	if !strings.Contains(got, `filename="S_quence finale.mov"`) {
+	if !strings.Contains(got, `filename="Caf_ scene.mov"`) {
 		t.Errorf("missing sanitised ASCII fallback in %q", got)
 	}
 	if !strings.Contains(got, "filename*=UTF-8''") {

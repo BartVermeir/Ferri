@@ -95,13 +95,13 @@ func zipText(t *testing.T, zf *zip.File) string {
 }
 
 // M8: a received file keeps its name. url.QueryEscape made
-// "Séquence finale; v2.mov" into "S%C3%A9quence+finale%3B+v2.mov".
+// "Café scene; v2.mov" into "Caf%C3%A9+scene%3B+v2.mov".
 func TestRequestDownloadFile_KeepsFileName(t *testing.T) {
 	f := newReqFixture(t, "Test")
-	f.file("f1", "Séquence finale; v2.mov", "data", true, true)
+	f.file("f1", "Café scene; v2.mov", "data", true, true)
 
 	cd := f.get("/ul/" + f.view + "/file/f1").Header().Get("Content-Disposition")
-	if want := buildContentDisposition("Séquence finale; v2.mov"); cd != want {
+	if want := buildContentDisposition("Café scene; v2.mov"); cd != want {
 		t.Fatalf("Content-Disposition = %q, want %q", cd, want)
 	}
 	if strings.Contains(cd, "+") {

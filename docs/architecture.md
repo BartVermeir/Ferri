@@ -139,22 +139,33 @@ All files under `web/` are embedded into the binary at compile time via `//go:em
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
 | GET | `/dl/:token` | `handler/download.go` | Download page or password prompt |
-| POST | `/dl/:token` | `handler/download.go` | Password submission |
+| POST | `/dl/:token` | `handler/download.go` | Password submission (rate-limited) |
 | GET | `/dl/:token/file/:file_id` | `handler/download.go` | Stream file to browser |
-| GET | `/ul/:token` | `handler/upload.go` | Upload request page or password prompt |
-| POST | `/ul/:token` | `handler/upload.go` | Password submission |
-| POST | `/ul/:token/complete` | `handler/upload.go` | Uploader signals they are done |
+| GET | `/dl/:token/zip` | `handler/download.go` | All files as one ZIP |
+| GET | `/ul/:upload_token` | `handler/upload.go` | Upload request page or password prompt; completed = thank-you page |
+| POST | `/ul/:upload_token` | `handler/upload.go` | Password submission (rate-limited) |
+| POST | `/ul/:upload_token/complete` | `handler/upload.go` | Uploader signals they are done |
+| GET | `/ul/:view_token/files` | `handler/upload.go` | Requester sees the received files |
+| POST | `/ul/:view_token/files` | `handler/upload.go` | Requester password, also after completion (rate-limited) |
+| GET | `/ul/:view_token/file/:file_id` | `handler/upload.go` | Requester downloads one file |
+| GET | `/ul/:view_token/zip` | `handler/upload.go` | Requester downloads all files as one ZIP |
 | POST | `/tus/*` | `tus/handler.go` | TUS upload chunks — token validated before first byte (see §4) |
 | GET | `/health` | `handler/health.go` | Liveness probe |
-| GET | `/static/*` | embedded FS | CSS, JS, fonts |
+| GET | `/favicon.ico` | inline | Redirect to `/static/favicon.svg` |
+| GET | `/static/*` | embedded FS | CSS, JS, favicon |
+| GET | `/static/logo/*` | `handler/health.go` | Uploaded logo (no directory listing) |
+
+**Two tokens per upload request.** The `upload_token` goes to the external party (upload, complete); the `view_token` goes only to the requester (view, download). Both use `/ul/:token/…`; the token decides the role, and the upload token does not open `/files`. Exception: requests created before migration 005 have no `view_token`, so their upload token still works as the view token until they expire.
 
 ### IP-restricted routes (internal network only)
 
+A request from outside the allowlist gets the branded 403 page (`handler/forbidden.go`), the same page on every route, without showing the client IP.
+
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
-| GET | `/` | `handler/send.go` | Send form |
-| POST | `/send` | `handler/send.go` | Create transfer |
-| GET | `/request` | `handler/request.go` | Upload request form |
+| GET | `/` | `handler/send.go` | Combined send/request page (`?mode=request` opens the request tab) |
+| POST | `/send` | `handler/send.go` | Create transfer, returns JSON `{transfer_id, download_url?}` |
+| GET | `/request` | `handler/request.go` | Same page, request tab selected |
 | POST | `/request` | `handler/request.go` | Create upload request |
 
 ### Admin routes (IP-restricted + session cookie)
@@ -162,16 +173,27 @@ All files under `web/` are embedded into the binary at compile time via `//go:em
 | Method | Path | Handler | Description |
 |--------|------|---------|-------------|
 | GET | `/admin/login` | `handler/admin.go` | Login form |
-| POST | `/admin/login` | `handler/admin.go` | Validate token, set session cookie |
-| GET | `/admin` | `handler/admin.go` | Dashboard |
-| GET | `/admin/transfers` | `handler/admin.go` | List all transfers |
-| POST | `/admin/transfers/:id/delete` | `handler/admin.go` | Soft-delete a transfer |
+| POST | `/admin/login` | `handler/admin.go` | Validate token, set session cookie (rate-limited) |
+| GET | `/admin` | `handler/admin.go` | Overview: stats, transfers, requests, mail |
+| GET | `/admin/transfers` | `handler/admin.go` | Redirect to `/admin` |
+| GET | `/admin/transfers/:id/files` | `handler/admin.go` | Files of one transfer |
+| GET | `/admin/transfers/:id/file/:file_id` | `handler/admin.go` | Download as admin: no download event, no mail |
+| POST | `/admin/transfers/:id/delete` | `handler/admin.go` | Hard-delete a transfer (files + DB); a live transfer first mails the sender the summary |
+| POST | `/admin/requests/:id/delete` | `handler/admin.go` | Hard-delete an upload request (files + DB) |
+| POST | `/admin/cleanup` | `handler/admin.go` | Run the cleanup job now (grace period 0) |
+| POST | `/admin/orphans/clean` | `handler/admin.go` | Remove orphaned TUS files (local storage only) |
 | GET | `/admin/mail` | `handler/admin.go` | Mail queue — failed/pending overview |
 | POST | `/admin/mail/:id/retry` | `handler/admin.go` | Reset failed mail to pending (attempts=0) |
 | POST | `/admin/mail/:id/delete` | `handler/admin.go` | Remove a mail from the queue |
 | GET | `/admin/settings` | `handler/admin.go` | Runtime settings form |
-| POST | `/admin/settings` | `handler/admin.go` | Save settings |
+| POST | `/admin/settings` | `handler/admin.go` | Save branding and mail settings |
+| POST | `/admin/settings/logo` | `handler/admin.go` | Upload logo |
+| POST | `/admin/settings/logo/delete` | `handler/admin.go` | Remove logo |
+| POST | `/admin/settings/storage` | `handler/admin.go` | Save and activate storage settings |
+| POST | `/admin/settings/storage/test` | `handler/admin.go` | Test the storage connection |
 | POST | `/admin/logout` | `handler/admin.go` | Clear session cookie |
+
+All routes live in `cmd/server/routes.go`; `TestRouter_Routes` in `router_test.go` checks that each of them is wired. A new route goes in both, and in these tables.
 
 ---
 
@@ -560,7 +582,7 @@ The file argument must implement `io.ReadSeeker`. `os.File` satisfies this. The 
 
 **Content-Disposition and filename encoding:**
 
-Media filenames routinely contain non-ASCII characters and special characters (`Séquence finale.mov`, `Recording — day 1.mxf`). A bare `filename="<original_name>"` header breaks for these.
+Media filenames routinely contain non-ASCII characters and special characters (`Café scene.mov`, `Recording — day 1.mov`). A bare `filename="<original_name>"` header breaks for these.
 
 The handler sets both the legacy ASCII fallback and the RFC 5987 encoded parameter:
 
@@ -595,15 +617,15 @@ All mail goes through the `mail_queue` table. No synchronous sends.
 ```
 Your transfer "Project week 23" expired on Sat 16 May 2026, 23:59. The download links no longer work. Here is who downloaded what.
 
-alice@client.com: 2 of 3 files
+alice@example.org: 2 of 3 files
   • a.mov: 11 May 13:14, 13 May 09:40
   • b.mov: 11 May 13:14 (2×)
   Not downloaded: c.mov
 
-carol@client.com: all 3 files
+carol@example.org: all 3 files
   • All files: 11 May 14:48
 
-bob@client.com: nothing downloaded
+bob@example.org: nothing downloaded
 ```
 
 The same summary goes out when an admin deletes a live transfer (`POST /admin/transfers/{id}/delete`, `Scheduler.EnqueueDeletionSummary`, queued before the delete): subject "Deleted: …", intro "was deleted by an administrator on …", and "The files have been deleted." instead of the grace period. An expired transfer already had its summary and a pending one never reached anyone, so neither gets one.

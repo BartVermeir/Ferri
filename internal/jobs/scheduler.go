@@ -640,12 +640,12 @@ func (e expirySummary) cleanupNote() string {
 // recipient: which files they downloaded and when, and which not
 // (recipients()). Format (architecture.md §8):
 //
-//	bob@client.com: 3 of 5 files
+//	bob@example.org: 3 of 5 files
 //	  • a.mov: 11 Sep 13:14, 12 Sep 09:02
 //	  • b.mov: 11 Sep 13:14
 //	  Not downloaded: d.mov, e.mov
 //
-//	dave@client.com: nothing downloaded
+//	dave@example.org: nothing downloaded
 func buildExpirySummaryHTML(e expirySummary) string {
 	var rows strings.Builder
 	for _, rs := range e.recipients() {
