@@ -1,0 +1,713 @@
+package store
+
+import (
+	"database/sql"
+	"fmt"
+	"time"
+
+	"github.com/BartVermeir/Ferri/internal/token"
+)
+
+type RequestStore struct {
+	db *sql.DB
+}
+
+// UploadRequest represents a row in upload_requests.
+type UploadRequest struct {
+	ID             string
+	Title          string
+	Message        string
+	RequesterName  string
+	RequesterEmail string
+	UploadToken    string
+	// ViewToken opens the requester's view of received files. NULL for
+	// requests from before migration 005; use ViewPathToken, not this field.
+	ViewToken     sql.NullString
+	PasswordHash  sql.NullString
+	MaxFiles      sql.NullInt64
+	MaxTotalBytes sql.NullInt64
+	Status        string
+	ExpiresAt     time.Time
+	CompletedAt   sql.NullInt64
+	ExpiredAt     sql.NullInt64
+	CreatedAt     time.Time
+	// ManageToken opens the requester's manage page (/manage/<token>). NULL
+	// for requests from before migration 006.
+	ManageToken sql.NullString
+	// RemindedAt: when the "nothing uploaded yet" reminder went out.
+	RemindedAt sql.NullInt64
+}
+
+// ViewPathToken is the token for the requester's routes (/ul/<token>/files).
+// Requests from before migration 005 have no view token; for those the upload
+// token still works there, so links in mails already sent stay valid.
+func (r UploadRequest) ViewPathToken() string {
+	if r.ViewToken.Valid && r.ViewToken.String != "" {
+		return r.ViewToken.String
+	}
+	return r.UploadToken
+}
+
+// UploadRequestFile represents a row in upload_request_files.
+type UploadRequestFile struct {
+	ID              string
+	UploadRequestID string
+	OriginalName    string
+	StoragePath     string
+	SizeBytes       int64
+	MimeType        sql.NullString
+	TUSUploadID     sql.NullString
+	TUSLastActivity sql.NullInt64
+	Status          string
+	CreatedAt       time.Time
+}
+
+// CreateRequestInput holds all data to create an upload request.
+type CreateRequestInput struct {
+	Title          string
+	Message        string
+	RequesterName  string
+	RequesterEmail string
+	PasswordHash   string
+	ExpiresAt      time.Time
+	MaxFiles       *int
+	MaxTotalBytes  *int64
+}
+
+// Create creates a new upload request and returns its upload token.
+func (s *RequestStore) Create(input CreateRequestInput) (string, string, error) {
+	id := token.Generate()
+	uploadToken := token.Generate()
+	viewToken := token.Generate()
+	manageToken := token.Generate()
+
+	var passwordHash sql.NullString
+	if input.PasswordHash != "" {
+		passwordHash = sql.NullString{String: input.PasswordHash, Valid: true}
+	}
+
+	var maxFiles sql.NullInt64
+	if input.MaxFiles != nil {
+		maxFiles = sql.NullInt64{Int64: int64(*input.MaxFiles), Valid: true}
+	}
+
+	var maxBytes sql.NullInt64
+	if input.MaxTotalBytes != nil {
+		maxBytes = sql.NullInt64{Int64: *input.MaxTotalBytes, Valid: true}
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO upload_requests
+		  (id, title, message, requester_name, requester_email,
+		   upload_token, view_token, password_hash, max_files, max_total_bytes,
+		   status, expires_at, manage_token)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+		id, input.Title, input.Message, input.RequesterName, input.RequesterEmail,
+		uploadToken, viewToken, passwordHash, maxFiles, maxBytes, input.ExpiresAt.Unix(), manageToken,
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("insert upload_request: %w", err)
+	}
+
+	return id, uploadToken, nil
+}
+
+// GetByID returns an upload request by its ID in any status; nil if unknown.
+func (s *RequestStore) GetByID(id string) (*UploadRequest, error) {
+	var r UploadRequest
+	var expiresAt, createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE id = ?`,
+		id,
+	).Scan(
+		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
+		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+		&r.ManageToken, &r.RemindedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.ExpiresAt = time.Unix(expiresAt, 0)
+	r.CreatedAt = time.Unix(createdAt, 0)
+	return &r, nil
+}
+
+// GetByUploadToken looks up an upload request by its token.
+// Returns nil if not found, expired, or not open.
+func (s *RequestStore) GetByUploadToken(tok string) (*UploadRequest, error) {
+	var r UploadRequest
+	var expiresAt, createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE upload_token = ?
+		  AND status = 'open'
+		  AND expires_at > unixepoch()`,
+		tok,
+	).Scan(
+		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
+		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+		&r.ManageToken, &r.RemindedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.ExpiresAt = time.Unix(expiresAt, 0)
+	r.CreatedAt = time.Unix(createdAt, 0)
+	return &r, nil
+}
+
+// GetLiveByUploadToken looks up a request by its upload token when it is open
+// or completed and not expired. The upload page uses it to tell "you already
+// finished" (thank-you page) apart from "this link is dead" (404).
+func (s *RequestStore) GetLiveByUploadToken(tok string) (*UploadRequest, error) {
+	var r UploadRequest
+	var expiresAt, createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE upload_token = ?
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()`,
+		tok,
+	).Scan(
+		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
+		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+		&r.ManageToken, &r.RemindedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.ExpiresAt = time.Unix(expiresAt, 0)
+	r.CreatedAt = time.Unix(createdAt, 0)
+	return &r, nil
+}
+
+// GetViewableByViewToken looks up the request behind a requester link
+// (/ul/<view_token>/files and friends): open or completed, and not past
+// expires_at — the mails promise the link stops working then, even while the
+// files still wait for the cleanup job's grace period.
+//
+// Only the view token matches, never the upload token: the upload link goes to
+// external parties and must not reveal what others uploaded.
+// Exception: requests from before migration 005 have no view token, and their
+// upload token keeps working here until they expire.
+func (s *RequestStore) GetViewableByViewToken(tok string) (*UploadRequest, error) {
+	var r UploadRequest
+	var expiresAt, createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE (view_token = ? OR (view_token IS NULL AND upload_token = ?))
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()`,
+		tok, tok,
+	).Scan(
+		&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
+		&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+		&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+		&r.ManageToken, &r.RemindedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.ExpiresAt = time.Unix(expiresAt, 0)
+	r.CreatedAt = time.Unix(createdAt, 0)
+	return &r, nil
+}
+
+// GetLiveByManageToken returns the request behind a manage link while it is
+// live: open or completed, and not past expires_at. Nil if not found.
+func (s *RequestStore) GetLiveByManageToken(tok string) (*UploadRequest, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE manage_token = ?
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()`,
+		tok,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	list, err := scanRequests(rows)
+	if err != nil || len(list) == 0 {
+		return nil, err
+	}
+	return &list[0], nil
+}
+
+// ExtendExpiry moves a live request's expiry to expiresAt, only later (see
+// TransferStore.ExtendExpiry). It clears reminded_at, so the new expiry date
+// gets its own "nothing uploaded yet" reminder. Returns false when nothing
+// changed.
+func (s *RequestStore) ExtendExpiry(requestID string, expiresAt time.Time) (bool, error) {
+	result, err := s.db.Exec(`
+		UPDATE upload_requests SET expires_at = ?, reminded_at = NULL
+		WHERE id = ?
+		  AND status IN ('open', 'completed')
+		  AND expires_at > unixepoch()
+		  AND expires_at < ?`,
+		expiresAt.Unix(), requestID, expiresAt.Unix(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// GetDueForReminder returns open requests that expire within the next
+// `before`, have not received a single complete file, were not reminded yet,
+// and are at least `minAge` old — a request created for one day would
+// otherwise get its reminder right after it was made.
+func (s *RequestStore) GetDueForReminder(before, minAge time.Duration) ([]UploadRequest, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE status = 'open'
+		  AND reminded_at IS NULL
+		  AND expires_at > unixepoch()
+		  AND expires_at <= unixepoch() + ?
+		  AND created_at <= unixepoch() - ?
+		  AND NOT EXISTS (
+		        SELECT 1 FROM upload_request_files f
+		        WHERE f.upload_request_id = upload_requests.id AND f.status = 'complete'
+		      )`,
+		int64(before.Seconds()), int64(minAge.Seconds()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRequests(rows)
+}
+
+// ClaimReminder sets reminded_at if it is still NULL. Returns true for the
+// one caller that set it, so a reminder is never queued twice.
+func (s *RequestStore) ClaimReminder(requestID string) (bool, error) {
+	result, err := s.db.Exec(
+		`UPDATE upload_requests SET reminded_at = unixepoch() WHERE id = ? AND reminded_at IS NULL`,
+		requestID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// Complete marks an upload request as completed.
+func (s *RequestStore) Complete(requestID string) error {
+	_, err := s.db.Exec(`
+		UPDATE upload_requests
+		SET status = 'completed', completed_at = unixepoch()
+		WHERE id = ?`, requestID,
+	)
+	return err
+}
+
+// SetExpired marks an upload request as expired.
+func (s *RequestStore) SetExpired(requestID string) error {
+	_, err := s.db.Exec(`
+		UPDATE upload_requests
+		SET status = 'expired', expired_at = unixepoch()
+		WHERE id = ?`, requestID,
+	)
+	return err
+}
+
+// SoftDelete marks an upload request as deleted (files physically removed).
+// deleted_at keeps the first time, as for transfers.
+func (s *RequestStore) SoftDelete(requestID string) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_requests SET status = 'deleted', deleted_at = COALESCE(deleted_at, unixepoch()) WHERE id = ?`, requestID,
+	)
+	return err
+}
+
+// PurgeDeleted removes deleted requests from the database, as
+// TransferStore.PurgeDeleted does for transfers.
+func (s *RequestStore) PurgeDeleted(age time.Duration) (int64, error) {
+	res, err := s.db.Exec(`
+		DELETE FROM upload_requests
+		WHERE status = 'deleted'
+		  AND COALESCE(deleted_at, expires_at) < unixepoch() - ?
+		  AND NOT EXISTS (
+		        SELECT 1 FROM upload_request_files f
+		        WHERE f.upload_request_id = upload_requests.id
+		          AND f.tus_upload_id IS NOT NULL AND f.tus_upload_id != ''
+		      )`, int64(age.Seconds()))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// GetExpired returns open requests past their expiry.
+func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE status = 'open' AND expires_at < unixepoch()`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRequests(rows)
+}
+
+// GetForCleanup returns expired requests past the grace period.
+// GetForCleanup returns upload requests whose files still need physical deletion.
+func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, requester_name, requester_email,
+		       upload_token, view_token, password_hash, max_files, max_total_bytes,
+		       status, expires_at, completed_at, expired_at, created_at,
+		       manage_token, reminded_at
+		FROM upload_requests
+		WHERE (
+		        status = 'deleted'
+		        OR (
+		              status IN ('expired', 'completed')
+		              AND COALESCE(expired_at, expires_at) < (unixepoch() - ? * 3600)
+		           )
+		      )
+		  AND EXISTS (
+		        SELECT 1 FROM upload_request_files
+		        WHERE upload_request_files.upload_request_id = upload_requests.id
+		          AND upload_request_files.status != 'deleted'
+		      )`,
+		graceHours,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRequests(rows)
+}
+
+// ValidateForTUS checks that an upload request token is valid for TUS upload.
+func (s *RequestStore) ValidateForTUS(uploadToken string) (string, bool, error) {
+	var id string
+	err := s.db.QueryRow(`
+		SELECT id FROM upload_requests
+		WHERE upload_token = ? AND status = 'open' AND expires_at > unixepoch()`,
+		uploadToken,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return id, true, err
+}
+
+// GetFiles returns files for an upload request.
+func (s *RequestStore) GetFiles(requestID string) ([]UploadRequestFile, error) {
+	rows, err := s.db.Query(`
+		SELECT id, upload_request_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM upload_request_files
+		WHERE upload_request_id = ? AND status != 'deleted'`,
+		requestID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRequestFiles(rows)
+}
+
+// GetStalled returns stalled upload_request_files.
+func (s *RequestStore) GetStalled(stallHours int) ([]UploadRequestFile, error) {
+	rows, err := s.db.Query(`
+		SELECT id, upload_request_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM upload_request_files
+		WHERE status = 'uploading'
+		  AND COALESCE(tus_last_activity_at, created_at) < (unixepoch() - ? * 3600)`,
+		stallHours,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRequestFiles(rows)
+}
+
+// MarkFileDeleted marks a single upload_request_file as deleted.
+func (s *RequestStore) MarkFileDeleted(fileID string) error {
+	_, err := s.db.Exec(`UPDATE upload_request_files SET status = 'deleted' WHERE id = ?`, fileID)
+	return err
+}
+
+// CreateFileRow inserts a new upload_request_files row from the TUS callback.
+
+// GetRequestFileByID returns a single upload request file by its ID, reading fresh from DB.
+func (s *RequestStore) GetRequestFileByID(fileID string) (*UploadRequestFile, error) {
+	var f UploadRequestFile
+	var createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, upload_request_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM upload_request_files WHERE id = ?`, fileID,
+	).Scan(
+		&f.ID, &f.UploadRequestID, &f.OriginalName, &f.StoragePath, &f.SizeBytes,
+		&f.MimeType, &f.TUSUploadID, &f.TUSLastActivity, &f.Status, &createdAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	f.CreatedAt = time.Unix(createdAt, 0)
+	return &f, nil
+}
+
+func (s *RequestStore) CreateFileRow(fileID, requestID, originalName, storagePath string, sizeBytes int64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO upload_request_files
+		  (id, upload_request_id, original_name, storage_path, size_bytes, status)
+		VALUES (?, ?, ?, ?, ?, 'uploading')`,
+		fileID, requestID, originalName, storagePath, sizeBytes,
+	)
+	return err
+}
+
+// SetTUSUploadID records the tusd-generated upload ID on the request file row.
+func (s *RequestStore) SetTUSUploadID(fileID, tusUploadID string) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_request_files SET tus_upload_id = ? WHERE id = ?`, tusUploadID, fileID,
+	)
+	return err
+}
+
+// GetFileIDByTUSID looks up the Ferri file ID by the tusd upload ID for request files.
+// Returns empty string if not found.
+func (s *RequestStore) GetFileIDByTUSID(tusUploadID string) (string, error) {
+	var fileID string
+	err := s.db.QueryRow(
+		`SELECT id FROM upload_request_files WHERE tus_upload_id = ?`, tusUploadID,
+	).Scan(&fileID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return fileID, err
+}
+
+// UploadLabelByTUSID finds the request file behind a tusd upload ID; nil if
+// it is not a request file. The uploader is an outside party Ferri has no
+// address for, so Who is "uploader".
+func (s *RequestStore) UploadLabelByTUSID(tusUploadID string) (*UploadLabel, error) {
+	l := UploadLabel{Who: "uploader"}
+	var createdAt int64
+	err := s.db.QueryRow(`
+		SELECT r.id, r.title, f.original_name, f.size_bytes, f.created_at
+		FROM upload_request_files f JOIN upload_requests r ON r.id = f.upload_request_id
+		WHERE f.tus_upload_id = ?`, tusUploadID,
+	).Scan(&l.ItemID, &l.Title, &l.FileName, &l.Size, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	l.CreatedAt = time.Unix(createdAt, 0)
+	return &l, nil
+}
+
+// SetFileComplete marks an upload_request_files row as complete with final size.
+//
+// tus_upload_id is deliberately KEPT (mirrors TransferStore.SetFileComplete): on
+// the SMB backend the file lives flat at <base>/<tus_upload_id> and storage_path
+// (requests/<id>/<file_id>) does not exist, so the download and cleanup paths
+// need tus_upload_id to locate the actual file.
+func (s *RequestStore) SetFileComplete(fileID string, sizeBytes int64) error {
+	_, err := s.db.Exec(`
+		UPDATE upload_request_files
+		SET status = 'complete', size_bytes = ?
+		WHERE id = ?`,
+		sizeBytes, fileID,
+	)
+	return err
+}
+
+// UpdateTUSActivity updates tus_last_activity_at for a request file row.
+// took is how long the PATCH ran; it adds to upload_ms, the net upload time.
+func (s *RequestStore) UpdateTUSActivity(fileID string, took time.Duration) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_request_files SET tus_last_activity_at = unixepoch(), upload_ms = upload_ms + ? WHERE id = ?`,
+		took.Milliseconds(), fileID,
+	)
+	return err
+}
+
+// scanRequests scans rows from upload_requests.
+// expires_at and created_at are INTEGER (Unix epoch) — scan into int64, convert to time.Time.
+func scanRequests(rows *sql.Rows) ([]UploadRequest, error) {
+	var list []UploadRequest
+	for rows.Next() {
+		var r UploadRequest
+		var expiresAt, createdAt int64
+		if err := rows.Scan(
+			&r.ID, &r.Title, &r.Message, &r.RequesterName, &r.RequesterEmail,
+			&r.UploadToken, &r.ViewToken, &r.PasswordHash, &r.MaxFiles, &r.MaxTotalBytes,
+			&r.Status, &expiresAt, &r.CompletedAt, &r.ExpiredAt, &createdAt,
+			&r.ManageToken, &r.RemindedAt,
+		); err != nil {
+			return nil, err
+		}
+		r.ExpiresAt = time.Unix(expiresAt, 0)
+		r.CreatedAt = time.Unix(createdAt, 0)
+		list = append(list, r)
+	}
+	return list, rows.Err()
+}
+
+// scanRequestFiles scans rows from upload_request_files.
+// created_at is INTEGER (Unix epoch) — scan into int64, convert to time.Time.
+func scanRequestFiles(rows *sql.Rows) ([]UploadRequestFile, error) {
+	var list []UploadRequestFile
+	for rows.Next() {
+		var f UploadRequestFile
+		var createdAt int64
+		if err := rows.Scan(
+			&f.ID, &f.UploadRequestID, &f.OriginalName, &f.StoragePath, &f.SizeBytes,
+			&f.MimeType, &f.TUSUploadID, &f.TUSLastActivity, &f.Status, &createdAt,
+		); err != nil {
+			return nil, err
+		}
+		f.CreatedAt = time.Unix(createdAt, 0)
+		list = append(list, f)
+	}
+	return list, rows.Err()
+}
+
+// RequestSummary enriches UploadRequest with file stats for the admin overview.
+type RequestSummary struct {
+	UploadRequest
+	FileCount  int
+	TotalBytes int64
+}
+
+// ListForAdmin returns all non-expired, non-deleted upload requests with file counts.
+func (s *RequestStore) ListForAdmin(limit int) ([]RequestSummary, error) {
+	return s.listForAdmin(`
+		WHERE r.status NOT IN ('expired', 'deleted')
+		  AND r.expires_at > unixepoch()
+		GROUP BY r.id
+		ORDER BY r.created_at DESC`, limit)
+}
+
+// ListExpiredForAdmin returns the requests past their expiry whose files are
+// still on storage, as TransferStore.ListExpiredForAdmin does for transfers.
+func (s *RequestStore) ListExpiredForAdmin(limit int) ([]RequestSummary, error) {
+	return s.listForAdmin(`
+		WHERE r.status != 'deleted'
+		  AND (r.status = 'expired' OR r.expires_at <= unixepoch())
+		GROUP BY r.id
+		HAVING COUNT(f.id) > 0
+		ORDER BY r.expires_at DESC`, limit)
+}
+
+// listForAdmin runs the admin overview query; tail is its WHERE, GROUP BY and ORDER BY.
+func (s *RequestStore) listForAdmin(tail string, limit int) ([]RequestSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT r.id, r.title, r.message, r.requester_name, r.requester_email,
+		       r.upload_token, r.view_token, r.password_hash, r.max_files, r.max_total_bytes,
+		       r.status, r.expires_at, r.completed_at, r.expired_at, r.created_at,
+		       r.manage_token, r.reminded_at,
+		       COUNT(f.id)                    AS file_count,
+		       COALESCE(SUM(f.size_bytes), 0) AS total_bytes
+		FROM upload_requests r
+		LEFT JOIN upload_request_files f ON f.upload_request_id = r.id AND f.status = 'complete'`+tail+`
+		LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []RequestSummary
+	for rows.Next() {
+		var rs RequestSummary
+		var expiresAt, createdAt int64
+		if err := rows.Scan(
+			&rs.ID, &rs.Title, &rs.Message, &rs.RequesterName, &rs.RequesterEmail,
+			&rs.UploadToken, &rs.ViewToken, &rs.PasswordHash, &rs.MaxFiles, &rs.MaxTotalBytes,
+			&rs.Status, &expiresAt, &rs.CompletedAt, &rs.ExpiredAt, &createdAt,
+			&rs.ManageToken, &rs.RemindedAt,
+			&rs.FileCount, &rs.TotalBytes,
+		); err != nil {
+			return nil, err
+		}
+		rs.ExpiresAt = time.Unix(expiresAt, 0)
+		rs.CreatedAt = time.Unix(createdAt, 0)
+		list = append(list, rs)
+	}
+	return list, rows.Err()
+}
+
+// SumPendingCleanupBytes returns total bytes of files that belong to expired/deleted
+// requests but have not yet been removed from storage.
+func (s *RequestStore) SumPendingCleanupBytes() (int64, error) {
+	var total int64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(f.size_bytes), 0)
+		FROM upload_request_files f
+		JOIN upload_requests r ON r.id = f.upload_request_id
+		WHERE r.status IN ('expired', 'deleted')
+		  AND f.status != 'deleted'`,
+	).Scan(&total)
+	return total, err
+}
+
+// MarkFilesDeleted marks all files of an upload request as deleted in the DB.
+// Call AFTER physical file deletion.
+func (s *RequestStore) MarkFilesDeleted(requestID string) error {
+	_, err := s.db.Exec(
+		`UPDATE upload_request_files SET status = 'deleted' WHERE upload_request_id = ?`,
+		requestID,
+	)
+	return err
+}

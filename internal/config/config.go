@@ -1,0 +1,330 @@
+package config
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Config is the full deploy-time configuration.
+// Loaded once at startup from config.yaml; never mutated after loading.
+type Config struct {
+	Server  ServerConfig  `yaml:"server"`
+	Storage StorageConfig `yaml:"storage"`
+	DB      DBConfig      `yaml:"db"`
+
+	// IPAllowlist is parsed from ip_allowlist CIDR ranges.
+	// Used by the IPAllow middleware to restrict transfer creation.
+	IPAllowlist  []*net.IPNet `yaml:"-"`
+	RawAllowlist []string     `yaml:"ip_allowlist"`
+
+	// UnknownKeys lists config.yaml keys Ferri does not know, with their
+	// line ("line 5: field trusted_proxy not found in type ..."). Filled by
+	// Load, logged as a WARN at startup.
+	UnknownKeys []string `yaml:"-"`
+
+	// TrustedProxies is parsed from server.trusted_proxies.
+	// Only connections from these IPs may set X-Real-IP / X-Forwarded-For.
+	TrustedProxies []*net.IPNet `yaml:"-"`
+
+	SMTP  SMTPConfig  `yaml:"smtp"`
+	Admin AdminConfig `yaml:"admin"`
+
+	ExpiryOptions []ExpiryOption `yaml:"expiry_options"`
+
+	Limits LimitsConfig `yaml:"limits"`
+	Jobs   JobsConfig   `yaml:"jobs"`
+}
+
+type ServerConfig struct {
+	Host                   string   `yaml:"host"`
+	Port                   int      `yaml:"port"`
+	BaseURL                string   `yaml:"base_url"`
+	TrustedProxies         []string `yaml:"trusted_proxies"`
+	ShutdownTimeoutSeconds int      `yaml:"shutdown_timeout_seconds"`
+	Timezone               string   `yaml:"timezone"`       // IANA timezone, e.g. "Europe/Amsterdam"
+	SecureCookies          bool     `yaml:"secure_cookies"` // Set true when serving over HTTPS
+
+	// Location is Timezone parsed into a *time.Location, resolved once in validate().
+	// Used for all date formatting (web templates via handler.InitTemplates, and the
+	// expiry-summary mail) so the timezone is loaded in exactly one place.
+	Location *time.Location `yaml:"-"`
+}
+
+type StorageConfig struct {
+	Path string `yaml:"path"`
+}
+
+type DBConfig struct {
+	Path string `yaml:"path"`
+}
+
+type SMTPConfig struct {
+	Host        string `yaml:"host"`
+	Port        int    `yaml:"port"`
+	Username    string `yaml:"username"`
+	Password    string `yaml:"password"` // overridden by SMTP_PASSWORD env var
+	TLS         string `yaml:"tls"`      // starttls | tls | none
+	FromAddress string `yaml:"from_address"`
+	FromName    string `yaml:"from_name"`
+}
+
+type AdminConfig struct {
+	Token           string `yaml:"token"` // overridden by ADMIN_TOKEN env var
+	SessionTTLHours int    `yaml:"session_ttl_hours"`
+}
+
+type ExpiryOption struct {
+	Label string `yaml:"label"`
+	Hours int    `yaml:"hours"`
+}
+
+type LimitsConfig struct {
+	MaxUploadBytes      int64 `yaml:"max_upload_bytes"`
+	MaxFilesPerTransfer int   `yaml:"max_files_per_transfer"`
+	// MinFreeBytes: a new upload is refused when it would leave less than
+	// this free on the storage. Hard stop: a full share breaks every upload.
+	MinFreeBytes int64 `yaml:"min_free_bytes"`
+}
+
+type JobsConfig struct {
+	ExpiryIntervalMinutes int `yaml:"expiry_interval_minutes"`
+	CleanupGraceHours     int `yaml:"cleanup_grace_hours"`
+	MailIntervalMinutes   int `yaml:"mail_interval_minutes"`
+	StallTimeoutHours     int `yaml:"stall_timeout_hours"`
+	CleanupIntervalHours  int `yaml:"cleanup_interval_hours"`
+	MailRetentionDays     int `yaml:"mail_retention_days"`
+	// Days a deleted transfer or request stays in the database before it
+	// is purged, with its statistics.
+	PurgeDeletedAfterDays int `yaml:"purge_deleted_after_days"`
+}
+
+// Defaults returns a Config with all default values pre-filled.
+func Defaults() *Config {
+	return &Config{
+		Server: ServerConfig{
+			Host:                   "0.0.0.0",
+			Port:                   8080,
+			ShutdownTimeoutSeconds: 300, // matches stop_grace_period in docker-compose.yml
+			Timezone:               "Europe/Amsterdam",
+		},
+		Storage: StorageConfig{Path: "/data/storage"},
+		DB:      DBConfig{Path: "/data/app.db"},
+		SMTP: SMTPConfig{
+			Port: 587,
+			TLS:  "starttls",
+		},
+		Admin: AdminConfig{
+			SessionTTLHours: 8,
+		},
+		ExpiryOptions: []ExpiryOption{
+			{Label: "1 day", Hours: 24},
+			{Label: "3 days", Hours: 72},
+			{Label: "1 week", Hours: 168},
+			{Label: "2 weeks", Hours: 336},
+			{Label: "4 weeks", Hours: 672},
+		},
+		Limits: LimitsConfig{
+			MaxUploadBytes:      644_245_094_400, // 600 GB
+			MaxFilesPerTransfer: 5000,            // a folder goes as loose files
+			MinFreeBytes:        53_687_091_200,  // 50 GB
+		},
+		Jobs: JobsConfig{
+			ExpiryIntervalMinutes: 60,
+			CleanupGraceHours:     24,
+			MailIntervalMinutes:   2,
+			StallTimeoutHours:     48,
+			CleanupIntervalHours:  6,
+			MailRetentionDays:     90,
+			PurgeDeletedAfterDays: 14,
+		},
+	}
+}
+
+// Load reads config from the given path, applies environment variable overrides,
+// and validates the result.
+func Load(path string) (*Config, error) {
+	cfg := Defaults()
+
+	if path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("open config: %w", err)
+		}
+
+		if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(cfg); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
+		cfg.UnknownKeys = unknownKeys(data)
+	}
+
+	// Environment variable overrides for secrets
+	if v := os.Getenv("SMTP_PASSWORD"); v != "" {
+		cfg.SMTP.Password = v
+	}
+	if v := os.Getenv("ADMIN_TOKEN"); v != "" {
+		cfg.Admin.Token = v
+	}
+
+	// Parse CIDR ranges
+	for _, cidr := range cfg.RawAllowlist {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ip_allowlist entry %q: %w", cidr, err)
+		}
+		cfg.IPAllowlist = append(cfg.IPAllowlist, network)
+	}
+	for _, cidr := range cfg.Server.TrustedProxies {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted_proxies entry %q: %w", cidr, err)
+		}
+		cfg.TrustedProxies = append(cfg.TrustedProxies, network)
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("config validation: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// unknownKeys decodes the config a second time with unknown fields refused,
+// and returns yaml's message for each one. A typo like "trusted_proxy:" was
+// silently dropped; this names it. Only a warning, not an error: refusing to
+// start would take Ferri down on a deploy over an old or misspelled key.
+func unknownKeys(data []byte) []string {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	var te *yaml.TypeError
+	if err := dec.Decode(Defaults()); !errors.As(err, &te) {
+		return nil
+	}
+	var out []string
+	for _, msg := range te.Errors {
+		if strings.Contains(msg, "not found in type") {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+// ProxiesInAllowlist returns the trusted_proxies entries that overlap an
+// ip_allowlist range. Such an overlap is dangerous: when the proxy forwards a
+// request without X-Real-IP / X-Forwarded-For, the app sees the proxy's own IP,
+// which is then allowlisted — so every external visitor gets in.
+func (c *Config) ProxiesInAllowlist() []string {
+	var out []string
+	for _, p := range c.TrustedProxies {
+		for _, a := range c.IPAllowlist {
+			if a.Contains(p.IP) || p.Contains(a.IP) {
+				out = append(out, p.String())
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (c *Config) validate() error {
+	if c.Server.BaseURL == "" {
+		return fmt.Errorf("server.base_url is required")
+	}
+	if c.SMTP.Host == "" {
+		return fmt.Errorf("smtp.host is required")
+	}
+	if c.Admin.Token == "" {
+		return fmt.Errorf("admin token is required (set ADMIN_TOKEN env var)")
+	}
+	// The admin token is the root secret: login credential, HMAC key for session
+	// cookies, and (via Argon2id) the key material for the SMB password. Enforce a
+	// minimum length so a weak token can't undermine all three. Generate with
+	// `openssl rand -base64 32`.
+	if len(c.Admin.Token) < 32 {
+		return fmt.Errorf("admin token must be at least 32 characters (got %d); generate with `openssl rand -base64 32`", len(c.Admin.Token))
+	}
+
+	// yaml.v3 decodes missing keys as zero values, overriding our defaults.
+	// A zero interval causes time.NewTicker(0) to panic at startup.
+	// Re-apply defaults for any job interval that ended up as zero.
+	d := Defaults()
+
+	// Resolve the display timezone once. An empty string means the config
+	// omitted it, so fall back to the compiled-in default rather than to UTC.
+	if c.Server.Timezone == "" {
+		c.Server.Timezone = d.Server.Timezone
+	}
+	loc, err := time.LoadLocation(c.Server.Timezone)
+	if err != nil {
+		return fmt.Errorf("invalid server.timezone %q: %w", c.Server.Timezone, err)
+	}
+	c.Server.Location = loc
+
+	if c.Jobs.MailIntervalMinutes <= 0 {
+		c.Jobs.MailIntervalMinutes = d.Jobs.MailIntervalMinutes
+	}
+	if c.Jobs.ExpiryIntervalMinutes <= 0 {
+		c.Jobs.ExpiryIntervalMinutes = d.Jobs.ExpiryIntervalMinutes
+	}
+	if c.Jobs.CleanupIntervalHours <= 0 {
+		c.Jobs.CleanupIntervalHours = d.Jobs.CleanupIntervalHours
+	}
+	if c.Jobs.CleanupGraceHours <= 0 {
+		c.Jobs.CleanupGraceHours = d.Jobs.CleanupGraceHours
+	}
+	if c.Jobs.StallTimeoutHours <= 0 {
+		c.Jobs.StallTimeoutHours = d.Jobs.StallTimeoutHours
+	}
+	if c.Jobs.MailRetentionDays <= 0 {
+		c.Jobs.MailRetentionDays = d.Jobs.MailRetentionDays
+	}
+	if c.Jobs.PurgeDeletedAfterDays <= 0 {
+		c.Jobs.PurgeDeletedAfterDays = d.Jobs.PurgeDeletedAfterDays
+	}
+	if c.Admin.SessionTTLHours <= 0 {
+		c.Admin.SessionTTLHours = d.Admin.SessionTTLHours
+	}
+	if c.Limits.MaxUploadBytes <= 0 {
+		c.Limits.MaxUploadBytes = d.Limits.MaxUploadBytes
+	}
+	if c.Limits.MaxFilesPerTransfer <= 0 {
+		c.Limits.MaxFilesPerTransfer = d.Limits.MaxFilesPerTransfer
+	}
+	if c.Limits.MinFreeBytes <= 0 {
+		c.Limits.MinFreeBytes = d.Limits.MinFreeBytes
+	}
+	if c.Server.ShutdownTimeoutSeconds <= 0 {
+		c.Server.ShutdownTimeoutSeconds = d.Server.ShutdownTimeoutSeconds
+	}
+	if c.SMTP.Port <= 0 {
+		c.SMTP.Port = d.SMTP.Port
+	}
+
+	return nil
+}
+
+// SessionTTL returns the admin session TTL as a time.Duration.
+func (c *Config) SessionTTL() time.Duration {
+	hours := c.Admin.SessionTTLHours
+	if hours <= 0 {
+		hours = 8
+	}
+	return time.Duration(hours) * time.Hour
+}
+
+// ExpiryDuration returns the expiry duration for a given number of hours.
+func ExpiryDuration(hours int) time.Duration {
+	return time.Duration(hours) * time.Hour
+}
+
+// portStr returns the SMTP port as a string for use in net.Dial.
+func (c *Config) SMTPAddr() string {
+	return c.SMTP.Host + ":" + strconv.Itoa(c.SMTP.Port)
+}

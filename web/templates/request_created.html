@@ -1,0 +1,39 @@
+{{define "request_created.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+</head>
+<body>
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card">
+        <h1>Upload link created</h1>
+        <p class="text-muted">Send this link to the person you want files from:</p>
+        <div class="mt-16 url-display-box">
+          <span class="url-display-text" id="upload-url">{{.UploadURL}}</span>
+        </div>
+        <div class="mt-16 btn-row">
+          <button class="btn btn-secondary" id="copy-btn">Copy link</button>
+          <a href="/request" class="btn btn-secondary">New request</a>
+        </div>
+        <hr class="divider">
+        <p class="text-muted">Your own link to see what was uploaded. Keep it to yourself: it is not the link above, and it opens every file received. You will also get it by email once the upload is complete.</p>
+        <div class="mt-8 url-display-box">
+          <a class="url-display-text" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a>
+        </div>
+        <p class="text-muted mt-16">Manage the request: see what came in, extend it or delete it. This page only opens from the internal network.</p>
+        <div class="mt-8 url-display-box">
+          <a class="url-display-text" href="{{.ManageURL}}" target="_blank" rel="noopener">{{.ManageURL}}</a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  {{template "primary-text-script" .}}
+  <script src="/static/request-created.js" defer></script>
+</body>
+</html>{{end}}

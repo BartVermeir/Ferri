@@ -1,0 +1,28 @@
+# Secrets and local config
+.env
+config.yaml
+litestream.yml
+docker-compose.local.yml
+
+# Build output
+/server
+/ferri
+
+# Archives
+*.tar.gz
+*.zip
+
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary
+*.tmp

@@ -1,0 +1,60 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  base_url: "https://send.example.com"   # Full public URL. Used in mail links. No trailing slash.
+  timezone: "Europe/Amsterdam"             # IANA timezone for date display. Handles DST automatically.
+  trusted_proxies:                        # Exact IPs of your reverse proxy/proxies, allowed to set X-Real-IP / X-Forwarded-For.
+    - "10.0.0.5/32"                       # Use /32 for a single host. A wide range here lets ANY host in it spoof its source IP.
+  secure_cookies: false                  # Set true when running behind HTTPS. Marks admin session cookie Secure.
+  shutdown_timeout_seconds: 300          # Must match stop_grace_period in docker-compose.yml
+
+storage:
+  path: "/data/storage"                  # Inside the container. Mount your NFS share here.
+
+db:
+  path: "/data/app.db"                   # SQLite database file inside the container.
+
+ip_allowlist:                            # Only these CIDR ranges can create transfers / requests.
+                                         # NEVER list a trusted proxy here: if trusted_proxies is wrong, every visitor
+                                         # is seen as the proxy's IP and would be let in. The app warns at startup.
+  - "10.0.0.0/8"                         # Adjust to your internal network ranges.
+  - "192.168.0.0/16"
+
+smtp:
+  host: "smtp.example.com"              # SMTP relay hostname.
+  port: 587                              # 587 = STARTTLS, 465 = TLS, 25 = plain
+  username: "your_smtp_username"
+  password: ""                           # Set via SMTP_PASSWORD env var — never put here.
+  tls: "starttls"                        # starttls | tls | none
+  from_address: "transfers@example.com"
+  from_name: "File transfer"
+
+admin:
+  token: ""                              # Set via ADMIN_TOKEN env var. Min 32 characters.
+  session_ttl_hours: 8
+
+expiry_options:
+  - label: "1 day"
+    hours: 24
+  - label: "3 days"
+    hours: 72
+  - label: "1 week"
+    hours: 168
+  - label: "2 weeks"
+    hours: 336
+  - label: "4 weeks"
+    hours: 672
+
+limits:
+  max_upload_bytes: 644245094400         # 600 GB per individual file
+  max_files_per_transfer: 5000           # a folder is uploaded as loose files, with its structure kept
+  min_free_bytes: 53687091200            # 50 GB: refuse new uploads that would leave less free on storage
+
+jobs:
+  expiry_interval_minutes: 60            # How often the expiry job runs
+  cleanup_grace_hours: 24               # Hours after expiry before files are deleted
+  mail_interval_minutes: 2              # How often the mail queue is processed
+  stall_timeout_hours: 48               # Hours of inactivity before upload is considered abandoned
+  cleanup_interval_hours: 6            # How often the cleanup and stalled-upload jobs run
+  mail_retention_days: 90              # Sent mails are pruned after this many days
+  purge_deleted_after_days: 14         # Deleted transfers/requests (and their statistics) leave the database after this many days

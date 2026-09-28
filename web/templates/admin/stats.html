@@ -1,0 +1,45 @@
+{{define "admin/stats.html"}}<div class="stats">
+  <div class="stats-head">
+    <span class="type-badge type-{{.Kind}}">{{if eq .Kind "transfer"}}Send{{else}}Request{{end}}</span>
+    <strong>{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</strong>
+    <span class="badge badge-{{.Status}}">{{.Status}}</span>
+  </div>
+  <p class="stats-sub">Created {{formatDate .CreatedAt}} · expires {{formatDate .ExpiresAt}}</p>
+
+  <h3>Upload</h3>
+  {{if .Files}}
+  <table class="stats-kv">
+    <tr><th>Files</th><td>{{.Files}} · {{.Size}}</td></tr>
+    <tr><th>Started</th><td>{{formatDate .UploadStart}}</td></tr>
+    <tr><th>Last data</th><td>{{formatDate .UploadEnd}}</td></tr>
+    <tr><th>Start to end</th><td>{{.Elapsed}} · {{.ElapsedRate}} <span class="stats-note">pauses included</span></td></tr>
+    <tr><th>Net upload time</th><td>{{if .Net}}{{.Net}} · {{.NetRate}} <span class="stats-note">only while data came in</span>{{else}}— <span class="stats-note">not measured before v1.7.0</span>{{end}}</td></tr>
+  </table>
+  {{else}}
+  <p class="stats-empty">No complete files yet.</p>
+  {{end}}
+
+  <h3>Downloads</h3>
+  {{if .Streams}}
+  <p class="stats-sub">{{len .Streams}} download(s), {{.Complete}} complete · {{.BytesSent}} sent</p>
+  <table class="stats-list">
+    <thead><tr><th>Started</th><th>Who</th><th>What</th><th>From</th><th>Duration</th><th>Sent</th><th>Speed</th><th></th></tr></thead>
+    <tbody>
+      {{range .Streams}}
+      <tr>
+        <td class="num">{{formatDate .StartedAt}}</td>
+        <td>{{.Who}}</td>
+        <td style="word-break:break-all;">{{.What}}</td>
+        <td class="num">{{.IP}}</td>
+        <td class="num">{{.Duration}}</td>
+        <td class="num">{{.Sent}}</td>
+        <td class="num">{{.Rate}}</td>
+        <td>{{if .Complete}}<span class="badge badge-active">complete</span>{{else}}<span class="badge badge-expired">broken off</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="stats-empty">No downloads recorded. Downloads are measured from v1.7.0 on.</p>
+  {{end}}
+</div>{{end}}

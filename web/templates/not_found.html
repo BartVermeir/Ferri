@@ -1,0 +1,22 @@
+{{define "not_found.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+</head>
+<body>
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card card-centered">
+        <div class="display-icon">🔗</div>
+        <h1>{{.PageTitle}}</h1>
+        <p class="text-muted mt-8">{{.Message}}</p>
+      </div>
+    </div>
+  </main>
+  {{template "primary-text-script" .}}
+</body>
+</html>{{end}}

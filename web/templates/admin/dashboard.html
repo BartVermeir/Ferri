@@ -1,0 +1,357 @@
+{{define "admin/dashboard.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Overview — Admin</title>
+  {{template "admin-css" .}}
+  <style>
+    .overview-table td.recipients { font-size: 12px; color: #555; line-height: 1.8; }
+    .overview-table td.recipients a { color: var(--primary); }
+    .type-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+    .type-transfer { background: #f0f0ec; color: #444; }
+    .type-request  { background: #eff6ff; color: #1d4ed8; }
+    .badge-open      { background: #fef9c3; color: #854d0e; }
+    .badge-pending   { background: #fef9c3; color: #854d0e; }
+    .badge-active    { background: #dcfce7; color: #166534; }
+    .badge-completed { background: #dcfce7; color: #166534; }
+    .badge-expired   { background: #f1f5f9; color: #64748b; }
+    .badge-deleted   { background: #fee2e2; color: #991b1b; }
+    .size-label { font-size: 11px; color: #bbb; margin-left: 3px; }
+    .mail-section { margin-top: 28px; }
+    .empty-row td { color: #bbb; text-align: center; padding: 32px !important; font-size: 13px; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 28px; }
+    .stat-card { background: #fff; border: 1px solid #e8e8e4; border-radius: 10px; padding: 16px 20px; }
+    .stat-label { font-size: 11px; color: #999; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat-value { font-size: 26px; font-weight: 500; color: #1a1a1a; }
+    .expires-col { font-size: 11px; color: #aaa; white-space: nowrap; }
+    .expires-col.soon { color: #d97706; font-weight: 500; }
+    .dl-count { font-size: 11px; color: #bbb; margin-left: 2px; }
+    .now-section { margin-bottom: 28px; }
+    .now-table td { font-size: 12px; }
+    .now-table td.num { white-space: nowrap; color: #555; }
+    .stat-sub { font-size: 12px; color: #888; margin-top: 4px; }
+    .stats-btn { border: none; cursor: pointer; font-family: inherit; }
+    .stats-btn:hover { outline: 1px solid currentColor; }
+    #stats-dialog { border: none; border-radius: 12px; padding: 0; width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 64px); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+    #stats-dialog::backdrop { background: rgba(0,0,0,.35); }
+    .stats-inner { padding: 20px 24px; position: relative; }
+    .stats-close { position: absolute; top: 12px; right: 14px; background: none; border: none; font-size: 20px; color: #999; cursor: pointer; }
+    .stats-head { display: flex; align-items: center; gap: 8px; padding-right: 28px; }
+    .stats-sub { font-size: 12px; color: #888; margin: 6px 0 0; }
+    .stats h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #999; margin: 20px 0 8px; }
+    .stats-kv th { text-align: left; font-weight: 400; color: #888; width: 150px; font-size: 13px; }
+    .stats-kv td { font-size: 13px; }
+    .stats-list td { font-size: 12px; }
+    .stats-list td.num { white-space: nowrap; color: #555; }
+    .stats-note { font-size: 11px; color: #aaa; }
+    .stats-empty { font-size: 13px; color: #aaa; }
+    .select-col { width: 28px; }
+    .select-col input { margin: 0; cursor: pointer; }
+    .bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .bulk-bar form { margin: 0; }
+  </style>
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header">
+      <h1>Overview</h1>
+      <a href="/" class="btn btn-secondary btn-sm">↑ Send files</a>
+    </div>
+
+    {{/* ── Now: running uploads/downloads, as of this page load ── */}}
+    <div class="now-section">
+      <div class="stat-grid" style="margin-bottom:12px;">
+        <div class="stat-card">
+          <div class="stat-label">Uploading now</div>
+          <div class="stat-value">{{.Now.Uploads}}</div>
+          <div class="stat-sub">{{.Now.UploadRate}}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Downloading now</div>
+          <div class="stat-value">{{.Now.Downloads}}</div>
+          <div class="stat-sub">{{.Now.DownloadRate}}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Open connections</div>
+          <div class="stat-value">{{.Now.OpenConns}}</div>
+          <div class="stat-sub">{{if .Now.IdleConns}}{{.Now.IdleConns}} idle (keep-alive){{else}}none idle{{end}}</div>
+        </div>
+      </div>
+      {{if .Now.Rows}}
+      <div class="card">
+        <div class="card-header">
+          In progress
+          <span style="font-size:12px; font-weight:400; color:#aaa; margin-left:8px;">As of this page load; speed = average on the connection</span>
+        </div>
+        <table class="now-table">
+          <thead>
+            <tr><th></th><th>Title</th><th>File</th><th>Who</th><th>From</th><th>Running</th><th>Progress</th><th>Speed</th></tr>
+          </thead>
+          <tbody>
+            {{range .Now.Rows}}
+            <tr>
+              <td style="white-space:nowrap;">{{if eq .Kind "upload"}}↑ upload{{else}}↓ download{{end}}{{if .Item}} <span class="type-badge type-{{.Item}}">{{.Item}}</span>{{end}}</td>
+              <td>{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
+              <td style="word-break:break-all;">{{.File}}</td>
+              <td>{{.Who}}</td>
+              <td class="num">{{.IP}}</td>
+              <td class="num">{{.Running}}</td>
+              <td class="num">{{.Progress}}</td>
+              <td class="num">{{.Rate}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
+    </div>
+
+    {{/* ── Stats ── */}}
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">Active transfers</div>
+        <div class="stat-value">{{len .Transfers}}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Upload requests</div>
+        <div class="stat-value">{{len .Requests}}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Storage in use</div>
+        <div class="stat-value" style="font-size:20px; padding-top:4px;">{{.TotalBytes | formatSize}}</div>
+      </div>
+      <div class="stat-card" style="{{if .PendingBytes}}border-color:#fde68a;{{end}}">
+        <div class="stat-label">Pending cleanup</div>
+        <div class="stat-value" style="font-size:20px; padding-top:4px; {{if .PendingBytes}}color:#d97706;{{end}}">
+          {{.PendingBytes | formatSize}}
+        </div>
+        {{if .PendingBytes}}
+        <form method="POST" action="/admin/cleanup" style="margin-top:10px;">
+          <button type="submit" class="btn btn-secondary btn-sm"
+            data-confirm="Run cleanup now? This removes all expired files immediately, bypassing the grace period.">
+            Clean up now
+          </button>
+        </form>
+        {{end}}
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Failed mails</div>
+        <div class="stat-value">{{len .FailedMails}}</div>
+      </div>
+    </div>
+
+    {{if .Deleted}}
+    <div class="alert alert-success" style="margin-bottom:20px;">
+      {{.Deleted}} item(s) deleted.
+    </div>
+    {{end}}
+    {{if .DeleteFailed}}
+    <div class="alert alert-error" style="margin-bottom:20px;">
+      {{.DeleteFailed}} item(s) could not be deleted. See the server log.
+    </div>
+    {{end}}
+
+    {{if .OrphansDeleted}}
+    <div class="alert alert-success" style="margin-bottom:20px;">
+      Orphan cleanup complete — {{.OrphansDeleted}} file(s) removed from storage.
+    </div>
+    {{end}}
+
+    {{/* ── Tools ── */}}
+    <div style="margin-bottom:24px;">
+      <form method="POST" action="/admin/orphans/clean" style="display:inline;">
+        <button type="submit" class="btn btn-secondary btn-sm"
+          data-confirm="Scan local storage for orphaned files (not referenced in the database) and delete them?">
+          Clean orphan files
+        </button>
+      </form>
+    </div>
+
+    {{/* ── Combined table ── */}}
+    <div class="card">
+      <div class="card-header bulk-bar">
+        <span>Transfers &amp; upload requests</span>
+        {{/* The row checkboxes join this form through their form attribute: a form cannot hold the rows' own Delete forms. */}}
+        <form id="bulk-delete" method="POST" action="/admin/delete">
+          <button type="submit" class="btn btn-danger btn-sm" data-bulk-delete
+            data-confirm="Delete the selected items and all their files? This cannot be undone. Live transfers: the sender gets a summary of who downloaded what.">
+            Delete selected
+          </button>
+        </form>
+      </div>
+      <table class="overview-table">
+        <thead>
+          <tr>
+            <th class="select-col"><input type="checkbox" data-select-all aria-label="Select all"></th>
+            <th style="width:60px;"></th>
+            <th>Title</th>
+            <th>From</th>
+            <th>To / Link</th>
+            <th>Files</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Expires</th>
+            <th style="width:70px;"></th>
+          </tr>
+        </thead>
+        <tbody>
+
+          {{range .Items}}
+          {{with .Transfer}}
+          <tr>
+            <td class="select-col"><input type="checkbox" name="transfer" value="{{.ID}}" form="bulk-delete" data-select aria-label="Select"></td>
+            <td><button type="button" class="type-badge type-transfer stats-btn" data-stats="/admin/transfers/{{.ID}}/stats" title="Statistics">Send</button></td>
+            <td style="font-weight:500;">{{.Title}}</td>
+            <td style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
+            <td class="recipients">
+              {{range .Recipients}}
+                <a href="/dl/{{.DownloadToken}}" target="_blank">{{.Email}}</a>{{if .IsSender}} <span class="size-label">sender link</span>{{end}}
+                {{if .DownloadCount}}<span class="dl-count">({{.DownloadCount}}×)</span>{{end}}<br>
+              {{else}}
+                <span style="color:#ccc;">—</span>
+              {{end}}
+            </td>
+            <td style="font-size:12px; white-space:nowrap;">
+              {{if .FileCount}}<a href="/admin/transfers/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
+            </td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td style="font-size:12px; color:#aaa; white-space:nowrap;">{{.CreatedAt | formatDate}}</td>
+            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
+            <td>
+              <form method="POST" action="/admin/transfers/{{.ID}}/delete" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm"
+                  data-confirm="Delete this transfer and all its files? This cannot be undone. If the transfer is live, the sender gets a summary of who downloaded what.">
+                  Delete
+                </button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+          {{with .Request}}
+          <tr>
+            <td class="select-col"><input type="checkbox" name="request" value="{{.ID}}" form="bulk-delete" data-select aria-label="Select"></td>
+            <td><button type="button" class="type-badge type-request stats-btn" data-stats="/admin/requests/{{.ID}}/stats" title="Statistics">Request</button></td>
+            <td style="font-weight:500;">{{.Title}}</td>
+            <td style="font-size:12px; color:#666;">{{.RequesterEmail}}</td>
+            <td class="recipients">
+              <a href="/ul/{{.UploadToken}}" target="_blank" title="/ul/{{.UploadToken}}">upload link</a>
+              {{if .FileCount}}
+              &nbsp;·&nbsp;<a href="/ul/{{.ViewPathToken}}/files" target="_blank" style="color:#aaa; font-size:11px;">view files</a>
+              {{end}}
+            </td>
+            <td style="font-size:12px; white-space:nowrap;">
+              {{if .FileCount}}<a href="/admin/requests/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
+            </td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td style="font-size:12px; color:#aaa; white-space:nowrap;">{{.CreatedAt | formatDate}}</td>
+            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
+            <td>
+              <form method="POST" action="/admin/requests/{{.ID}}/delete" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm"
+                  data-confirm="Delete this upload request and all its files? This cannot be undone.">
+                  Delete
+                </button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+          {{end}}
+
+          {{if and (eq (len .Transfers) 0) (eq (len .Requests) 0)}}
+          <tr class="empty-row"><td colspan="10">No active transfers or upload requests</td></tr>
+          {{end}}
+
+        </tbody>
+      </table>
+    </div>
+
+    {{/* ── Expired, files still on storage — admin only, linked from nowhere else ── */}}
+    {{if .Expired}}
+    <div class="card" style="margin-top:28px;">
+      <div class="card-header">
+        Expired, not cleaned up yet
+        <span style="font-size:12px; font-weight:400; color:#aaa; margin-left:8px;">The links no longer work; the files can still be downloaded here until the cleanup job removes them, {{.GraceHours}} h or more after expiry</span>
+      </div>
+      <table class="overview-table">
+        <thead>
+          <tr><th style="width:60px;"></th><th>Title</th><th>From</th><th>Files</th><th>Status</th><th>Expired</th></tr>
+        </thead>
+        <tbody>
+          {{range .Expired}}
+          {{with .Transfer}}
+          <tr>
+            <td><button type="button" class="type-badge type-transfer stats-btn" data-stats="/admin/transfers/{{.ID}}/stats" title="Statistics">Send</button></td>
+            <td style="font-weight:500;">{{.Title}}</td>
+            <td style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
+            <td style="font-size:12px; white-space:nowrap;"><a href="/admin/transfers/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span></td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
+          </tr>
+          {{end}}
+          {{with .Request}}
+          <tr>
+            <td><button type="button" class="type-badge type-request stats-btn" data-stats="/admin/requests/{{.ID}}/stats" title="Statistics">Request</button></td>
+            <td style="font-weight:500;">{{.Title}}</td>
+            <td style="font-size:12px; color:#666;">{{.RequesterEmail}}</td>
+            <td style="font-size:12px; white-space:nowrap;"><a href="/admin/requests/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span></td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
+          </tr>
+          {{end}}
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{end}}
+
+    {{/* ── Failed mail queue — only shown when non-empty ── */}}
+    {{if .FailedMails}}
+    <div class="mail-section">
+      <div class="card">
+        <div class="card-header" style="color:#991b1b;">
+          Failed mail queue
+          <span style="font-size:12px; font-weight:400; color:#aaa; margin-left:8px;">These mails could not be sent</span>
+        </div>
+        <table>
+          <thead>
+            <tr><th>To</th><th>Subject</th><th>Attempts</th><th>Error</th><th></th></tr>
+          </thead>
+          <tbody>
+            {{range .FailedMails}}
+            <tr>
+              <td style="font-size:12px;">{{.ToAddress}}</td>
+              <td style="font-size:12px;">{{.Subject}}</td>
+              <td style="font-size:12px; color:#aaa;">{{.Attempts}}</td>
+              <td style="font-size:11px; color:#c00;">{{.ErrorMessage.String}}</td>
+              <td style="white-space:nowrap;">
+                <form method="POST" action="/admin/mail/{{.ID}}/retry" style="display:inline;">
+                  <button type="submit" class="btn btn-secondary btn-sm">Retry</button>
+                </form>
+                <form method="POST" action="/admin/mail/{{.ID}}/delete" style="display:inline; margin-left:4px;">
+                  <button type="submit" class="btn btn-danger btn-sm">✕</button>
+                </form>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {{end}}
+
+  </main>
+</div>
+  <dialog id="stats-dialog" aria-label="Statistics">
+    <div class="stats-inner">
+      <button type="button" class="stats-close" data-stats-close aria-label="Close">×</button>
+      <div id="stats-body"></div>
+    </div>
+  </dialog>
+  <script src="/static/admin-dashboard.js" defer></script>
+  <script src="/static/admin-stats.js" defer></script>
+  {{template "primary-text-script" .}}
+</body>
+</html>{{end}}

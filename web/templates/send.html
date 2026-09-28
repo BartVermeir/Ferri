@@ -1,0 +1,139 @@
+{{define "send.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+  <style>
+    .mode-tabs {
+      display: flex;
+      background: #f0f0ec;
+      border-radius: 7px;
+      padding: 3px;
+      gap: 3px;
+      margin-bottom: 20px;
+    }
+    .mode-tab {
+      flex: 1;
+      padding: 7px 14px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      color: #666;
+      transition: all 0.15s;
+      font-family: var(--font);
+    }
+    .mode-tab.active {
+      background: #fff;
+      color: #1a1a1a;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+    .mode-panel { display: none; }
+    .mode-panel.active { display: block; }
+    .delivery-tabs { display:flex; background:#f0f0ec; border-radius:6px; padding:3px; gap:3px; margin-top:12px; }
+    .delivery-tab { flex:1; padding:5px 10px; border:none; border-radius:4px; background:transparent; font-size:12px; font-weight:500; cursor:pointer; color:#666; font-family:var(--font); }
+    .delivery-tab.active { background:#fff; color:#1a1a1a; box-shadow:0 1px 2px rgba(0,0,0,0.1); }
+  </style>
+</head>
+<body data-mode="{{.Mode}}">
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card">
+
+        <div class="mode-tabs">
+          <button class="mode-tab" data-mode="send" type="button">Send files</button>
+          <button class="mode-tab" data-mode="request" type="button">Request files</button>
+        </div>
+
+        {{/* ── Send panel ─────────────────────────────────────────────── */}}
+        <div class="mode-panel" id="panel-send">
+          {{if .WelcomeMessage}}<p class="text-muted" style="margin-bottom:16px;">{{.WelcomeMessage}}</p>{{end}}
+          <form id="send-form" data-max-files="{{.MaxFiles}}" data-max-bytes="{{.MaxUploadBytes}}">
+            <label>Your name</label>
+            <input type="text" name="sender_name" autocomplete="name" required>
+            <label>Your email</label>
+            <input type="email" name="sender_email" autocomplete="email" required>
+            <label>Title</label>
+            <input type="text" name="title">
+            <label>Message</label>
+            <textarea name="message" rows="2"></textarea>
+            <div class="delivery-tabs">
+              <button class="delivery-tab active" data-delivery="email" type="button">Notify by email</button>
+              <button class="delivery-tab" data-delivery="link" type="button">Get a link</button>
+            </div>
+            <input type="hidden" name="link_only" id="link_only" value="0">
+            <div id="recipients-section">
+              <label>Recipients <span class="text-muted">(one per line or comma-separated)</span></label>
+              <textarea name="recipients" id="recipients" rows="2" required></textarea>
+            </div>
+            <label>Files</label>
+            <div class="file-drop" id="file-drop" role="button" tabindex="0" aria-label="Select files, or drop files or folders here">
+              <div class="file-drop-icon">↑</div>
+              <div class="file-drop-text">Click to select or drag &amp; drop files or folders</div>
+              <input type="file" id="file-input" multiple hidden>
+            </div>
+            <div class="mt-8"><button type="button" class="btn btn-secondary btn-sm" id="folder-btn">Select a folder</button></div>
+            <input type="file" id="folder-input" webkitdirectory multiple hidden>
+            <p class="text-muted mt-8" id="file-note" hidden></p>
+            <ul class="file-list" id="file-list"></ul>
+            <label>Expires after</label>
+            <select name="expiry_hours">
+              {{range .ExpiryOptions}}
+              <option value="{{.Hours}}">{{.Label}}</option>
+              {{end}}
+            </select>
+            <label>Password <span class="text-muted">(optional)</span></label>
+            <input type="password" name="password" autocomplete="new-password">
+            <div class="mt-24">
+              <button type="submit" class="btn btn-primary" id="submit-btn">Send files</button>
+            </div>
+          </form>
+          <div id="progress-wrap" class="progress-wrap" style="display:none">
+            <div class="progress-bar"><div class="progress-bar-fill" id="progress-fill"></div></div>
+            <div class="progress-label" id="progress-label">Uploading…</div>
+          </div>
+          <div id="result-msg"></div>
+        </div>
+
+        {{/* ── Request panel ───────────────────────────────────────────── */}}
+        <div class="mode-panel" id="panel-request">
+          {{if .Error}}<div class="alert alert-error" style="margin-bottom:16px;">{{.Error}}</div>{{end}}
+          <form method="POST" action="/request">
+            <label>Your name</label>
+            <input type="text" name="requester_name" autocomplete="name" required>
+            <label>Your email</label>
+            <input type="email" name="requester_email" autocomplete="email" required>
+            <label>Title</label>
+            <input type="text" name="title" required>
+            <label>Message <span class="text-muted">(instructions for the uploader)</span></label>
+            <textarea name="message" rows="3"></textarea>
+            <label>Link expires after</label>
+            <select name="expiry_hours">
+              {{range .ExpiryOptions}}
+              <option value="{{.Hours}}">{{.Label}}</option>
+              {{end}}
+            </select>
+            <p class="text-muted" style="font-size:13px; margin-top:4px;">This is a single timer — it covers both the upload window and the time to download the received files.</p>
+            <label>Password <span class="text-muted">(optional)</span></label>
+            <input type="password" name="password" autocomplete="new-password">
+            <div class="mt-24">
+              <button type="submit" class="btn btn-primary">Create upload link</button>
+            </div>
+          </form>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/tus.min.js" defer></script>
+  <script src="/static/upload.js?v={{uploadJSVer}}" defer></script>
+  <script src="/static/send.js" defer></script>
+  {{template "primary-text-script" .}}
+</body>
+</html>{{end}}

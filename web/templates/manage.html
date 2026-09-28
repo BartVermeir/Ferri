@@ -1,0 +1,92 @@
+{{define "manage.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+</head>
+<body>
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card">
+        <p class="text-muted" style="font-size:12px;">{{if .IsTransfer}}Your transfer{{else}}Your upload request{{end}} <span class="badge badge-{{.Badge}}">{{.Status}}</span></p>
+        <h1 class="mt-8">{{if .Title}}{{.Title}}{{else if .IsTransfer}}Untitled transfer{{else}}Untitled request{{end}}</h1>
+        {{if .Extended}}<div class="alert alert-success">Extended. {{if .IsTransfer}}The download links{{else}}The links{{end}} now work until {{.ExpiresAt | formatDate}}.</div>{{end}}
+        {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+        <p class="text-muted mt-8">Created {{.CreatedAt | formatDate}} · available until <strong>{{.ExpiresAt | formatDate}}</strong></p>
+
+        {{if .IsTransfer}}
+        <hr class="divider">
+        <h2>Downloads</h2>
+        {{if not .Recipients}}<p class="text-muted">No recipients.</p>{{end}}
+        <div class="file-rows">
+          {{range .Recipients}}
+          <div class="file-row">
+            <div class="file-row-info">
+              <div class="file-row-name">{{.Label}}</div>
+              <div class="file-row-size">{{.Status}}{{if not .Last.IsZero}} · last {{.Last | formatDate}}{{end}}</div>
+            </div>
+          </div>
+          {{end}}
+        </div>
+        {{else}}
+        <hr class="divider">
+        <label>Upload link, for the person you want files from</label>
+        <div class="url-display-box"><span class="url-display-text">{{.UploadURL}}</span></div>
+        <label>Your own link to the files received</label>
+        <div class="url-display-box"><a class="url-display-text" href="{{.ViewURL}}" target="_blank" rel="noopener">{{.ViewURL}}</a></div>
+        {{end}}
+
+        <hr class="divider">
+        <h2>Files</h2>
+        {{if .Files}}
+        <details>
+          <summary class="text-muted" style="cursor:pointer;">{{len .Files}} file{{if ne (len .Files) 1}}s{{end}}, {{.TotalBytes | formatSize}}</summary>
+          <div class="file-rows mt-8">
+            {{range .Files}}
+            <div class="file-row">
+              <div class="file-row-icon">📄</div>
+              <div class="file-row-info">
+                <div class="file-row-name" title="{{.Name}}">{{fileBase .Name}}</div>
+                <div class="file-row-size">{{with fileDir .Name}}<span class="file-row-dir">{{.}}/</span> · {{end}}{{.Size | formatSize}}</div>
+              </div>
+            </div>
+            {{end}}
+          </div>
+        </details>
+        {{else}}
+        <p class="text-muted">{{if .IsTransfer}}No file has finished uploading yet.{{else}}Nothing received yet.{{end}}</p>
+        {{end}}
+
+        <hr class="divider">
+        <h2>Extend</h2>
+        {{if .Options}}
+        <form method="POST" action="/manage/{{.Token}}/extend">
+          <label>Available for, from now</label>
+          <div class="btn-row">
+            <select name="expiry_hours" style="flex:1;">
+              {{range .Options}}<option value="{{.Hours}}">{{.Label}}</option>{{end}}
+            </select>
+            <button type="submit" class="btn btn-secondary">Extend</button>
+          </div>
+        </form>
+        <p class="text-muted mt-8" style="font-size:12px;">{{if .IsTransfer}}Recipients are not emailed; their link keeps working until the new date.{{else}}The upload link and your own link keep working until the new date.{{end}}</p>
+        {{else}}
+        <p class="text-muted">It is already available for the longest period there is.</p>
+        {{end}}
+
+        <hr class="divider">
+        <h2>Delete</h2>
+        <p class="text-muted">{{if .IsTransfer}}Deletes the transfer and its files now. The download links stop working at once.{{else}}Deletes the request and the files received now. The upload link and your own link stop working at once.{{end}}</p>
+        <form method="POST" action="/manage/{{.Token}}/delete" class="mt-8">
+          <button type="submit" class="btn btn-danger" data-confirm="{{if .IsTransfer}}Delete this transfer and its files now? This cannot be undone.{{else}}Delete this request and the files received now? This cannot be undone.{{end}}">Delete {{if .IsTransfer}}transfer{{else}}request{{end}}</button>
+        </form>
+      </div>
+    </div>
+  </main>
+  {{template "primary-text-script" .}}
+  <script src="/static/manage.js" defer></script>
+</body>
+</html>{{end}}

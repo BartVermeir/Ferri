@@ -1,0 +1,40 @@
+{{define "admin/files.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>{{if .Title}}{{.Title}}{{else}}Untitled {{.Kind}}{{end}}</h1></div>
+    <p style="margin:0 0 16px; font-size:13px; color:#666;">
+      From {{.From}} · {{.Status}} · {{if .Expired}}expired{{else}}expires{{end}} {{.ExpiresAt | formatDate}}.
+      Downloads here are not counted as {{if eq .Kind "transfer"}}recipient{{else}}requester{{end}} downloads and send no mail.
+      {{if .Expired}}The files stay until the cleanup job removes them, {{.GraceHours}} h or more after expiry.{{end}}
+    </p>
+    <div class="card">
+      <table>
+        <thead><tr><th>File</th><th>Size</th><th></th></tr></thead>
+        <tbody>
+          {{range .Files}}
+          <tr>
+            <td style="word-break:break-all;">{{.Name}}</td>
+            <td style="white-space:nowrap;">{{.Size | formatSize}}</td>
+            <td style="text-align:right;"><a class="btn btn-sm" href="{{$.FileBase}}{{.ID}}">Download</a></td>
+          </tr>
+          {{else}}
+          <tr class="empty-row"><td colspan="3">No complete files</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px;"><a href="/admin">← Overview</a></p>
+  </main>
+</div>
+  {{template "primary-text-script" .}}
+</body>
+</html>{{end}}

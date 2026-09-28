@@ -1,0 +1,49 @@
+{{define "admin/mail.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>Mail queue</h1></div>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>Queued</th><th>To</th><th>Subject</th><th>Status</th><th>Attempts</th><th>Error</th><th></th></tr>
+        </thead>
+        <tbody>
+          {{range .Mails}}
+          <tr>
+            <td style="font-size:12px; color:#888; white-space:nowrap;">{{formatDate .CreatedAt}}</td>
+            <td>{{.ToAddress}}</td>
+            <td>{{.Subject}}</td>
+            <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
+            <td>{{.Attempts}}</td>
+            <td style="color:#888; font-size:12px;">{{.ErrorMessage.String}}</td>
+            <td style="white-space:nowrap;">
+              {{if eq .Status "failed"}}
+              <form method="POST" action="/admin/mail/{{.ID}}/retry" style="display:inline;">
+                <button type="submit" class="btn btn-secondary btn-sm">Retry</button>
+              </form>
+              <form method="POST" action="/admin/mail/{{.ID}}/delete" style="display:inline; margin-left:4px;">
+                <button type="submit" class="btn btn-danger btn-sm">✕</button>
+              </form>
+              {{end}}
+            </td>
+          </tr>
+          {{else}}
+          <tr class="empty-row"><td colspan="7">No mails yet</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+  {{template "primary-text-script" .}}
+</body>
+</html>{{end}}

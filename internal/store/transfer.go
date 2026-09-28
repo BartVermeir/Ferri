@@ -1,0 +1,873 @@
+package store
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/BartVermeir/Ferri/internal/token"
+)
+
+type TransferStore struct {
+	db *sql.DB
+}
+
+// Transfer represents a row in the transfers table.
+type Transfer struct {
+	ID               string
+	Title            string
+	Message          string
+	SenderName       string
+	SenderEmail      string
+	PasswordHash     sql.NullString
+	Status           string
+	ExpiresAt        time.Time
+	ActivatedAt      sql.NullInt64 // nullable epoch seconds
+	ExpiredAt        sql.NullInt64 // nullable epoch seconds
+	CreatedAt        time.Time
+	NotifyRecipients bool // false = link-only mode, skip notification emails
+	// ManageToken opens the sender's manage page (/manage/<token>). NULL for
+	// transfers from before migration 006.
+	ManageToken sql.NullString
+}
+
+// File represents a row in the files table.
+type File struct {
+	ID                string
+	TransferID        string
+	OriginalName      string
+	StoragePath       string
+	SizeBytes         int64
+	MimeType          sql.NullString
+	TUSUploadID       sql.NullString
+	TUSLastActivityAt sql.NullInt64
+	Status            string
+	CreatedAt         time.Time
+}
+
+// Recipient represents a row in the recipients table.
+type Recipient struct {
+	ID              string
+	TransferID      string
+	Email           string
+	DownloadToken   string
+	NotifiedAt      sql.NullInt64
+	FirstDownloadAt sql.NullInt64
+	DownloadCount   int
+	CreatedAt       time.Time
+	IsSender        bool // the sender's own link, see migration 003
+}
+
+// CreateTransferInput holds all data needed to create a transfer atomically.
+type CreateTransferInput struct {
+	Title            string
+	Message          string
+	SenderName       string
+	SenderEmail      string
+	PasswordHash     string // empty = no password
+	ExpiresAt        time.Time
+	Recipients       []string // email addresses
+	Files            []CreateFileInput
+	NotifyRecipients bool // false = link-only, skip notification emails
+	// ExpectedFiles is how many files the sender announced; the transfer
+	// activates once that many are complete. 0 = unknown (stored as NULL),
+	// which keeps the old "no incomplete files" rule.
+	ExpectedFiles int
+	// SenderLink adds a separate recipient row (is_sender = 1) for the sender,
+	// unless the sender is already one of the recipients — then that row is
+	// the sender's link, and the unique (transfer_id, email) index forbids a
+	// second one anyway.
+	SenderLink bool
+}
+
+type CreateFileInput struct {
+	OriginalName string
+	StoragePath  string
+	SizeBytes    int64
+}
+
+// CreateTransferResult holds the IDs generated during transfer creation.
+type CreateTransferResult struct {
+	TransferID  string
+	ManageToken string
+	Recipients  []RecipientResult
+	Files       []FileResult
+}
+
+type RecipientResult struct {
+	Email         string
+	RecipientID   string
+	DownloadToken string
+}
+
+type FileResult struct {
+	FileID string
+}
+
+// Create creates a transfer with all associated files and recipients in a single transaction.
+func (s *TransferStore) Create(input CreateTransferInput) (*CreateTransferResult, error) {
+	result := &CreateTransferResult{}
+
+	err := txFunc(s.db, func(tx *sql.Tx) error {
+		transferID := token.Generate()
+		result.TransferID = transferID
+		result.ManageToken = token.Generate()
+
+		var passwordHash sql.NullString
+		if input.PasswordHash != "" {
+			passwordHash = sql.NullString{String: input.PasswordHash, Valid: true}
+		}
+
+		var expectedFiles sql.NullInt64
+		if input.ExpectedFiles > 0 {
+			expectedFiles = sql.NullInt64{Int64: int64(input.ExpectedFiles), Valid: true}
+		}
+
+		_, err := tx.Exec(`
+			INSERT INTO transfers (id, title, message, sender_name, sender_email,
+			                       password_hash, status, expires_at, notify_recipients,
+			                       expected_files, manage_token)
+			VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+			transferID,
+			input.Title,
+			input.Message,
+			input.SenderName,
+			input.SenderEmail,
+			passwordHash,
+			input.ExpiresAt.Unix(),
+			boolToInt(input.NotifyRecipients),
+			expectedFiles,
+			result.ManageToken,
+		)
+		if err != nil {
+			return fmt.Errorf("insert transfer: %w", err)
+		}
+
+		for _, f := range input.Files {
+			fileID := token.Generate()
+			_, err := tx.Exec(`
+				INSERT INTO files (id, transfer_id, original_name, storage_path,
+				                   size_bytes, status)
+				VALUES (?, ?, ?, ?, ?, 'uploading')`,
+				fileID, transferID, f.OriginalName, f.StoragePath, f.SizeBytes,
+			)
+			if err != nil {
+				return fmt.Errorf("insert file: %w", err)
+			}
+			result.Files = append(result.Files, FileResult{FileID: fileID})
+		}
+
+		for _, email := range input.Recipients {
+			recipientID := token.Generate()
+			downloadToken := token.Generate()
+			_, err := tx.Exec(`
+				INSERT INTO recipients (id, transfer_id, email, download_token)
+				VALUES (?, ?, ?, ?)`,
+				recipientID, transferID, email, downloadToken,
+			)
+			if err != nil {
+				return fmt.Errorf("insert recipient: %w", err)
+			}
+			result.Recipients = append(result.Recipients, RecipientResult{
+				Email:         email,
+				RecipientID:   recipientID,
+				DownloadToken: downloadToken,
+			})
+		}
+
+		if input.SenderLink && !containsFold(input.Recipients, input.SenderEmail) {
+			_, err := tx.Exec(`
+				INSERT INTO recipients (id, transfer_id, email, download_token, is_sender)
+				VALUES (?, ?, ?, ?, 1)`,
+				token.Generate(), transferID, input.SenderEmail, token.Generate(),
+			)
+			if err != nil {
+				return fmt.Errorf("insert sender link: %w", err)
+			}
+		}
+
+		return nil
+	})
+
+	return result, err
+}
+
+// GetByDownloadToken looks up a transfer and its files by a recipient's download token.
+// Returns nil if not found, expired, or not active.
+func (s *TransferStore) GetByDownloadToken(tok string) (*Transfer, *Recipient, []File, error) {
+	var t Transfer
+	var r Recipient
+	var expiresAt, tCreatedAt, rCreatedAt int64
+
+	err := s.db.QueryRow(`
+		SELECT t.id, t.title, t.message, t.sender_name, t.sender_email,
+		       t.password_hash, t.status, t.expires_at, t.activated_at,
+		       t.expired_at, t.created_at, t.notify_recipients, t.manage_token,
+		       r.id, r.transfer_id, r.email, r.download_token, r.notified_at,
+		       r.first_download_at, r.download_count, r.created_at, r.is_sender
+		FROM recipients r
+		JOIN transfers t ON t.id = r.transfer_id
+		WHERE r.download_token = ?
+		  AND t.status = 'active'
+		  AND t.expires_at > unixepoch()`,
+		tok,
+	).Scan(
+		&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
+		&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
+		&t.ExpiredAt, &tCreatedAt, &t.NotifyRecipients, &t.ManageToken,
+		&r.ID, &r.TransferID, &r.Email, &r.DownloadToken, &r.NotifiedAt,
+		&r.FirstDownloadAt, &r.DownloadCount, &rCreatedAt, &r.IsSender,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	t.ExpiresAt = time.Unix(expiresAt, 0)
+	t.CreatedAt = time.Unix(tCreatedAt, 0)
+	r.CreatedAt = time.Unix(rCreatedAt, 0)
+
+	files, err := s.filesByTransferID(t.ID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return &t, &r, files, nil
+}
+
+// GetFileByID returns a single file row.
+func (s *TransferStore) GetFileByID(fileID string) (*File, error) {
+	var f File
+	var createdAt int64
+	err := s.db.QueryRow(`
+		SELECT id, transfer_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM files WHERE id = ?`, fileID,
+	).Scan(
+		&f.ID, &f.TransferID, &f.OriginalName, &f.StoragePath, &f.SizeBytes,
+		&f.MimeType, &f.TUSUploadID, &f.TUSLastActivityAt, &f.Status, &createdAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	f.CreatedAt = time.Unix(createdAt, 0)
+	return &f, nil
+}
+
+// TryActivate atomically sets the transfer to 'active' once its files are in.
+// Returns true if this call caused the activation. Race-safe: only one
+// goroutine wins.
+//
+// With expected_files set: activate when at least that many files are
+// complete. "At least" rather than "no incomplete rows": a TUS client that
+// gets a 404 on resume creates a fresh upload and leaves the old row
+// 'uploading' — that stray row must not block the transfer forever.
+// Without expected_files (transfers from before migration 004): the old rule,
+// no file row may be incomplete.
+func (s *TransferStore) TryActivate(transferID string) (bool, error) {
+	result, err := s.db.Exec(`
+		UPDATE transfers
+		SET    status       = 'active',
+		       activated_at = unixepoch()
+		WHERE  id     = ?
+		AND    status = 'pending'
+		AND    CASE
+		         WHEN expected_files IS NOT NULL THEN
+		           (SELECT COUNT(*) FROM files
+		            WHERE transfer_id = ? AND status = 'complete') >= expected_files
+		         ELSE
+		           (SELECT COUNT(*) FROM files
+		            WHERE transfer_id = ? AND status != 'complete') = 0
+		       END`,
+		transferID, transferID, transferID,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// SetFileComplete marks a file as complete and records the final size.
+// tus_upload_id is kept so the download handler can locate the file via
+// tusd's storage layout (<storage_path>/<tus_upload_id>).
+func (s *TransferStore) SetFileComplete(fileID string, sizeBytes int64) error {
+	_, err := s.db.Exec(`
+		UPDATE files
+		SET    status     = 'complete',
+		       size_bytes = ?
+		WHERE  id = ?`,
+		sizeBytes, fileID,
+	)
+	return err
+}
+
+// UpdateTUSActivity records the latest TUS PATCH activity timestamp for a file.
+// took is how long the PATCH ran; it adds to upload_ms, the net upload time.
+func (s *TransferStore) UpdateTUSActivity(fileID string, took time.Duration) error {
+	_, err := s.db.Exec(
+		`UPDATE files SET tus_last_activity_at = unixepoch(), upload_ms = upload_ms + ? WHERE id = ?`,
+		took.Milliseconds(), fileID,
+	)
+	return err
+}
+
+// GetExpired returns pending or active transfers past their expiry time.
+// Pending ones are included so an abandoned upload (e.g. 2 of 3 files done)
+// still expires and gets cleaned up; they never went live, so the expiry job
+// sends no summary for them (check ActivatedAt).
+func (s *TransferStore) GetExpired() ([]Transfer, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, sender_name, sender_email,
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients, manage_token
+		FROM transfers
+		WHERE status IN ('pending', 'active') AND expires_at < unixepoch()`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTransfers(rows)
+}
+
+// SetExpired marks a transfer as expired.
+func (s *TransferStore) SetExpired(transferID string) error {
+	_, err := s.db.Exec(`
+		UPDATE transfers
+		SET status = 'expired', expired_at = unixepoch()
+		WHERE id = ?`, transferID,
+	)
+	return err
+}
+
+// GetForCleanup returns transfers whose files still need physical deletion:
+//   - admin-deleted transfers: always immediate
+//   - expired transfers: uses COALESCE(expired_at, expires_at) to respect grace period
+//     whether they expired via the job (expired_at set) or by time (expires_at past)
+func (s *TransferStore) GetForCleanup(graceHours int) ([]Transfer, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, message, sender_name, sender_email,
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients, manage_token
+		FROM transfers
+		WHERE (
+		        status = 'deleted'
+		        OR (
+		              status = 'expired'
+		              AND COALESCE(expired_at, expires_at) < (unixepoch() - ? * 3600)
+		           )
+		      )
+		  AND EXISTS (
+		        SELECT 1 FROM files
+		        WHERE files.transfer_id = transfers.id
+		          AND files.status != 'deleted'
+		      )`,
+		graceHours,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTransfers(rows)
+}
+
+// MarkFilesDeleted nulls download_events.file_id and marks files deleted — in one transaction.
+// Must be called AFTER physical file deletion.
+func (s *TransferStore) MarkFilesDeleted(transferID string) error {
+	return txFunc(s.db, func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`
+			UPDATE download_events
+			SET file_id = NULL
+			WHERE file_id IN (SELECT id FROM files WHERE transfer_id = ?)`,
+			transferID,
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(
+			`UPDATE files SET status = 'deleted' WHERE transfer_id = ?`, transferID,
+		)
+		return err
+	})
+}
+
+// SumFileSizes returns total size_bytes for complete files. Call BEFORE os.RemoveAll.
+func (s *TransferStore) SumFileSizes(transferID string) (int64, error) {
+	var total int64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(size_bytes), 0)
+		FROM files
+		WHERE transfer_id = ? AND status = 'complete'`,
+		transferID,
+	).Scan(&total)
+	return total, err
+}
+
+// SoftDelete marks a transfer as deleted. deleted_at keeps the first time:
+// the cleanup job soft-deletes again when files were left over.
+func (s *TransferStore) SoftDelete(transferID string) error {
+	_, err := s.db.Exec(
+		`UPDATE transfers SET status = 'deleted', deleted_at = COALESCE(deleted_at, unixepoch()) WHERE id = ?`, transferID,
+	)
+	return err
+}
+
+// PurgeDeleted removes deleted transfers from the database (with their
+// files, recipients, download events and streams, by cascade) once they
+// have been deleted longer than age. Items from before migration
+// 009 count from their expiry. A transfer with a file whose data may still
+// be on storage (a tus_upload_id not cleared, see FilesStore.ListUnpurged)
+// stays: purgeLeftovers needs the row to try again.
+func (s *TransferStore) PurgeDeleted(age time.Duration) (int64, error) {
+	res, err := s.db.Exec(`
+		DELETE FROM transfers
+		WHERE status = 'deleted'
+		  AND COALESCE(deleted_at, expires_at) < unixepoch() - ?
+		  AND NOT EXISTS (
+		        SELECT 1 FROM files
+		        WHERE files.transfer_id = transfers.id
+		          AND files.tus_upload_id IS NOT NULL AND files.tus_upload_id != ''
+		      )`, int64(age.Seconds()))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// GetStalled returns files idle longer than stallHours.
+// COALESCE catches files that never received a chunk (tus_last_activity_at IS NULL).
+func (s *TransferStore) GetStalled(stallHours int) ([]File, error) {
+	rows, err := s.db.Query(`
+		SELECT id, transfer_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM files
+		WHERE status = 'uploading'
+		  AND COALESCE(tus_last_activity_at, created_at) < (unixepoch() - ? * 3600)`,
+		stallHours,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
+}
+
+// MarkFileDeleted marks a single file as deleted.
+func (s *TransferStore) MarkFileDeleted(fileID string) error {
+	_, err := s.db.Exec(`UPDATE files SET status = 'deleted' WHERE id = ?`, fileID)
+	return err
+}
+
+// GetRecipients returns all recipients for a transfer.
+func (s *TransferStore) GetRecipients(transferID string) ([]Recipient, error) {
+	rows, err := s.db.Query(`
+		SELECT id, transfer_id, email, download_token, notified_at,
+		       first_download_at, download_count, created_at, is_sender
+		FROM recipients
+		WHERE transfer_id = ?
+		ORDER BY is_sender, email`,
+		transferID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var recipients []Recipient
+	for rows.Next() {
+		var r Recipient
+		var createdAt int64
+		if err := rows.Scan(
+			&r.ID, &r.TransferID, &r.Email, &r.DownloadToken,
+			&r.NotifiedAt, &r.FirstDownloadAt, &r.DownloadCount, &createdAt, &r.IsSender,
+		); err != nil {
+			return nil, err
+		}
+		r.CreatedAt = time.Unix(createdAt, 0)
+		recipients = append(recipients, r)
+	}
+	return recipients, rows.Err()
+}
+
+// MarkRecipientNotified sets notified_at on a recipient row.
+func (s *TransferStore) MarkRecipientNotified(recipientID string) error {
+	_, err := s.db.Exec(
+		`UPDATE recipients SET notified_at = unixepoch() WHERE id = ?`, recipientID,
+	)
+	return err
+}
+
+// ValidateForTUS checks that a transfer still accepts uploads: pending and not
+// expired. An active transfer takes no new files — recipients were already
+// mailed a file list.
+func (s *TransferStore) ValidateForTUS(transferID string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM transfers
+		WHERE id = ? AND status = 'pending' AND expires_at > unixepoch()`,
+		transferID,
+	).Scan(&count)
+	return count > 0, err
+}
+
+// CountFiles returns how many live (not deleted) file rows a transfer has, and
+// the number of files /send announced for it (NULL for pre-004 transfers).
+func (s *TransferStore) CountFiles(transferID string) (int, sql.NullInt64, error) {
+	var count int
+	var expected sql.NullInt64
+	err := s.db.QueryRow(`
+		SELECT (SELECT COUNT(*) FROM files WHERE transfer_id = t.id AND status != 'deleted'),
+		       t.expected_files
+		FROM transfers t WHERE t.id = ?`,
+		transferID,
+	).Scan(&count, &expected)
+	return count, expected, err
+}
+
+// CreateFileRow inserts a new file row for a transfer, called from the TUS
+// PreUploadCreateCallback before any bytes are written.
+func (s *TransferStore) CreateFileRow(fileID, transferID, originalName, storagePath string, sizeBytes int64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO files (id, transfer_id, original_name, storage_path, size_bytes, status)
+		VALUES (?, ?, ?, ?, ?, 'uploading')`,
+		fileID, transferID, originalName, storagePath, sizeBytes,
+	)
+	return err
+}
+
+// SetTUSUploadID records the tusd-generated upload ID on the file row.
+// Called from the handleCreated hook after tusd creates the upload resource.
+func (s *TransferStore) SetTUSUploadID(fileID, tusUploadID string) error {
+	result, err := s.db.Exec(
+		`UPDATE files SET tus_upload_id = ? WHERE id = ?`, tusUploadID, fileID,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("SetTUSUploadID: no rows updated for file_id=%s", fileID)
+	}
+	return nil
+}
+
+// GetFileIDByTUSID looks up the Ferri file ID by the tusd upload ID.
+// Used in the post-PATCH hook to update tus_last_activity_at.
+// Returns empty string if not found.
+func (s *TransferStore) GetFileIDByTUSID(tusUploadID string) (string, error) {
+	var fileID string
+	err := s.db.QueryRow(
+		`SELECT id FROM files WHERE tus_upload_id = ?`, tusUploadID,
+	).Scan(&fileID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return fileID, err
+}
+
+// UploadLabel names a running upload for the admin's activity overview.
+type UploadLabel struct {
+	ItemID    string // transfer or request ID
+	Title     string
+	FileName  string
+	Size      int64 // announced size of the file
+	Who       string
+	CreatedAt time.Time // when the file's upload began
+}
+
+// UploadLabelByTUSID finds the transfer file behind a tusd upload ID; nil
+// if it is not a transfer file.
+func (s *TransferStore) UploadLabelByTUSID(tusUploadID string) (*UploadLabel, error) {
+	var l UploadLabel
+	var createdAt int64
+	err := s.db.QueryRow(`
+		SELECT t.id, t.title, f.original_name, f.size_bytes, t.sender_email, f.created_at
+		FROM files f JOIN transfers t ON t.id = f.transfer_id
+		WHERE f.tus_upload_id = ?`, tusUploadID,
+	).Scan(&l.ItemID, &l.Title, &l.FileName, &l.Size, &l.Who, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	l.CreatedAt = time.Unix(createdAt, 0)
+	return &l, nil
+}
+
+// GetByID returns a transfer by its ID.
+// Used by the TUS completion handler to get sender info for mail enqueue.
+func (s *TransferStore) GetByID(transferID string) (*Transfer, error) {
+	var t Transfer
+	var expiresAt, createdAt int64
+	var notifyRecipients int
+	err := s.db.QueryRow(`
+		SELECT id, title, message, sender_name, sender_email,
+		       password_hash, status, expires_at, activated_at, expired_at, created_at,
+		       notify_recipients, manage_token
+		FROM transfers WHERE id = ?`, transferID,
+	).Scan(
+		&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
+		&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
+		&t.ExpiredAt, &createdAt, &notifyRecipients, &t.ManageToken,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	t.ExpiresAt = time.Unix(expiresAt, 0)
+	t.CreatedAt = time.Unix(createdAt, 0)
+	t.NotifyRecipients = notifyRecipients != 0
+	return &t, nil
+}
+
+// GetLiveByManageToken returns the transfer behind a manage link while it is
+// live: pending (still uploading) or active, and not past expires_at. An
+// expired or deleted transfer has nothing left to manage. Nil if not found.
+func (s *TransferStore) GetLiveByManageToken(tok string) (*Transfer, error) {
+	var id string
+	err := s.db.QueryRow(`
+		SELECT id FROM transfers
+		WHERE manage_token = ?
+		  AND status IN ('pending', 'active')
+		  AND expires_at > unixepoch()`,
+		tok,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetByID(id)
+}
+
+// ExtendExpiry moves a live transfer's expiry to expiresAt. Only later: the
+// manage page offers "extend", not "shorten". Returns false when nothing
+// changed (not live any more, or expiresAt is not later).
+func (s *TransferStore) ExtendExpiry(transferID string, expiresAt time.Time) (bool, error) {
+	result, err := s.db.Exec(`
+		UPDATE transfers SET expires_at = ?
+		WHERE id = ?
+		  AND status IN ('pending', 'active')
+		  AND expires_at > unixepoch()
+		  AND expires_at < ?`,
+		expiresAt.Unix(), transferID, expiresAt.Unix(),
+	)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+func containsFold(list []string, s string) bool {
+	for _, v := range list {
+		if strings.EqualFold(v, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// GetFilesByTransferID returns all non-deleted files for a transfer. Used by the admin delete handler.
+func (s *TransferStore) GetFilesByTransferID(transferID string) ([]File, error) {
+	rows, err := s.db.Query(`
+		SELECT id, transfer_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM files WHERE transfer_id = ? AND status != 'deleted'
+		ORDER BY created_at`,
+		transferID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
+}
+
+func (s *TransferStore) filesByTransferID(transferID string) ([]File, error) {
+	rows, err := s.db.Query(`
+		SELECT id, transfer_id, original_name, storage_path, size_bytes,
+		       mime_type, tus_upload_id, tus_last_activity_at, status, created_at
+		FROM files WHERE transfer_id = ? AND status = 'complete'
+		ORDER BY created_at`,
+		transferID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFiles(rows)
+}
+
+// scanTransfers scans rows from the transfers table.
+// expires_at and created_at are INTEGER (Unix epoch) in SQLite — scan into int64,
+// then convert to time.Time. Scanning directly into time.Time would fail at runtime.
+// The column list must match the queries in GetExpired / GetForCleanup /
+// GetByID, including the trailing notify_recipients and manage_token.
+func scanTransfers(rows *sql.Rows) ([]Transfer, error) {
+	var list []Transfer
+	for rows.Next() {
+		var t Transfer
+		var expiresAt, createdAt int64
+		var notifyRecipients int
+		if err := rows.Scan(
+			&t.ID, &t.Title, &t.Message, &t.SenderName, &t.SenderEmail,
+			&t.PasswordHash, &t.Status, &expiresAt, &t.ActivatedAt,
+			&t.ExpiredAt, &createdAt, &notifyRecipients, &t.ManageToken,
+		); err != nil {
+			return nil, err
+		}
+		t.ExpiresAt = time.Unix(expiresAt, 0)
+		t.CreatedAt = time.Unix(createdAt, 0)
+		t.NotifyRecipients = notifyRecipients != 0
+		list = append(list, t)
+	}
+	return list, rows.Err()
+}
+
+// scanFiles scans rows from the files table.
+// created_at is INTEGER in SQLite — scan into int64, convert to time.Time.
+func scanFiles(rows *sql.Rows) ([]File, error) {
+	var list []File
+	for rows.Next() {
+		var f File
+		var createdAt int64
+		if err := rows.Scan(
+			&f.ID, &f.TransferID, &f.OriginalName, &f.StoragePath, &f.SizeBytes,
+			&f.MimeType, &f.TUSUploadID, &f.TUSLastActivityAt, &f.Status, &createdAt,
+		); err != nil {
+			return nil, err
+		}
+		f.CreatedAt = time.Unix(createdAt, 0)
+		list = append(list, f)
+	}
+	return list, rows.Err()
+}
+
+// TransferSummary enriches Transfer with file stats and recipients for the admin overview.
+type TransferSummary struct {
+	Transfer
+	FileCount  int
+	TotalBytes int64
+	Recipients []Recipient
+}
+
+// ListForAdmin returns all non-expired, non-deleted transfers with file counts and recipients.
+func (s *TransferStore) ListForAdmin(limit int) ([]TransferSummary, error) {
+	return s.listForAdmin(`
+		WHERE t.status NOT IN ('expired', 'deleted')
+		  AND t.expires_at > unixepoch()
+		GROUP BY t.id
+		ORDER BY t.created_at DESC`, limit)
+}
+
+// ListExpiredForAdmin returns the transfers past their expiry whose files are
+// still on storage: the cleanup job has not removed them yet (grace period).
+// Also those the hourly expiry job has not marked expired yet. Newest expiry first.
+func (s *TransferStore) ListExpiredForAdmin(limit int) ([]TransferSummary, error) {
+	return s.listForAdmin(`
+		WHERE t.status != 'deleted'
+		  AND (t.status = 'expired' OR t.expires_at <= unixepoch())
+		GROUP BY t.id
+		HAVING COUNT(f.id) > 0
+		ORDER BY t.expires_at DESC`, limit)
+}
+
+// listForAdmin runs the admin overview query; tail is its WHERE, GROUP BY and ORDER BY.
+func (s *TransferStore) listForAdmin(tail string, limit int) ([]TransferSummary, error) {
+	rows, err := s.db.Query(`
+		SELECT t.id, t.title, t.message, t.sender_name, t.sender_email,
+		       t.password_hash, t.status, t.expires_at, t.activated_at,
+		       t.expired_at, t.created_at,
+		       COUNT(f.id)                    AS file_count,
+		       COALESCE(SUM(f.size_bytes), 0) AS total_bytes
+		FROM transfers t
+		LEFT JOIN files f ON f.transfer_id = t.id AND f.status = 'complete'`+tail+`
+		LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []TransferSummary
+	for rows.Next() {
+		var ts TransferSummary
+		var expiresAt, createdAt int64
+		if err := rows.Scan(
+			&ts.ID, &ts.Title, &ts.Message, &ts.SenderName, &ts.SenderEmail,
+			&ts.PasswordHash, &ts.Status, &expiresAt, &ts.ActivatedAt,
+			&ts.ExpiredAt, &createdAt,
+			&ts.FileCount, &ts.TotalBytes,
+		); err != nil {
+			return nil, err
+		}
+		ts.ExpiresAt = time.Unix(expiresAt, 0)
+		ts.CreatedAt = time.Unix(createdAt, 0)
+		list = append(list, ts)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Enrich with recipients (N+1 is fine for admin page sizes)
+	for i := range list {
+		recipients, err := s.GetRecipients(list[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		list[i].Recipients = recipients
+	}
+	return list, nil
+}
+
+// txFunc executes fn inside a transaction, rolling back on error.
+// Note: db.TxFunc in the db package does the same — this local version
+// avoids an import cycle since store packages don't import db directly.
+func txFunc(db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
+// SumPendingCleanupBytes returns total bytes of files that belong to expired/deleted
+// transfers but have not yet been removed from storage (status != 'deleted').
+func (s *TransferStore) SumPendingCleanupBytes() (int64, error) {
+	var total int64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(f.size_bytes), 0)
+		FROM files f
+		JOIN transfers t ON t.id = f.transfer_id
+		WHERE t.status IN ('expired', 'deleted')
+		  AND f.status != 'deleted'`,
+	).Scan(&total)
+	return total, err
+}
