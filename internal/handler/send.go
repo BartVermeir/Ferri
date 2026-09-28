@@ -43,6 +43,8 @@ const (
 	maxTitleLen   = 200
 	maxMessageLen = 5000
 	maxNameLen    = 200
+	// maxRequestLinks: one POST /request creates at most this many requests.
+	maxRequestLinks = 50
 	// maxFormBytes caps a /request body, maxSendBytes a /send body. /send
 	// carries the file list: up to max_files_per_transfer (5000) paths in
 	// folders, a few hundred bytes each at most. Without a cap, a multipart
@@ -65,6 +67,8 @@ type homePageData struct {
 	// both again.
 	MaxFiles       int
 	MaxUploadBytes int64
+	// MaxRequestLinks caps "Number of links" on the request form.
+	MaxRequestLinks int
 }
 
 // renderHomePage renders the combined send/request page (send.html).
@@ -77,13 +81,14 @@ func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.S
 		pageTitle = "Send files"
 	}
 	renderPage(w, "send.html", homePageData{
-		baseData:       baseData{PageTitle: pageTitle, Settings: settings},
-		ExpiryOptions:  cfg.ExpiryOptions,
-		WelcomeMessage: settings.WelcomeMessage,
-		Mode:           mode,
-		Error:          errMsg,
-		MaxFiles:       cfg.Limits.MaxFilesPerTransfer,
-		MaxUploadBytes: cfg.Limits.MaxUploadBytes,
+		baseData:        baseData{PageTitle: pageTitle, Settings: settings},
+		ExpiryOptions:   cfg.ExpiryOptions,
+		WelcomeMessage:  settings.WelcomeMessage,
+		Mode:            mode,
+		Error:           errMsg,
+		MaxFiles:        cfg.Limits.MaxFilesPerTransfer,
+		MaxUploadBytes:  cfg.Limits.MaxUploadBytes,
+		MaxRequestLinks: maxRequestLinks,
 	})
 }
 
@@ -133,10 +138,6 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		recipientsRaw := r.FormValue("recipients") // comma or newline separated
 		linkOnly := r.FormValue("link_only") == "1"
 
-		if senderName == "" {
-			jsonError(w, "Sender name is required", http.StatusBadRequest)
-			return
-		}
 		if len(senderName) > maxNameLen {
 			jsonError(w, fmt.Sprintf("Name is too long (max %d characters)", maxNameLen), http.StatusBadRequest)
 			return

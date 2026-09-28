@@ -676,11 +676,7 @@ func buildAvailableText(m transferMail, downloadURL string) string {
 
 func buildConfirmHTML(m transferMail, recipients []string, senderURL string) string {
 	var b strings.Builder
-	if m.SenderName != "" {
-		fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(m.SenderName))
-	} else {
-		b.WriteString(`<p style="margin:0 0 16px;">Hello,</p>`)
-	}
+	b.WriteString(mail.HelloHTML(m.SenderName))
 	titlePart := ""
 	if m.Title != "" {
 		titlePart = " <strong>" + html.EscapeString(m.Title) + "</strong>"
@@ -718,11 +714,7 @@ func buildConfirmHTML(m transferMail, recipients []string, senderURL string) str
 
 func buildConfirmText(m transferMail, recipients []string, senderURL string) string {
 	var b strings.Builder
-	if m.SenderName != "" {
-		fmt.Fprintf(&b, "Hello %s,\n\n", m.SenderName)
-	} else {
-		b.WriteString("Hello,\n\n")
-	}
+	b.WriteString(mail.HelloText(m.SenderName))
 	titlePart := ""
 	if m.Title != "" {
 		titlePart = " \"" + m.Title + "\""

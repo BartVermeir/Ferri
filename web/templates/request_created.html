@@ -11,13 +11,15 @@
   <main>
     <div class="page-wrap">
       <div class="card">
-        <h1>Upload link created</h1>
+        <h1>{{.PageTitle}}</h1>
+        {{if .Error}}<div class="alert alert-error mt-16">{{.Error}}</div>{{end}}
+        {{if eq (len .Links) 1}}{{with index .Links 0}}
         <p class="text-muted">Send this link to the person you want files from:</p>
         <div class="mt-16 url-display-box">
-          <span class="url-display-text" id="upload-url">{{.UploadURL}}</span>
+          <span class="url-display-text">{{.UploadURL}}</span>
         </div>
         <div class="mt-16 btn-row">
-          <button class="btn btn-secondary" id="copy-btn">Copy link</button>
+          <button class="btn btn-secondary" data-copy="{{.UploadURL}}">Copy link</button>
           <a href="/request" class="btn btn-secondary">New request</a>
         </div>
         <hr class="divider">
@@ -29,6 +31,26 @@
         <div class="mt-8 url-display-box">
           <a class="url-display-text" href="{{.ManageURL}}" target="_blank" rel="noopener">{{.ManageURL}}</a>
         </div>
+        {{end}}{{else}}
+        <p class="text-muted">Send each person their own link. "Copy all links" copies every title with its link, one per line.</p>
+        <div class="mt-16 btn-row">
+          <button class="btn btn-secondary" data-copy-all>Copy all links</button>
+          <a href="/request" class="btn btn-secondary">New request</a>
+        </div>
+        <p class="text-muted mt-16">Under each link: your own link to see what was uploaded (keep it to yourself, it opens every file received; you also get it by email once the upload is complete) and the manage page to extend or delete it. The manage page only opens from the internal network.</p>
+        {{range .Links}}
+        <hr class="divider">
+        <p><strong>{{.Title}}</strong></p>
+        <div class="mt-8 url-display-box">
+          <span class="url-display-text">{{.UploadURL}}</span>
+        </div>
+        <div class="mt-8 btn-row" style="align-items:center;">
+          <button class="btn btn-secondary btn-sm" data-copy="{{.UploadURL}}" data-title="{{.Title}}">Copy link</button>
+          <a class="text-muted" style="font-size:13px;" href="{{.ViewURL}}" target="_blank" rel="noopener">Your view link</a>
+          <a class="text-muted" style="font-size:13px;" href="{{.ManageURL}}" target="_blank" rel="noopener">Manage</a>
+        </div>
+        {{end}}
+        {{end}}
       </div>
     </div>
   </main>

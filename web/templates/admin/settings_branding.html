@@ -1,0 +1,86 @@
+{{define "admin/settings_branding.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>Branding</h1></div>
+    {{if .Saved}}<div class="alert alert-success">Settings saved.</div>{{end}}
+    {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+    {{if .Settings.LogoURL}}
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-header">Logo</div>
+      <div class="card-body" style="display:flex;align-items:center;gap:16px;">
+        <img src="{{.Settings.LogoURL}}" style="height:40px;border-radius:4px;border:1px solid #e8e8e4;padding:4px;background:#fff;" alt="Current logo">
+        <form method="POST" action="/admin/settings/logo/delete">
+          <button type="submit" class="btn btn-danger btn-sm">Remove logo</button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+
+    <form method="POST" action="/admin/settings/logo" enctype="multipart/form-data" class="card" style="margin-bottom:16px;">
+      <div class="card-header">Upload logo</div>
+      <div class="card-body">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="file" name="logo" accept="image/*" style="font-size:13px;width:auto;">
+          <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
+        </div>
+        <p style="font-size:12px;color:#888;margin-top:6px;">PNG, SVG or JPEG · max 200×60px recommended · transparent background</p>
+      </div>
+    </form>
+
+    <form method="POST" action="/admin/settings/branding">
+      <div class="card">
+        <div class="card-header">Branding</div>
+        <div class="card-body">
+          <label>Company name</label>
+          <input type="text" name="branding.company_name" value="{{.Settings.CompanyName}}">
+          <label>Logo URL <span class="label-hint">(or upload above)</span></label>
+          <input type="text" name="branding.logo_url" value="{{.Settings.LogoURL}}" placeholder="https://example.com/logo.png or /static/logo/logo.jpg">
+          <div class="form-row">
+            <div>
+              <label>Primary colour</label>
+              <input type="color" name="branding.primary_color" value="{{.Settings.PrimaryColor}}">
+            </div>
+            <div>
+              <label>Accent colour</label>
+              <input type="color" name="branding.accent_color" value="{{.Settings.AccentColor}}">
+            </div>
+          </div>
+          <label>Background colour</label>
+          <input type="color" name="branding.bg_color" value="{{if .Settings.BgColor}}{{.Settings.BgColor}}{{else}}#f8f8f6{{end}}">
+          <label>Font family</label>
+          <select name="branding.font_family">
+            <option value="">System default (Inter)</option>
+            <option value="'Georgia', serif" {{if eq .Settings.FontFamily "'Georgia', serif"}}selected{{end}}>Georgia</option>
+            <option value="'Helvetica Neue', Arial, sans-serif" {{if eq .Settings.FontFamily "'Helvetica Neue', Arial, sans-serif"}}selected{{end}}>Helvetica Neue</option>
+          </select>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">Pages</div>
+        <div class="card-body">
+          <label>Welcome message</label>
+          <textarea name="branding.welcome_message" rows="2">{{.Settings.WelcomeMessage}}</textarea>
+          <label>Send page title</label>
+          <input type="text" name="branding.send_page_title" value="{{.Settings.SendPageTitle}}" placeholder="Send files">
+          <label>Download page title</label>
+          <input type="text" name="branding.download_page_title" value="{{.Settings.DownloadPageTitle}}" placeholder="Download files">
+        </div>
+      </div>
+      <div style="margin-top:8px;">
+        <button type="submit" class="btn btn-primary">Save branding</button>
+      </div>
+    </form>
+  </main>
+</div>
+{{template "primary-text-script" .}}
+</body>
+</html>{{end}}

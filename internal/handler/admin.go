@@ -12,8 +12,9 @@ package handler
 //   GET  /admin/mail                     — mail queue overview
 //   POST /admin/mail/:id/retry           — reset failed mail to pending
 //   POST /admin/mail/:id/delete          — delete mail from queue
-//   GET  /admin/settings                 — runtime settings form
-//   POST /admin/settings                 — save settings
+//   GET  /admin/settings                 — redirect to /admin/settings/branding
+//   GET  /admin/settings/{branding,mail,storage} — the three settings pages
+//   POST /admin/settings/{branding,mail} — save that page's settings
 //
 // Authentication (architecture.md §4 admin authentication):
 //   Login: compare submitted token with cfg.Admin.Token using subtle.ConstantTimeCompare.
@@ -103,18 +104,17 @@ func AdminLogout(cfg *config.Config) http.HandlerFunc {
 // adminOverviewData holds everything the combined overview page needs.
 type adminOverviewData struct {
 	adminData
-	Transfers      []store.TransferSummary
-	Requests       []store.RequestSummary
-	Items          []overviewItem // Transfers and Requests together, newest first
-	Expired        []overviewItem // past expiry, files not cleaned up yet, newest expiry first
-	GraceHours     int
-	FailedMails    []store.MailItem
-	TotalBytes     int64
-	PendingBytes   int64
-	OrphansDeleted int // set when redirected back after orphan cleanup
-	Deleted        int // set when redirected back after "Delete selected"
-	DeleteFailed   int
-	Now            activityView
+	Transfers    []store.TransferSummary
+	Requests     []store.RequestSummary
+	Items        []overviewItem // Transfers and Requests together, newest first
+	Expired      []overviewItem // past expiry, files not cleaned up yet, newest expiry first
+	GraceHours   int
+	FailedMails  []store.MailItem
+	TotalBytes   int64
+	PendingBytes int64
+	Deleted      int // set when redirected back after "Delete selected"
+	DeleteFailed int
+	Now          activityView
 }
 
 // overviewItem is one row of the overview table: a transfer or a request.
@@ -205,24 +205,22 @@ func AdminDashboard(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		pendingR, _ := stores.Requests.SumPendingCleanupBytes()
 		pendingBytes := pendingT + pendingR
 
-		orphans, _ := strconv.Atoi(r.URL.Query().Get("orphans"))
 		deleted, _ := strconv.Atoi(r.URL.Query().Get("deleted"))
 		deleteFailed, _ := strconv.Atoi(r.URL.Query().Get("failed"))
 
 		renderPage(w, "admin/dashboard.html", adminOverviewData{
-			adminData:      adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
-			Transfers:      transfers,
-			Requests:       requests,
-			Items:          mergeOverview(transfers, requests),
-			Expired:        mergeExpired(expiredT, expiredR),
-			GraceHours:     cfg.Jobs.CleanupGraceHours,
-			FailedMails:    failedMails,
-			TotalBytes:     totalBytes,
-			PendingBytes:   pendingBytes,
-			OrphansDeleted: orphans,
-			Deleted:        deleted,
-			DeleteFailed:   deleteFailed,
-			Now:            buildActivityView(stores, activity.Default.Snapshot()),
+			adminData:    adminData{PageTitle: "Overview", ActiveNav: "dashboard", Settings: settings},
+			Transfers:    transfers,
+			Requests:     requests,
+			Items:        mergeOverview(transfers, requests),
+			Expired:      mergeExpired(expiredT, expiredR),
+			GraceHours:   cfg.Jobs.CleanupGraceHours,
+			FailedMails:  failedMails,
+			TotalBytes:   totalBytes,
+			PendingBytes: pendingBytes,
+			Deleted:      deleted,
+			DeleteFailed: deleteFailed,
+			Now:          buildActivityView(stores, activity.Default.Snapshot()),
 		})
 	}
 }
@@ -302,7 +300,7 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 		}
 
 		slog.Info("orphan cleanup done", "deleted", deleted, "kept_as_referenced", kept)
-		http.Redirect(w, r, fmt.Sprintf("/admin?orphans=%d", deleted), http.StatusSeeOther)
+		http.Redirect(w, r, fmt.Sprintf("%s?orphans=%d", storageSettings.path, deleted), http.StatusSeeOther)
 	}
 }
 
@@ -709,13 +707,60 @@ func AdminMailDelete(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
-// AdminSettings handles GET /admin/settings.
-func AdminSettings(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+// The settings are split over three pages under Configure. Each page posts
+// only its own fields and saves only those: an unchecked checkbox sends
+// nothing, so a page that saved every key would switch the mail checkboxes
+// off each time Branding is saved.
+type settingsPage struct {
+	tmpl  string
+	title string
+	nav   string // ActiveNav in admin/base.html
+	path  string
+}
+
+var (
+	brandingSettings = settingsPage{"admin/settings_branding.html", "Branding", "settings-branding", "/admin/settings/branding"}
+	mailSettings     = settingsPage{"admin/settings_mail.html", "Mail", "settings-mail", "/admin/settings/mail"}
+	storageSettings  = settingsPage{"admin/settings_storage.html", "Storage", "settings-storage", "/admin/settings/storage"}
+)
+
+// AdminSettings handles GET /admin/settings: it goes to the first of the
+// three settings pages.
+func AdminSettings() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		settings := appMiddleware.GetSettings(r)
-		storageSaved := r.URL.Query().Get("storage_saved") == "1"
-		storageError := r.URL.Query().Get("storage_error")
-		renderAdminSettings(w, cfg, settings, "", storageSaved, storageError)
+		http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
+	}
+}
+
+// AdminBrandingSettings handles GET /admin/settings/branding.
+func AdminBrandingSettings(cfg *config.Config) http.HandlerFunc {
+	return settingsGet(cfg, brandingSettings)
+}
+
+// AdminMailSettings handles GET /admin/settings/mail.
+func AdminMailSettings(cfg *config.Config) http.HandlerFunc {
+	return settingsGet(cfg, mailSettings)
+}
+
+// AdminStorageSettings handles GET /admin/settings/storage.
+func AdminStorageSettings(cfg *config.Config) http.HandlerFunc {
+	return settingsGet(cfg, storageSettings)
+}
+
+// settingsGet renders a settings page with what the redirect after a save
+// put in the query: ?saved=1, and for storage ?storage_saved=1,
+// ?storage_error=… and ?orphans=N.
+func settingsGet(cfg *config.Config, page settingsPage) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		orphans, _ := strconv.Atoi(q.Get("orphans"))
+		renderSettingsPage(w, cfg, appMiddleware.GetSettings(r), page, settingsView{
+			Saved:          q.Get("saved") == "1",
+			StorageSaved:   q.Get("storage_saved") == "1",
+			StorageError:   q.Get("storage_error"),
+			OrphansDeleted: orphans,
+			OrphansRan:     q.Has("orphans"),
+		})
 	}
 }
 
@@ -778,21 +823,48 @@ func normalizeAlertRecipients(raw string) (string, string) {
 	return strings.Join(list, ", "), ""
 }
 
-// AdminSettingsSave handles POST /admin/settings.
-// Saves each setting key individually. Only known keys are accepted.
-func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+// AdminBrandingSave handles POST /admin/settings/branding: branding and the
+// page texts. Only known keys are accepted.
+func AdminBrandingSave(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
-			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, cfg, settings, "Invalid form data.", false, "")
+			renderSettingsError(w, r, cfg, brandingSettings, "Invalid form data.")
 			return
 		}
 
-		// Allowlist of settable keys — prevents arbitrary key injection.
-		// Checkbox fields (notify_on_download, expiry_summary) must be handled
-		// explicitly: an unchecked checkbox sends NO form value, so r.FormValue
-		// returns "". The settings cache evaluates '' != "false" as true, meaning
-		// unchecked boxes would be permanently stuck on. We normalise to "true"/"false".
+		// The page-text fields are named branding.* in the form, ui.* in the
+		// database.
+		vals := map[string]string{
+			"branding.company_name":  r.FormValue("branding.company_name"),
+			"branding.logo_url":      r.FormValue("branding.logo_url"),
+			"branding.primary_color": r.FormValue("branding.primary_color"),
+			"branding.accent_color":  r.FormValue("branding.accent_color"),
+			"branding.bg_color":      r.FormValue("branding.bg_color"),
+			"branding.font_family":   r.FormValue("branding.font_family"),
+			"ui.welcome_message":     r.FormValue("branding.welcome_message"),
+			"ui.send_page_title":     r.FormValue("branding.send_page_title"),
+			"ui.download_page_title": r.FormValue("branding.download_page_title"),
+		}
+		if msg := validateBranding(vals); msg != "" {
+			renderSettingsError(w, r, cfg, brandingSettings, msg)
+			return
+		}
+		saveSettings(w, r, cfg, stores, brandingSettings, vals)
+	}
+}
+
+// AdminMailSettingsSave handles POST /admin/settings/mail: sender,
+// notifications and alert recipients. Only known keys are accepted.
+func AdminMailSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			renderSettingsError(w, r, cfg, mailSettings, "Invalid form data.")
+			return
+		}
+
+		// An unchecked checkbox sends no value, so FormValue returns "". The
+		// settings cache reads '' != "false" as true, meaning an unchecked
+		// box would stay on. Normalise to "true"/"false".
 		checkboxVal := func(formKey string) string {
 			v := r.FormValue(formKey)
 			if v == "1" || v == "true" {
@@ -801,56 +873,35 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 			return "false"
 		}
 
-		allowed := map[string]string{
-			"branding.company_name":   r.FormValue("branding.company_name"),
-			"branding.logo_url":       r.FormValue("branding.logo_url"),
-			"branding.primary_color":  r.FormValue("branding.primary_color"),
-			"branding.accent_color":   r.FormValue("branding.accent_color"),
-			"branding.bg_color":       r.FormValue("branding.bg_color"),
-			"branding.font_family":    r.FormValue("branding.font_family"),
-			"ui.welcome_message":      r.FormValue("branding.welcome_message"),
-			"ui.send_page_title":      r.FormValue("branding.send_page_title"),
-			"ui.download_page_title":  r.FormValue("branding.download_page_title"),
+		alertRecipients, msg := normalizeAlertRecipients(r.FormValue("alerts.recipients"))
+		if msg != "" {
+			renderSettingsError(w, r, cfg, mailSettings, msg)
+			return
+		}
+		saveSettings(w, r, cfg, stores, mailSettings, map[string]string{
 			"mail.from_name":          r.FormValue("mail.from_name"),
 			"mail.from_address":       r.FormValue("mail.from_address"),
 			"mail.notify_on_download": checkboxVal("notify.on_download"),
 			"mail.expiry_summary":     checkboxVal("notify.expiry_summary"),
-		}
-
-		if msg := validateBranding(allowed); msg != "" {
-			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, cfg, settings, msg, false, "")
-			return
-		}
-		alertRecipients, msg := normalizeAlertRecipients(r.FormValue("alerts.recipients"))
-		if msg != "" {
-			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, cfg, settings, msg, false, "")
-			return
-		}
-		allowed["alerts.recipients"] = alertRecipients
-
-		// Settings are saved individually. If one fails, earlier saves are not
-		// rolled back — a partial update is possible. For independent key-value
-		// branding/UI settings this is acceptable; a retry saves them all again.
-		var saveErr string
-		for key, value := range allowed {
-			if err := stores.Settings.Save(key, strings.TrimSpace(value)); err != nil {
-				slog.Error("admin settings: save", "key", key, "error", err)
-				saveErr = fmt.Sprintf("Failed to save setting '%s'. Other settings may have been saved.", key)
-				break
-			}
-		}
-
-		if saveErr != "" {
-			settings := appMiddleware.GetSettings(r)
-			renderAdminSettings(w, cfg, settings, saveErr, false, "")
-			return
-		}
-
-		slog.Info("admin: settings saved")
-		http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			"alerts.recipients":       alertRecipients,
+		})
 	}
+}
+
+// saveSettings saves each key and goes back to the page with "saved". If one
+// fails, earlier saves are not rolled back — a partial update is possible.
+// For independent key-value settings this is acceptable; a retry saves them
+// all again.
+func saveSettings(w http.ResponseWriter, r *http.Request, cfg *config.Config, stores *store.Stores, page settingsPage, vals map[string]string) {
+	for key, value := range vals {
+		if err := stores.Settings.Save(key, strings.TrimSpace(value)); err != nil {
+			slog.Error("admin settings: save", "key", key, "error", err)
+			renderSettingsError(w, r, cfg, page, fmt.Sprintf("Failed to save setting '%s'. Other settings may have been saved.", key))
+			return
+		}
+	}
+	slog.Info("admin: settings saved", "page", page.title)
+	http.Redirect(w, r, page.path+"?saved=1", http.StatusSeeOther)
 }
 
 // ── Template rendering placeholders ──────────────────────────────────────────
@@ -864,12 +915,12 @@ func AdminSettingsSave(cfg *config.Config, stores *store.Stores) http.HandlerFun
 func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(5 << 20); err != nil {
-			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
 		file, header, err := r.FormFile("logo")
 		if err != nil {
-			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
 		defer file.Close()
@@ -878,7 +929,7 @@ func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 		ext := strings.ToLower(filepath.Ext(header.Filename))
 		// SVG is excluded: browsers render SVG as HTML, enabling stored XSS via a malicious logo file.
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
-			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
 
@@ -886,7 +937,7 @@ func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 		logoDir := filepath.Join(cfg.Storage.Path, "logo")
 		if err := os.MkdirAll(logoDir, 0755); err != nil {
 			slog.Error("logo upload: mkdir", "error", err)
-			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
 
@@ -894,13 +945,13 @@ func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 		dst, err := os.Create(logoPath)
 		if err != nil {
 			slog.Error("logo upload: create file", "error", err)
-			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
 		defer dst.Close()
 		if _, err := io.Copy(dst, file); err != nil {
 			slog.Error("logo upload: write file", "error", err)
-			http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
 
@@ -910,7 +961,7 @@ func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 			slog.Error("logo upload: save setting", "error", err)
 		}
 
-		http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+		http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 	}
 }
 
@@ -926,7 +977,7 @@ func AdminLogoDelete(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 		for _, ext := range []string{".png", ".jpg", ".jpeg", ".webp"} {
 			os.Remove(filepath.Join(logoDir, "logo"+ext))
 		}
-		http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+		http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 	}
 }
 
@@ -947,26 +998,30 @@ func renderAdminMail(w http.ResponseWriter, settings *store.Settings, mails []st
 	})
 }
 
-func renderAdminSettings(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, errMsg string, storageSaved bool, storageError string) {
-	saved := errMsg == "saved"
-	if saved {
-		errMsg = ""
-	}
-	renderPage(w, "admin/settings.html", struct {
+// settingsView is what a settings page shows besides the settings.
+type settingsView struct {
+	Saved          bool
+	Error          string
+	StorageSaved   bool
+	StorageError   string
+	OrphansDeleted int
+	OrphansRan     bool
+}
+
+func renderSettingsPage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, page settingsPage, v settingsView) {
+	renderPage(w, page.tmpl, struct {
 		adminData
-		Cfg          *config.Config
-		Saved        bool
-		Error        string
-		StorageSaved bool
-		StorageError string
+		settingsView
+		Cfg *config.Config
 	}{
-		adminData:    adminData{PageTitle: "Settings", ActiveNav: "settings", Settings: settings},
+		adminData:    adminData{PageTitle: page.title, ActiveNav: page.nav, Settings: settings},
+		settingsView: v,
 		Cfg:          cfg,
-		Saved:        saved,
-		Error:        errMsg,
-		StorageSaved: storageSaved,
-		StorageError: storageError,
 	})
+}
+
+func renderSettingsError(w http.ResponseWriter, r *http.Request, cfg *config.Config, page settingsPage, msg string) {
+	renderSettingsPage(w, cfg, appMiddleware.GetSettings(r), page, settingsView{Error: msg})
 }
 
 // ── Storage settings ──────────────────────────────────────────────────────────
@@ -977,7 +1032,7 @@ func renderAdminSettings(w http.ResponseWriter, cfg *config.Config, settings *st
 func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
-			http.Redirect(w, r, "/admin/settings?storage_error=invalid+form", http.StatusSeeOther)
+			http.Redirect(w, r, "/admin/settings/storage?storage_error=invalid+form", http.StatusSeeOther)
 			return
 		}
 
@@ -989,11 +1044,11 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		if storageType == "local" {
 			localPath := strings.TrimSpace(r.FormValue("storage.local_path"))
 			if localPath != "" && !filepath.IsAbs(localPath) {
-				http.Redirect(w, r, "/admin/settings?storage_error=local+path+must+be+absolute", http.StatusSeeOther)
+				http.Redirect(w, r, "/admin/settings/storage?storage_error=local+path+must+be+absolute", http.StatusSeeOther)
 				return
 			}
 			if pathContainsDB(localPath, cfg.DB.Path) {
-				http.Redirect(w, r, "/admin/settings?storage_error="+url.QueryEscape("the storage folder must not contain the database ("+cfg.DB.Path+")"), http.StatusSeeOther)
+				http.Redirect(w, r, "/admin/settings/storage?storage_error="+url.QueryEscape("the storage folder must not contain the database ("+cfg.DB.Path+")"), http.StatusSeeOther)
 				return
 			}
 		}
@@ -1014,14 +1069,14 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		// stored credential.
 		newPassword := r.FormValue("storage.smb_password")
 		if newPassword == "" && storageType == "smb" && !mayReuseSMBPassword(stores.Settings.Get(), r) {
-			http.Redirect(w, r, "/admin/settings?storage_error="+url.QueryEscape(msgSMBPasswordAgain), http.StatusSeeOther)
+			http.Redirect(w, r, "/admin/settings/storage?storage_error="+url.QueryEscape(msgSMBPasswordAgain), http.StatusSeeOther)
 			return
 		}
 		if newPassword != "" {
 			encrypted, err := storage.Encrypt(cfg.Admin.Token, newPassword)
 			if err != nil {
 				slog.Error("admin storage: encrypt password", "error", err)
-				http.Redirect(w, r, "/admin/settings?storage_error=encrypt+failed", http.StatusSeeOther)
+				http.Redirect(w, r, "/admin/settings/storage?storage_error=encrypt+failed", http.StatusSeeOther)
 				return
 			}
 			saves["storage.smb_password_encrypted"] = encrypted
@@ -1030,7 +1085,7 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		for key, value := range saves {
 			if err := stores.Settings.Save(key, value); err != nil {
 				slog.Error("admin storage: save setting", "key", key, "error", err)
-				http.Redirect(w, r, "/admin/settings?storage_error=save+failed", http.StatusSeeOther)
+				http.Redirect(w, r, "/admin/settings/storage?storage_error=save+failed", http.StatusSeeOther)
 				return
 			}
 		}
@@ -1040,13 +1095,13 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		newBackend, err := storage.FromSettings(settings, cfg, cfg.Admin.Token)
 		if err != nil {
 			slog.Error("admin storage: reload backend", "error", err)
-			http.Redirect(w, r, "/admin/settings?storage_error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+			http.Redirect(w, r, "/admin/settings/storage?storage_error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 			return
 		}
 		mgr.Swap(newBackend)
 
 		slog.Info("admin: storage settings saved", "type", storageType)
-		http.Redirect(w, r, "/admin/settings?storage_saved=1", http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/settings/storage?storage_saved=1", http.StatusSeeOther)
 	}
 }
 

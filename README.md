@@ -132,7 +132,7 @@ volumes:
   - /path/to/your/storage:/data/storage
 ```
 
-SMB/CIFS storage can be configured directly in the admin panel under Settings → Storage, without editing any config files or restarting the container.
+SMB/CIFS storage can be configured directly in the admin panel under Configure → Storage, without editing any config files or restarting the container.
 
 ---
 

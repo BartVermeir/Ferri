@@ -183,7 +183,7 @@ func TestSendPage_CarriesLimits(t *testing.T) {
 	rr := httptest.NewRecorder()
 	SendPage(newTestConfig(), stores).ServeHTTP(rr, req)
 	body := rr.Body.String()
-	for _, want := range []string{`data-max-files="5000"`, `data-max-bytes="644245094400"`, `id="folder-btn"`, `name="sender_name" autocomplete="name" required`} {
+	for _, want := range []string{`data-max-files="5000"`, `data-max-bytes="644245094400"`, `id="folder-btn"`, `name="sender_name" autocomplete="name">`, `name="link_count" value="1" min="1" max="50"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("send page lacks %s", want)
 		}
@@ -227,5 +227,102 @@ func TestIsValidEmail_RejectsControlCharacters(t *testing.T) {
 	}
 	if !isValidEmail("alice@example.com") {
 		t.Error("a normal address is rejected")
+	}
+}
+
+// The name is optional on both forms; the mails then open with "Hello,".
+func TestCreate_NameIsOptional(t *testing.T) {
+	stores := newTestStores(t)
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	for k, v := range map[string]string{
+		"sender_email": "alice@example.com", "recipients": "bob@example.com",
+		"expiry_hours": "24", "files": `[{"name":"a","size":1}]`,
+	} {
+		w.WriteField(k, v)
+	}
+	w.Close()
+	req := httptest.NewRequest(http.MethodPost, "/send", &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	rr := httptest.NewRecorder()
+	SendCreate(newTestConfig(), stores).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("send without a name: status %d, body %s", rr.Code, rr.Body.String())
+	}
+
+	rr = postRequestForm(t, stores, url.Values{"requester_email": {"alice@example.com"}, "title": {"P"}, "expiry_hours": {"24"}})
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "/ul/") {
+		t.Fatalf("request without a name: status %d", rr.Code)
+	}
+}
+
+func postRequestForm(t *testing.T, stores *store.Stores, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/request", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	RequestCreate(newTestConfig(), stores).ServeHTTP(rr, req)
+	return rr
+}
+
+// "Number of links" creates that many ordinary requests with the same
+// settings, numbered titles and their own tokens, all on one result page.
+func TestRequestCreate_MultipleLinks(t *testing.T) {
+	d := newTestDB(t)
+	stores := store.New(d)
+	rr := postRequestForm(t, stores, url.Values{
+		"requester_email": {"alice@example.com"}, "title": {"Photos"}, "expiry_hours": {"24"},
+		"password": {"secret"}, "link_count": {"3"},
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d", rr.Code)
+	}
+	body := rr.Body.String()
+
+	rows, err := d.Query(`SELECT title, upload_token, view_token, manage_token, password_hash, expires_at FROM upload_requests ORDER BY title`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var titles []string
+	var expiry int64
+	seen := map[string]bool{}
+	for rows.Next() {
+		var title, up, view, manage, hash string
+		var exp int64
+		if err := rows.Scan(&title, &up, &view, &manage, &hash, &exp); err != nil {
+			t.Fatal(err)
+		}
+		titles = append(titles, title)
+		if expiry == 0 {
+			expiry = exp
+		}
+		if exp != expiry || hash == "" {
+			t.Errorf("%s: expiry %d (first %d), password hash %q: every link gets the same settings", title, exp, expiry, hash)
+		}
+		for _, tok := range []string{up, view, manage} {
+			if seen[tok] {
+				t.Errorf("%s: token shared with another link", title)
+			}
+			seen[tok] = true
+		}
+		for _, link := range []string{"/ul/" + up + `"`, "/ul/" + view + "/files", "/manage/" + manage} {
+			if !strings.Contains(body, link) {
+				t.Errorf("%s: result page lacks %s", title, link)
+			}
+		}
+	}
+	if strings.Join(titles, ",") != "Photos #1,Photos #2,Photos #3" {
+		t.Fatalf("titles = %v", titles)
+	}
+	if !strings.Contains(body, "3 upload links created") || !strings.Contains(body, "data-copy-all") {
+		t.Error("result page lacks the heading or Copy all links")
+	}
+
+	for _, n := range []string{"0", "51", "x"} {
+		rr := postRequestForm(t, stores, url.Values{"requester_email": {"alice@example.com"}, "title": {"P"}, "expiry_hours": {"24"}, "link_count": {n}})
+		if !strings.Contains(rr.Body.String(), "Number of links must be between 1 and 50") {
+			t.Errorf("link_count %s accepted", n)
+		}
 	}
 }

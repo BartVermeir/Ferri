@@ -333,10 +333,10 @@ func TestAdminSettings_AlertRecipients(t *testing.T) {
 	cfg, stores := newTestConfig(), newTestStores(t)
 	r := chi.NewRouter()
 	r.Use(appMiddleware.InjectSettings(stores.Settings))
-	r.Post("/admin/settings", AdminSettingsSave(cfg, stores))
+	r.Post("/admin/settings/mail", AdminMailSettingsSave(cfg, stores))
 	post := func(v string) *httptest.ResponseRecorder {
-		form := url.Values{"alerts.recipients": {v}, "branding.primary_color": {"#000000"}, "branding.accent_color": {"#f0c800"}, "branding.bg_color": {"#ffffff"}}
-		req := httptest.NewRequest(http.MethodPost, "/admin/settings", strings.NewReader(form.Encode()))
+		form := url.Values{"alerts.recipients": {v}}
+		req := httptest.NewRequest(http.MethodPost, "/admin/settings/mail", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		rr := httptest.NewRecorder()
 		r.ServeHTTP(rr, req)

@@ -1,0 +1,62 @@
+{{define "admin/settings_mail.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>Mail</h1></div>
+    {{if .Saved}}<div class="alert alert-success">Settings saved.</div>{{end}}
+    {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+    <form method="POST" action="/admin/settings/mail">
+      <div class="card">
+        <div class="card-header">Email</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div>
+              <label>From name</label>
+              <input type="text" name="mail.from_name" value="{{.Settings.MailFromName}}" placeholder="File transfer">
+            </div>
+            <div>
+              <label>From address</label>
+              <input type="email" name="mail.from_address" value="{{.Settings.MailFromAddress}}">
+            </div>
+          </div>
+          <div style="margin-top:16px; display:flex; flex-direction:column; gap:12px;">
+            <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+              <input type="checkbox" name="notify.on_download" value="1" {{if .Settings.NotifyOnDownload}}checked{{end}}>
+              Notify sender when files are downloaded
+            </label>
+            <label style="display:flex; align-items:center; gap:8px; margin:0; cursor:pointer;">
+              <input type="checkbox" name="notify.expiry_summary" value="1" {{if .Settings.ExpirySummary}}checked{{end}}>
+              Send expiry summary emails
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">Alerts</div>
+        <div class="card-body">
+          <label>Alert recipients <span class="label-hint">(one address per line, or separated by commas)</span></label>
+          <textarea name="alerts.recipients" rows="2" placeholder="it@example.com">{{.Settings.AlertRecipients}}</textarea>
+          <p style="font-size:13px;color:#888;margin:8px 0 0;">
+            These addresses get an email when the storage is almost full (less than twice <code>limits.min_free_bytes</code> free),
+            cannot be reached for 30 minutes, when deleted files stay on the storage for a day, or when mails fail for good.
+            At most one email per kind per 24 hours. Leave empty for no alerts. Needs a from address above.
+          </p>
+        </div>
+      </div>
+      <div style="margin-top:8px;">
+        <button type="submit" class="btn btn-primary">Save mail settings</button>
+      </div>
+    </form>
+  </main>
+</div>
+{{template "primary-text-script" .}}
+</body>
+</html>{{end}}

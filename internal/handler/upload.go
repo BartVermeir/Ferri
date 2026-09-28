@@ -342,7 +342,7 @@ func (u uploadCompleteMail) note() string {
 
 func buildUploadCompleteHTML(u uploadCompleteMail) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(u.Request.RequesterName))
+	b.WriteString(mail.HelloHTML(u.Request.RequesterName))
 	fmt.Fprintf(&b, `<p style="margin:0 0 20px;">%s uploaded for %s. You can view and download them now.</p>`,
 		html.EscapeString(u.filesWere()), html.EscapeString(u.requestLabel()))
 	b.WriteString(mail.QuoteHTML(u.Request.Message))
@@ -358,8 +358,9 @@ func buildUploadCompleteHTML(u uploadCompleteMail) string {
 
 func buildUploadCompleteText(u uploadCompleteMail) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Hello %s,\n\n%s uploaded for %s. You can view and download them now.\n\n",
-		u.Request.RequesterName, u.filesWere(), u.requestLabel())
+	b.WriteString(mail.HelloText(u.Request.RequesterName))
+	fmt.Fprintf(&b, "%s uploaded for %s. You can view and download them now.\n\n",
+		u.filesWere(), u.requestLabel())
 	if u.Request.Message != "" {
 		b.WriteString(u.Request.Message + "\n\n")
 	}

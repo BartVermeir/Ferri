@@ -65,7 +65,8 @@ func TestRouter_Routes(t *testing.T) {
 		"GET /admin/requests/{id}/files", "GET /admin/requests/{id}/file/{fileID}",
 		"POST /admin/transfers/{id}/delete", "POST /admin/requests/{id}/delete", "POST /admin/delete",
 		"GET /admin/mail", "POST /admin/mail/{id}/retry", "POST /admin/mail/{id}/delete",
-		"GET /admin/settings", "POST /admin/settings", "POST /admin/settings/logo", "POST /admin/settings/logo/delete",
+		"GET /admin/settings", "GET /admin/settings/branding", "POST /admin/settings/branding",
+		"GET /admin/settings/mail", "POST /admin/settings/mail", "GET /admin/settings/storage", "POST /admin/settings/logo", "POST /admin/settings/logo/delete",
 		"POST /admin/settings/storage", "POST /admin/settings/storage/test", "POST /admin/logout",
 	}
 	got := map[string]bool{}

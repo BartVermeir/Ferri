@@ -747,3 +747,85 @@ func TestAdminDashboard_ExpiredNotCleanedUp(t *testing.T) {
 		t.Errorf("unknown request: status %d, want 404", rr.Code)
 	}
 }
+
+// Each settings page saves only its own fields. The Branding form has no mail
+// checkboxes, so saving it must leave them as they are: an absent checkbox
+// reads as "off" on the Mail page only.
+func TestAdminSettings_PagesSaveOnlyTheirOwnFields(t *testing.T) {
+	cfg, stores := newTestConfig(), newTestStores(t)
+	for _, k := range []string{"mail.notify_on_download", "mail.expiry_summary"} {
+		if err := stores.Settings.Save(k, "true"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := chi.NewRouter()
+	r.Use(appMiddleware.InjectSettings(stores.Settings))
+	r.Post("/admin/settings/branding", AdminBrandingSave(cfg, stores))
+	r.Post("/admin/settings/mail", AdminMailSettingsSave(cfg, stores))
+	post := func(path string, form url.Values) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		return rr
+	}
+
+	rr := post("/admin/settings/branding", url.Values{"branding.company_name": {"Example"}, "branding.primary_color": {"#000000"}})
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/admin/settings/branding?saved=1" {
+		t.Fatalf("branding save: status %d, location %q, body %s", rr.Code, rr.Header().Get("Location"), rr.Body.String())
+	}
+	s := stores.Settings.Get()
+	if s.CompanyName != "Example" || !s.NotifyOnDownload || !s.ExpirySummary {
+		t.Fatalf("after branding save: company %q, notify %v, expiry %v; the mail checkboxes must stay on", s.CompanyName, s.NotifyOnDownload, s.ExpirySummary)
+	}
+
+	rr = post("/admin/settings/mail", url.Values{"mail.from_address": {"ferri@example.com"}, "notify.on_download": {"1"}})
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/admin/settings/mail?saved=1" {
+		t.Fatalf("mail save: status %d, location %q", rr.Code, rr.Header().Get("Location"))
+	}
+	s = stores.Settings.Get()
+	if !s.NotifyOnDownload || s.ExpirySummary || s.CompanyName != "Example" {
+		t.Fatalf("after mail save: notify %v, expiry %v, company %q", s.NotifyOnDownload, s.ExpirySummary, s.CompanyName)
+	}
+}
+
+// The three settings pages render, each marked in the menu, and
+// /admin/settings goes to the first of them.
+func TestAdminSettings_PagesRender(t *testing.T) {
+	cfg, stores := newTestConfig(), newTestStores(t)
+	r := chi.NewRouter()
+	r.Use(appMiddleware.InjectSettings(stores.Settings))
+	r.Get("/admin/settings", AdminSettings())
+	r.Get("/admin/settings/branding", AdminBrandingSettings(cfg))
+	r.Get("/admin/settings/mail", AdminMailSettings(cfg))
+	r.Get("/admin/settings/storage", AdminStorageSettings(cfg))
+	get := func(path string) *httptest.ResponseRecorder {
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		return rr
+	}
+
+	if rr := get("/admin/settings"); rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/admin/settings/branding" {
+		t.Fatalf("/admin/settings: status %d, location %q", rr.Code, rr.Header().Get("Location"))
+	}
+	for path, want := range map[string]string{
+		"/admin/settings/branding": `action="/admin/settings/branding"`,
+		"/admin/settings/mail":     `name="alerts.recipients"`,
+		"/admin/settings/storage":  `action="/admin/orphans/clean"`,
+	} {
+		rr := get(path)
+		body := rr.Body.String()
+		if rr.Code != http.StatusOK || !strings.Contains(body, want) {
+			t.Errorf("%s: status %d, lacks %s", path, rr.Code, want)
+		}
+		if !strings.Contains(body, `<a href="`+path+`" class="active">`) {
+			t.Errorf("%s: not marked active in the menu", path)
+		}
+	}
+	if body := get("/admin/settings/branding").Body.String(); strings.Contains(body, `name="notify.on_download"`) {
+		t.Error("the branding page carries the mail checkboxes")
+	}
+	if body := get("/admin/settings/storage?orphans=3").Body.String(); !strings.Contains(body, "3 file(s) removed") {
+		t.Error("storage page does not report the orphan cleanup")
+	}
+}

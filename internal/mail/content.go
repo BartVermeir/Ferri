@@ -180,6 +180,25 @@ func ManageLinkText(url, label string) string {
 
 const manageNetworkNote = "This page only opens from the internal network."
 
+// HelloHTML is the opening line of a mail: "Hello Alice," or, when the name
+// was left empty (it is optional on the forms), "Hello,".
+func HelloHTML(name string) string {
+	return `<p style="margin:0 0 16px;">` + html.EscapeString(helloLine(name)) + `</p>`
+}
+
+// HelloText is the plain-text counterpart of HelloHTML, with the blank line
+// after it.
+func HelloText(name string) string {
+	return helloLine(name) + "\n\n"
+}
+
+func helloLine(name string) string {
+	if name == "" {
+		return "Hello,"
+	}
+	return "Hello " + name + ","
+}
+
 // QuoteHTML renders a user-written message as a quoted block.
 func QuoteHTML(message string) string {
 	if message == "" {

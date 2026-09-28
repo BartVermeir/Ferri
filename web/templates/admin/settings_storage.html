@@ -1,0 +1,113 @@
+{{define "admin/settings_storage.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>Storage</h1></div>
+    <form method="POST" action="/admin/settings/storage" id="storage-form">
+      <div class="card">
+        <div class="card-header">Backend</div>
+        <div class="card-body">
+
+          <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:20px;">
+            <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;">
+              <input type="radio" name="storage.type" value="local"
+                {{if or (eq .Settings.StorageType "") (eq .Settings.StorageType "local")}}checked{{end}}>
+              <span><strong>Local filesystem</strong> — files stored on a folder inside this server/VM</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;margin:0;cursor:pointer;">
+              <input type="radio" name="storage.type" value="smb"
+                {{if eq .Settings.StorageType "smb"}}checked{{end}}>
+              <span><strong>SMB / CIFS share</strong> — files stored directly on a network share (no OS mount needed)</span>
+            </label>
+          </div>
+
+          <div id="local-fields" style="{{if eq .Settings.StorageType "smb"}}display:none;{{end}}border-top:1px solid #e8e8e4;padding-top:20px;">
+            <p style="font-size:13px;color:#888;margin:0 0 16px;">
+              Absolute folder path on this server's filesystem. Leave blank to use the default from config.yaml
+              (<code>{{.Cfg.Storage.Path}}</code>). The folder is created automatically if it does not exist yet.
+            </p>
+            <label>Storage folder <span class="label-hint">(absolute path)</span></label>
+            <input type="text" name="storage.local_path" value="{{.Settings.LocalPath}}" placeholder="{{.Cfg.Storage.Path}}">
+
+            <div style="margin-top:16px;">
+              <button type="button" class="btn btn-secondary btn-sm test-connection-btn">Test connection</button>
+              <span id="local-test-result" style="margin-left:12px;font-size:13px;"></span>
+            </div>
+          </div>
+
+          <div id="smb-fields" style="{{if ne .Settings.StorageType "smb"}}display:none;{{end}}border-top:1px solid #e8e8e4;padding-top:20px;">
+            <p style="font-size:13px;color:#888;margin:0 0 16px;">
+              Connect directly to an SMB share (auto-negotiates SMB2 through SMB 3.1.1, e.g. Windows Server, Samba, Synology, TrueNAS).
+              Credentials are encrypted at rest using your admin token as the key.
+            </p>
+            <div class="form-row">
+              <div>
+                <label>Host <span style="color:#c00;">*</span></label>
+                <input type="text" name="storage.smb_host" value="{{.Settings.SMBHost}}" placeholder="nas.example.com or 192.168.1.50">
+              </div>
+              <div>
+                <label>Share name <span style="color:#c00;">*</span></label>
+                <input type="text" name="storage.smb_share" value="{{.Settings.SMBShare}}" placeholder="files">
+              </div>
+            </div>
+            <label>Base path <span class="label-hint">(folder within the share, optional)</span></label>
+            <input type="text" name="storage.smb_base_path" value="{{.Settings.SMBBasePath}}" placeholder="ferri  or  uploads/ferri">
+            <div class="form-row">
+              <div>
+                <label>Username</label>
+                <input type="text" name="storage.smb_username" value="{{.Settings.SMBUsername}}" placeholder="ferri-user" autocomplete="off">
+              </div>
+              <div>
+                <label>Domain <span class="label-hint">(optional)</span></label>
+                <input type="text" name="storage.smb_domain" value="{{.Settings.SMBDomain}}" placeholder="WORKGROUP">
+              </div>
+            </div>
+            <label>Password <span class="label-hint">(leave blank to keep existing)</span></label>
+            <input type="password" name="storage.smb_password" placeholder="{{if .Settings.SMBPasswordEncrypted}}••••••••••••{{else}}enter password{{end}}" autocomplete="new-password">
+
+            <div style="margin-top:16px;">
+              <button type="button" class="btn btn-secondary btn-sm test-connection-btn">Test connection</button>
+              <span id="test-result" style="margin-left:12px;font-size:13px;"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:8px;display:flex;align-items:center;gap:12px;">
+        <button type="submit" class="btn btn-primary">Save storage settings</button>
+        {{if .StorageSaved}}<span style="color:green;font-size:13px;">✓ Saved — new backend is now active.</span>{{end}}
+        {{if .StorageError}}<span style="color:#c00;font-size:13px;">Error: {{.StorageError}}</span>{{end}}
+      </div>
+    </form>
+
+    {{if ne .Settings.StorageType "smb"}}
+    <div class="card" style="margin-top:32px;">
+      <div class="card-header">Orphan files</div>
+      <div class="card-body">
+        {{if .OrphansRan}}<div class="alert alert-success">Orphan cleanup complete — {{.OrphansDeleted}} file(s) removed from storage.</div>{{end}}
+        <p style="font-size:13px;color:#888;margin:0 0 12px;">
+          Uploads in the storage folder that no transfer or request refers to any more. Only files named like an upload are touched.
+        </p>
+        <form method="POST" action="/admin/orphans/clean" style="margin:0;">
+          <button type="submit" class="btn btn-secondary btn-sm"
+            data-confirm="Scan local storage for orphaned files (not referenced in the database) and delete them?">
+            Clean orphan files
+          </button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+  </main>
+</div>
+<script src="/static/admin-settings.js" defer></script>
+{{template "primary-text-script" .}}
+</body>
+</html>{{end}}

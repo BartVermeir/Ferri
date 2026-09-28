@@ -712,7 +712,7 @@ func buildExpirySummaryHTML(e expirySummary) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(e.Transfer.SenderName))
+	b.WriteString(mail.HelloHTML(e.Transfer.SenderName))
 	fmt.Fprintf(&b, `<p style="margin:0 0 20px;">%s Here is who downloaded what.</p>`, html.EscapeString(e.intro()))
 	b.WriteString(`<p style="margin:0 0 10px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.04em;">Downloads</p>`)
 	b.WriteString(rows.String())
@@ -727,7 +727,8 @@ func buildExpirySummaryHTML(e expirySummary) string {
 
 func buildExpirySummaryText(e expirySummary) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Hello %s,\n\n%s Here is who downloaded what.\n\n", e.Transfer.SenderName, e.intro())
+	b.WriteString(mail.HelloText(e.Transfer.SenderName))
+	fmt.Fprintf(&b, "%s Here is who downloaded what.\n\n", e.intro())
 	for _, rs := range e.recipients() {
 		fmt.Fprintf(&b, "%s: %s\n", rs.Label, rs.Status)
 		for _, l := range rs.Lines {

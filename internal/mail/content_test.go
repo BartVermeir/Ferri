@@ -47,3 +47,19 @@ func TestContrastText(t *testing.T) {
 		t.Fatalf("dark background: got %s", got)
 	}
 }
+
+// The name is optional on the forms: without one a mail opens with "Hello,".
+func TestHello(t *testing.T) {
+	if got := HelloText(""); got != "Hello,\n\n" {
+		t.Errorf("HelloText(\"\") = %q", got)
+	}
+	if got := HelloText("Alice"); got != "Hello Alice,\n\n" {
+		t.Errorf("HelloText(Alice) = %q", got)
+	}
+	if got := HelloHTML("<b>"); !strings.Contains(got, ">Hello &lt;b&gt;,</p>") {
+		t.Errorf("HelloHTML does not escape the name: %s", got)
+	}
+	if got := HelloHTML(""); !strings.Contains(got, ">Hello,</p>") {
+		t.Errorf("HelloHTML(\"\") = %s", got)
+	}
+}

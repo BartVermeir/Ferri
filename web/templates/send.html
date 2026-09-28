@@ -54,8 +54,8 @@
         <div class="mode-panel" id="panel-send">
           {{if .WelcomeMessage}}<p class="text-muted" style="margin-bottom:16px;">{{.WelcomeMessage}}</p>{{end}}
           <form id="send-form" data-max-files="{{.MaxFiles}}" data-max-bytes="{{.MaxUploadBytes}}">
-            <label>Your name</label>
-            <input type="text" name="sender_name" autocomplete="name" required>
+            <label>Your name <span class="text-muted">(optional)</span></label>
+            <input type="text" name="sender_name" autocomplete="name">
             <label>Your email</label>
             <input type="email" name="sender_email" autocomplete="email" required>
             <label>Title</label>
@@ -104,8 +104,8 @@
         <div class="mode-panel" id="panel-request">
           {{if .Error}}<div class="alert alert-error" style="margin-bottom:16px;">{{.Error}}</div>{{end}}
           <form method="POST" action="/request">
-            <label>Your name</label>
-            <input type="text" name="requester_name" autocomplete="name" required>
+            <label>Your name <span class="text-muted">(optional)</span></label>
+            <input type="text" name="requester_name" autocomplete="name">
             <label>Your email</label>
             <input type="email" name="requester_email" autocomplete="email" required>
             <label>Title</label>
@@ -119,6 +119,9 @@
               {{end}}
             </select>
             <p class="text-muted" style="font-size:13px; margin-top:4px;">This is a single timer — it covers both the upload window and the time to download the received files.</p>
+            <label>Number of links</label>
+            <input type="number" name="link_count" value="1" min="1" max="{{.MaxRequestLinks}}" required>
+            <p class="text-muted" style="font-size:13px; margin-top:4px;">One link per person you ask. More than one: each gets the title with #1, #2, … and its own mail when files come in.</p>
             <label>Password <span class="text-muted">(optional)</span></label>
             <input type="password" name="password" autocomplete="new-password">
             <div class="mt-24">

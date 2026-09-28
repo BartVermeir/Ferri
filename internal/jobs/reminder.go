@@ -105,7 +105,7 @@ func (m requestReminder) note() string {
 
 func buildRequestReminderHTML(m requestReminder) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(m.Request.RequesterName))
+	b.WriteString(mail.HelloHTML(m.Request.RequesterName))
 	fmt.Fprintf(&b, `<p style="margin:0 0 20px;">%s</p>`, html.EscapeString(m.intro()))
 	b.WriteString(`<p style="margin:0 0 6px;font-size:13px;color:#555;">If you still need the files, send this link again to the person you asked:</p>`)
 	fmt.Fprintf(&b, `<p style="margin:0 0 20px;padding:10px 12px;background:#f7f7f5;border-radius:6px;font-size:13px;word-break:break-all;"><a href="%s" style="color:#333;">%s</a></p>`,
@@ -120,7 +120,7 @@ func buildRequestReminderHTML(m requestReminder) string {
 
 func buildRequestReminderText(m requestReminder) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Hello %s,\n\n%s\n\n", m.Request.RequesterName, m.intro())
+	b.WriteString(mail.HelloText(m.Request.RequesterName) + m.intro() + "\n\n")
 	fmt.Fprintf(&b, "If you still need the files, send this link again to the person you asked:\n%s\n\n", m.uploadURL())
 	if u := m.manageURL(); u != "" {
 		b.WriteString(reminderManageWhat + "\n" + mail.ManageLinkText(u, reminderManageLabel) + "\n")

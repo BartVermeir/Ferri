@@ -1,9 +1,17 @@
 /**
- * admin-settings.js — storage backend toggle + test-connection for admin/settings.html
+ * admin-settings.js — storage backend toggle + test-connection for admin/settings_storage.html,
+ * and the confirm() gate for the orphan cleanup (data-confirm attribute).
  */
 
 (function () {
   'use strict';
+
+  document.addEventListener('submit', function (e) {
+    var btn = e.submitter;
+    if (btn && btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) {
+      e.preventDefault();
+    }
+  });
 
   function toggleSMB(val) {
     document.getElementById('smb-fields').style.display = val === 'smb' ? 'block' : 'none';

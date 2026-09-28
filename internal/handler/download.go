@@ -482,7 +482,7 @@ func buildDownloadNotifyHTML(n downloadNoticeData) string {
 	// Recipient email, filename (client TUS metadata) and title are all
 	// attacker-influenced, so they MUST be HTML-escaped before interpolation.
 	var b strings.Builder
-	fmt.Fprintf(&b, `<p style="margin:0 0 16px;">Hello %s,</p>`, html.EscapeString(n.Transfer.SenderName))
+	b.WriteString(mail.HelloHTML(n.Transfer.SenderName))
 	fmt.Fprintf(&b, `<p style="margin:0 0 20px;"><strong>%s</strong> downloaded <strong>%s</strong> from %s.</p>`,
 		html.EscapeString(n.who()), html.EscapeString(n.What), html.EscapeString(transferLabel(n.Transfer)))
 	fmt.Fprintf(&b, `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px;font-size:13px;color:#555;">
@@ -498,8 +498,8 @@ func buildDownloadNotifyHTML(n downloadNoticeData) string {
 }
 
 func buildDownloadNotifyText(n downloadNoticeData) string {
-	return fmt.Sprintf("Hello %s,\n\n%s downloaded %s from %s.\n\nDownloaded:      %s\nAvailable until: %s\n\n%s\n\n--\nYou are receiving this email because download notifications are switched on for transfers you send with %s.\n",
-		n.Transfer.SenderName, n.who(), n.What, transferLabel(n.Transfer),
+	return mail.HelloText(n.Transfer.SenderName) + fmt.Sprintf("%s downloaded %s from %s.\n\nDownloaded:      %s\nAvailable until: %s\n\n%s\n\n--\nYou are receiving this email because download notifications are switched on for transfers you send with %s.\n",
+		n.who(), n.What, transferLabel(n.Transfer),
 		mail.FormatDate(n.At, n.Loc), mail.FormatDate(n.Transfer.ExpiresAt, n.Loc),
 		n.laterNote(), mail.CompanyName(n.Settings))
 }
