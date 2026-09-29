@@ -80,33 +80,7 @@
           <div class="stat-sub">{{if .Now.IdleConns}}{{.Now.IdleConns}} idle (keep-alive){{else}}none idle{{end}}</div>
         </div>
       </div>
-      {{if .Now.Rows}}
-      <div class="card">
-        <div class="card-header">
-          In progress
-          <span style="font-size:12px; font-weight:400; color:#aaa; margin-left:8px;">As of this page load; speed = average on the connection</span>
-        </div>
-        <table class="now-table">
-          <thead>
-            <tr><th></th><th>Title</th><th>File</th><th>Who</th><th>From</th><th>Running</th><th>Progress</th><th>Speed</th></tr>
-          </thead>
-          <tbody>
-            {{range .Now.Rows}}
-            <tr>
-              <td style="white-space:nowrap;">{{if eq .Kind "upload"}}↑ upload{{else}}↓ download{{end}}{{if .Item}} <span class="type-badge type-{{.Item}}">{{.Item}}</span>{{end}}</td>
-              <td>{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
-              <td style="word-break:break-all;">{{.File}}</td>
-              <td>{{.Who}}</td>
-              <td class="num">{{.IP}}</td>
-              <td class="num">{{.Running}}</td>
-              <td class="num">{{.Progress}}</td>
-              <td class="num">{{.Rate}}</td>
-            </tr>
-            {{end}}
-          </tbody>
-        </table>
-      </div>
-      {{end}}
+      {{template "now-table" .Now}}
     </div>
 
     {{/* ── Stats ── */}}
@@ -339,3 +313,35 @@
   {{template "primary-text-script" .}}
 </body>
 </html>{{end}}
+
+{{/* The "In progress" table; also on the transfer history page. Takes an activityView. */}}
+{{define "now-table"}}
+      {{if .Rows}}
+      <div class="card">
+        <div class="card-header">
+          In progress
+          <span style="font-size:12px; font-weight:400; color:#aaa; margin-left:8px;">As of this page load; speed = average on the connection, remaining = a guess at that speed</span>
+        </div>
+        <table class="now-table">
+          <thead>
+            <tr><th></th><th>Title</th><th>File</th><th>Who</th><th>From</th><th>Running</th><th>Progress</th><th>Speed</th><th>Est. remaining</th></tr>
+          </thead>
+          <tbody>
+            {{range .Rows}}
+            <tr>
+              <td style="white-space:nowrap;">{{if eq .Kind "upload"}}↑ upload{{else}}↓ download{{end}}{{if .Item}} <span class="type-badge type-{{.Item}}">{{.Item}}</span>{{end}}</td>
+              <td>{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
+              <td style="word-break:break-all;">{{.File}}</td>
+              <td>{{.Who}}</td>
+              <td class="num">{{.IP}}</td>
+              <td class="num">{{.Running}}</td>
+              <td class="num">{{.Progress}}</td>
+              <td class="num">{{.Rate}}</td>
+              <td class="num">{{.Remaining}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{end}}
+{{end}}

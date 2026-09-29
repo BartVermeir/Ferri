@@ -379,8 +379,8 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 // delete and the sender's "Delete" on the manage page (bySender) both go
 // through here. First the sender's "who downloaded what" summary (the file
 // list is empty afterwards; a failure must not stop the delete), then the
-// files off storage. A failed removal keeps the file's tus_upload_id, so the
-// cleanup job retries it on its next run.
+// files off storage, then the rows. A failed removal keeps the file's
+// tus_upload_id, so the cleanup job retries it on its next run.
 func deleteTransferNow(stores *store.Stores, mgr *storage.Manager, summaries deletionSummarizer, id string, bySender bool) error {
 	if sent, err := summaries.EnqueueDeletionSummary(id, bySender); err != nil {
 		slog.Error("delete: enqueue deletion summary", "id", id, "error", err)
@@ -406,6 +406,11 @@ func deleteTransferNow(stores *store.Stores, mgr *storage.Manager, summaries del
 	if err := stores.Transfers.SoftDelete(id); err != nil {
 		slog.Error("delete: soft delete transfer", "id", id, "error", err)
 		return err
+	}
+	// Out of the database at once, unless a file is left on storage: the
+	// cleanup job needs the row to retry, and purges it after that.
+	if _, err := stores.Transfers.PurgeDeleted(); err != nil {
+		slog.Error("delete: purge transfer", "id", id, "error", err)
 	}
 	return nil
 }
@@ -599,6 +604,9 @@ func deleteRequestNow(stores *store.Stores, mgr *storage.Manager, id string) err
 	if err := stores.Requests.SoftDelete(id); err != nil {
 		slog.Error("delete: mark request deleted", "id", id, "error", err)
 		return err
+	}
+	if _, err := stores.Requests.PurgeDeleted(); err != nil {
+		slog.Error("delete: purge request", "id", id, "error", err)
 	}
 	return nil
 }

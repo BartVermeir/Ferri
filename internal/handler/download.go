@@ -254,7 +254,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 			subject := fmt.Sprintf("Downloaded: %s", targetFile.OriginalName)
 			bodyHTML := buildDownloadNotifyHTML(n)
 			bodyText := buildDownloadNotifyText(n)
-			if err := stores.Mail.Enqueue(nil, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
+			if err := stores.Mail.Enqueue(nil, store.MailAbout{TransferID: transfer.ID}, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
 				logDownloadError("enqueue download notification", err, fileID)
 			}
 		}
@@ -555,7 +555,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 			subject := fmt.Sprintf("Downloaded: all files of %s", transferLabel(transfer))
 			bodyHTML := buildDownloadNotifyHTML(n)
 			bodyText := buildDownloadNotifyText(n)
-			if err := stores.Mail.Enqueue(nil, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
+			if err := stores.Mail.Enqueue(nil, store.MailAbout{TransferID: transfer.ID}, transfer.SenderEmail, subject, bodyHTML, bodyText); err != nil {
 				slog.Error("zip: enqueue download notification", "error", err)
 			}
 		}

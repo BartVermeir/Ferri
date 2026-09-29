@@ -364,16 +364,15 @@ func (s *RequestStore) SoftDelete(requestID string) error {
 
 // PurgeDeleted removes deleted requests from the database, as
 // TransferStore.PurgeDeleted does for transfers.
-func (s *RequestStore) PurgeDeleted(age time.Duration) (int64, error) {
+func (s *RequestStore) PurgeDeleted() (int64, error) {
 	res, err := s.db.Exec(`
 		DELETE FROM upload_requests
 		WHERE status = 'deleted'
-		  AND COALESCE(deleted_at, expires_at) < unixepoch() - ?
 		  AND NOT EXISTS (
 		        SELECT 1 FROM upload_request_files f
 		        WHERE f.upload_request_id = upload_requests.id
 		          AND f.tus_upload_id IS NOT NULL AND f.tus_upload_id != ''
-		      )`, int64(age.Seconds()))
+		      )`)
 	if err != nil {
 		return 0, err
 	}

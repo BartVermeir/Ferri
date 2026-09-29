@@ -46,7 +46,7 @@ func (s *Scheduler) sendRequestReminders() {
 			continue
 		}
 		m := requestReminder{Settings: settings, BaseURL: s.cfg.Server.BaseURL, Loc: s.cfg.Server.Location, Request: r}
-		if err := s.stores.Mail.Enqueue(nil, r.RequesterEmail, m.subject(), buildRequestReminderHTML(m), buildRequestReminderText(m)); err != nil {
+		if err := s.stores.Mail.Enqueue(nil, store.MailAbout{RequestID: r.ID}, r.RequesterEmail, m.subject(), buildRequestReminderHTML(m), buildRequestReminderText(m)); err != nil {
 			slog.Error("reminder job: enqueue", "request", r.ID, "error", err)
 			continue
 		}

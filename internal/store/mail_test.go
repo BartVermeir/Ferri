@@ -50,7 +50,7 @@ func fetchMailItem(t *testing.T, s *MailStore, id string) MailItem {
 
 func mustEnqueue(t *testing.T, s *MailStore) string {
 	t.Helper()
-	if err := s.Enqueue(nil, "bob@example.com", "subject", "<p>hi</p>", "hi"); err != nil {
+	if err := s.Enqueue(nil, MailAbout{}, "bob@example.com", "subject", "<p>hi</p>", "hi"); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	pending, err := s.FetchPending(1)
@@ -171,7 +171,7 @@ func TestListRecent_AllStatuses(t *testing.T) {
 	if err := s.MarkSent(sent); err != nil {
 		t.Fatalf("mark sent: %v", err)
 	}
-	if err := s.Enqueue(nil, "carol@example.com", "second", "<p>hi</p>", "hi"); err != nil {
+	if err := s.Enqueue(nil, MailAbout{}, "carol@example.com", "second", "<p>hi</p>", "hi"); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	items, err := s.ListRecent(10)
@@ -187,5 +187,30 @@ func TestListRecent_AllStatuses(t *testing.T) {
 	}
 	if !statuses["sent"] || !statuses["pending"] {
 		t.Fatalf("statuses = %v, want sent and pending", statuses)
+	}
+}
+
+// Prune removes sent and failed mails after the retention; pending mails
+// and recent ones stay.
+func TestPrune_SentAndFailedAfterRetention(t *testing.T) {
+	s := newMailTestStore(t)
+	for _, subject := range []string{"old sent", "old failed", "old pending", "new sent"} {
+		if err := s.Enqueue(nil, MailAbout{}, "bob@example.com", subject, "<p>hi</p>", "hi"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.db.Exec(`UPDATE mail_queue SET status = 'sent', last_attempt_at = unixepoch() - 2*86400 WHERE subject = 'old sent'`)
+	s.db.Exec(`UPDATE mail_queue SET status = 'failed', last_attempt_at = unixepoch() - 2*86400 WHERE subject = 'old failed'`)
+	s.db.Exec(`UPDATE mail_queue SET created_at = unixepoch() - 2*86400 WHERE subject = 'old pending'`)
+	s.db.Exec(`UPDATE mail_queue SET status = 'sent', last_attempt_at = unixepoch() WHERE subject = 'new sent'`)
+
+	n, err := s.Prune(1)
+	if err != nil || n != 2 {
+		t.Fatalf("pruned %d (%v), want 2", n, err)
+	}
+	var left int
+	s.db.QueryRow(`SELECT COUNT(*) FROM mail_queue WHERE subject IN ('old pending', 'new sent')`).Scan(&left)
+	if left != 2 {
+		t.Fatalf("left %d of the pending and the recent mail, want 2", left)
 	}
 }

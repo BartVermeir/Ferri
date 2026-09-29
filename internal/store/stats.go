@@ -1,7 +1,9 @@
 package store
 
 // Statistics per transfer and request for the admin: the
-// upload from the file rows, the downloads from download_streams.
+// upload from the file rows, the downloads from download_streams. And the
+// transfer history: every download stream and upload session of what is
+// still live, newest first.
 
 import (
 	"database/sql"
@@ -131,6 +133,102 @@ func (s *StatsStore) streams(column, id string) ([]DownloadStream, error) {
 		d.StartedAt = time.Unix(started, 0)
 		d.Duration = time.Duration(ms) * time.Millisecond
 		list = append(list, d)
+	}
+	return list, rows.Err()
+}
+
+// uploadSessionGap: a chunk that starts within this time after the previous
+// chunk of the same file ended, from the same address, continues its
+// session. tus-js-client sends the chunks of a file back to back; a longer
+// gap is a pause or a broken connection, and shows as a new row.
+const uploadSessionGap = 5 * time.Minute
+
+// UploadChunk is one finished TUS PATCH. Exactly one of TransferID and
+// RequestID is set.
+type UploadChunk struct {
+	TransferID  string
+	RequestID   string
+	TUSUploadID string
+	Who         string
+	What        string
+	IP          string
+	Offset      int64 // Upload-Offset
+	Bytes       int64
+	Total       int64 // size of the file
+	StartedAt   time.Time
+	Duration    time.Duration
+}
+
+// RecordUploadChunk adds a chunk to its file's latest upload session, or
+// starts a new session after a pause or from another address. The chunks
+// of one file arrive one after the other, never at the same time.
+func (s *StatsStore) RecordUploadChunk(c UploadChunk) error {
+	end := c.StartedAt.Add(c.Duration)
+	res, err := s.db.Exec(`
+		UPDATE upload_sessions
+		SET bytes_sent = bytes_sent + ?, duration_ms = duration_ms + ?, ended_at = ?
+		WHERE id = (SELECT id FROM upload_sessions WHERE tus_upload_id = ? ORDER BY ended_at DESC, rowid DESC LIMIT 1)
+		  AND COALESCE(ip_address, '') = ?
+		  AND ended_at >= ?`,
+		c.Bytes, c.Duration.Milliseconds(), end.Unix(),
+		c.TUSUploadID, c.IP, c.StartedAt.Add(-uploadSessionGap).Unix(),
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return nil
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO upload_sessions
+		    (id, transfer_id, request_id, tus_upload_id, who, what, ip_address,
+		     offset_bytes, bytes_sent, total_bytes, started_at, ended_at, duration_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		token.Generate(), nullIfEmpty(c.TransferID), nullIfEmpty(c.RequestID), c.TUSUploadID, c.Who, c.What, nullIfEmpty(c.IP),
+		c.Offset, c.Bytes, c.Total, c.StartedAt.Unix(), end.Unix(), c.Duration.Milliseconds(),
+	)
+	return err
+}
+
+// HistoryEntry is one line of the transfer history: a download stream or
+// an upload session. For an upload, Offset is where the session started.
+type HistoryEntry struct {
+	Upload bool
+	Title  string
+	DownloadStream
+}
+
+// History returns every download stream and upload session of transfers
+// and requests that are still live (not expired, not deleted), newest
+// first. What expired or was deleted is gone from the history.
+func (s *StatsStore) History() ([]HistoryEntry, error) {
+	const live = `
+		LEFT JOIN transfers t ON t.id = x.transfer_id
+		LEFT JOIN upload_requests r ON r.id = x.request_id
+		WHERE (t.status IN ('pending', 'active') AND t.expires_at > unixepoch())
+		   OR (r.status IN ('open', 'completed') AND r.expires_at > unixepoch())`
+	const cols = `COALESCE(x.transfer_id, ''), COALESCE(x.request_id, ''), COALESCE(t.title, r.title, ''),
+		x.who, x.what, COALESCE(x.ip_address, ''), x.offset_bytes, x.bytes_sent, x.total_bytes, x.started_at AS started, x.duration_ms`
+	rows, err := s.db.Query(`
+		SELECT 0, ` + cols + ` FROM download_streams x` + live + `
+		UNION ALL
+		SELECT 1, ` + cols + ` FROM upload_sessions x` + live + `
+		ORDER BY started DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var list []HistoryEntry
+	for rows.Next() {
+		var e HistoryEntry
+		var started, ms int64
+		if err := rows.Scan(&e.Upload, &e.TransferID, &e.RequestID, &e.Title, &e.Who, &e.What, &e.IP,
+			&e.Offset, &e.Bytes, &e.Total, &started, &ms); err != nil {
+			return nil, err
+		}
+		e.StartedAt = time.Unix(started, 0)
+		e.Duration = time.Duration(ms) * time.Millisecond
+		list = append(list, e)
 	}
 	return list, rows.Err()
 }

@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -418,22 +419,20 @@ func (s *TransferStore) SoftDelete(transferID string) error {
 	return err
 }
 
-// PurgeDeleted removes deleted transfers from the database (with their
-// files, recipients, download events and streams, by cascade) once they
-// have been deleted longer than age. Items from before migration
-// 009 count from their expiry. A transfer with a file whose data may still
-// be on storage (a tus_upload_id not cleared, see FilesStore.ListUnpurged)
-// stays: purgeLeftovers needs the row to try again.
-func (s *TransferStore) PurgeDeleted(age time.Duration) (int64, error) {
+// PurgeDeleted removes deleted transfers from the database, with their
+// files, recipients, download events, statistics and mails, by cascade. A
+// transfer with a file whose data may still be on storage (a tus_upload_id
+// not cleared, see FilesStore.ListUnpurged) stays: purgeLeftovers needs the
+// row to try again.
+func (s *TransferStore) PurgeDeleted() (int64, error) {
 	res, err := s.db.Exec(`
 		DELETE FROM transfers
 		WHERE status = 'deleted'
-		  AND COALESCE(deleted_at, expires_at) < unixepoch() - ?
 		  AND NOT EXISTS (
 		        SELECT 1 FROM files
 		        WHERE files.transfer_id = transfers.id
 		          AND files.tus_upload_id IS NOT NULL AND files.tus_upload_id != ''
-		      )`, int64(age.Seconds()))
+		      )`)
 	if err != nil {
 		return 0, err
 	}
@@ -495,12 +494,81 @@ func (s *TransferStore) GetRecipients(transferID string) ([]Recipient, error) {
 	return recipients, rows.Err()
 }
 
-// MarkRecipientNotified sets notified_at on a recipient row.
-func (s *TransferStore) MarkRecipientNotified(recipientID string) error {
-	_, err := s.db.Exec(
-		`UPDATE recipients SET notified_at = unixepoch() WHERE id = ?`, recipientID,
+// ClaimRecipientNotify sets notified_at on a recipient row that has none
+// yet. True = this caller claimed it and sends the mail; false = someone
+// else already did.
+func (s *TransferStore) ClaimRecipientNotify(recipientID string) (bool, error) {
+	result, err := s.db.Exec(
+		`UPDATE recipients SET notified_at = unixepoch() WHERE id = ? AND notified_at IS NULL`, recipientID,
 	)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// ErrTooManyRecipients: adding would take the transfer over the maximum.
+var ErrTooManyRecipients = errors.New("too many recipients")
+
+// AddRecipients gives each address its own recipient row and download link.
+// An address that already has a row (the sender's own link included) is
+// skipped and returned in skipped. The maximum counts the recipients
+// without the sender's own link, like /send.
+func (s *TransferStore) AddRecipients(transferID string, emails []string, maxRecipients int) (added []Recipient, skipped []string, err error) {
+	err = txFunc(s.db, func(tx *sql.Tx) error {
+		rows, err := tx.Query(`SELECT lower(email), is_sender FROM recipients WHERE transfer_id = ?`, transferID)
+		if err != nil {
+			return err
+		}
+		have := map[string]bool{}
+		count := 0
+		for rows.Next() {
+			var email string
+			var isSender bool
+			if err := rows.Scan(&email, &isSender); err != nil {
+				rows.Close()
+				return err
+			}
+			have[email] = true
+			if !isSender {
+				count++
+			}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		var fresh []string
+		for _, e := range emails {
+			if have[strings.ToLower(e)] {
+				skipped = append(skipped, e)
+				continue
+			}
+			have[strings.ToLower(e)] = true
+			fresh = append(fresh, e)
+		}
+		if count+len(fresh) > maxRecipients {
+			return ErrTooManyRecipients
+		}
+		for _, e := range fresh {
+			r := Recipient{ID: token.Generate(), TransferID: transferID, Email: e, DownloadToken: token.Generate()}
+			if _, err := tx.Exec(`
+				INSERT INTO recipients (id, transfer_id, email, download_token)
+				VALUES (?, ?, ?, ?)`,
+				r.ID, r.TransferID, r.Email, r.DownloadToken,
+			); err != nil {
+				return fmt.Errorf("insert recipient: %w", err)
+			}
+			added = append(added, r)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return added, skipped, nil
 }
 
 // ValidateForTUS checks that a transfer still accepts uploads: pending and not

@@ -27,13 +27,20 @@ type MailItem struct {
 	CreatedAt     time.Time
 }
 
+// MailAbout is the transfer or request a mail is about; the mail leaves the
+// database with it. Empty for mails about neither (alerts).
+type MailAbout struct {
+	TransferID string
+	RequestID  string
+}
+
 // Enqueue inserts a new mail into the queue with status='pending'.
 // If tx is non-nil, the insert runs within that transaction.
-func (s *MailStore) Enqueue(tx *sql.Tx, to, subject, bodyHTML, bodyText string) error {
+func (s *MailStore) Enqueue(tx *sql.Tx, about MailAbout, to, subject, bodyHTML, bodyText string) error {
 	id := token.Generate()
-	query := `INSERT INTO mail_queue (id, to_address, subject, body_html, body_text)
-	          VALUES (?, ?, ?, ?, ?)`
-	args := []any{id, to, subject, bodyHTML, bodyText}
+	query := `INSERT INTO mail_queue (id, to_address, subject, body_html, body_text, transfer_id, request_id)
+	          VALUES (?, ?, ?, ?, ?, ?, ?)`
+	args := []any{id, to, subject, bodyHTML, bodyText, nullIfEmpty(about.TransferID), nullIfEmpty(about.RequestID)}
 
 	var err error
 	if tx != nil {
@@ -140,12 +147,13 @@ func (s *MailStore) MarkFailed(id string, errMsg string) error {
 	return err
 }
 
-// PruneSent deletes sent mails older than retentionDays.
-func (s *MailStore) PruneSent(retentionDays int) (int64, error) {
+// Prune deletes sent and failed mails whose last attempt is older than
+// retentionDays. Pending mails stay: they are still to be sent.
+func (s *MailStore) Prune(retentionDays int) (int64, error) {
 	result, err := s.db.Exec(`
 		DELETE FROM mail_queue
-		WHERE status = 'sent'
-		  AND last_attempt_at < (unixepoch() - ? * 86400)`,
+		WHERE status IN ('sent', 'failed')
+		  AND COALESCE(last_attempt_at, created_at) < (unixepoch() - ? * 86400)`,
 		retentionDays,
 	)
 	if err != nil {

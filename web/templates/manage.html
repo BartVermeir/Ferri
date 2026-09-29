@@ -13,6 +13,7 @@
       <div class="card">
         <p class="text-muted" style="font-size:12px;">{{if .IsTransfer}}Your transfer{{else}}Your upload request{{end}} <span class="badge badge-{{.Badge}}">{{.Status}}</span></p>
         <h1 class="mt-8">{{if .Title}}{{.Title}}{{else if .IsTransfer}}Untitled transfer{{else}}Untitled request{{end}}</h1>
+        {{if .Added}}<div class="alert alert-success">Added {{.Added}} recipient{{if ne .Added 1}}s{{end}}. {{if eq .Badge "pending"}}They get their own download link by email once the upload is finished.{{else}}They get their own download link by email.{{end}}</div>{{end}}
         {{if .Extended}}<div class="alert alert-success">Extended. {{if .IsTransfer}}The download links{{else}}The links{{end}} now work until {{.ExpiresAt | formatDate}}.</div>{{end}}
         {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
         <p class="text-muted mt-8">Created {{.CreatedAt | formatDate}} · available until <strong>{{.ExpiresAt | formatDate}}</strong></p>
@@ -31,6 +32,15 @@
           </div>
           {{end}}
         </div>
+        {{if not .LinkOnly}}
+        <form method="POST" action="/manage/{{.Token}}/recipients" class="mt-8">
+          <label for="add-recipient">Add a recipient</label>
+          <div class="btn-row">
+            <input type="email" id="add-recipient" name="recipients" multiple required placeholder="name@example.com" style="flex:1;">
+            <button type="submit" class="btn btn-secondary">Add</button>
+          </div>
+        </form>
+        {{end}}
         {{else}}
         <hr class="divider">
         <label>Upload link, for the person you want files from</label>

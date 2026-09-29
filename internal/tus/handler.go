@@ -440,28 +440,7 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 		return fmt.Errorf("get files: %w", err)
 	}
 
-	m := transferMail{
-		SenderName:  t.SenderName,
-		SenderEmail: t.SenderEmail,
-		Title:       t.Title,
-		Message:     t.Message,
-		ExpiresAt:   t.ExpiresAt,
-		Password:    t.PasswordHash.Valid,
-		Loc:         h.cfg.Server.Location,
-		BaseURL:     h.cfg.Server.BaseURL,
-		Settings:    settings,
-	}
-	if t.ManageToken.Valid && t.ManageToken.String != "" {
-		m.ManageURL = m.BaseURL + "/manage/" + t.ManageToken.String
-	}
-	for _, f := range dbFiles {
-		// A stray 'uploading' row (a TUS client that restarted an upload after
-		// a 404) is not part of what the recipients receive.
-		if f.Status != "complete" {
-			continue
-		}
-		m.Files = append(m.Files, mail.FileItem{Name: f.OriginalName, Size: f.SizeBytes})
-	}
+	m := mail.NewTransfer(t, dbFiles, settings, h.cfg.Server.Location, h.cfg.Server.BaseURL)
 
 	// The sender's link is the is_sender row, or — when the sender listed
 	// themselves as a recipient — that recipient row (see SenderLink).
@@ -478,20 +457,7 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 		}
 	}
 
-	for _, r := range recipients {
-		downloadURL := m.BaseURL + "/dl/" + r.DownloadToken
-		subject := fmt.Sprintf("%s shared %s with you", m.sender(), m.subjectTitle())
-		bodyHTML := buildAvailableHTML(m, downloadURL)
-		bodyText := buildAvailableText(m, downloadURL)
-
-		if err := h.stores.Mail.Enqueue(nil, r.Email, subject, bodyHTML, bodyText); err != nil {
-			slog.Error("tus: enqueue recipient mail", "to", r.Email, "error", err)
-		}
-
-		if err := h.stores.Transfers.MarkRecipientNotified(r.ID); err != nil {
-			slog.Error("tus: mark recipient notified", "recipient_id", r.ID, "error", err)
-		}
-	}
+	mail.EnqueueAvailable(h.stores, m, recipients)
 
 	var emails []string
 	for _, r := range recipients {
@@ -499,11 +465,11 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 	}
 
 	// Sender confirmation
-	subject := fmt.Sprintf("Sent: %s to %s", m.subjectTitle(), mail.Plural(len(emails), "recipient"))
+	subject := fmt.Sprintf("Sent: %s to %s", m.SubjectTitle(), mail.Plural(len(emails), "recipient"))
 	bodyHTML := buildConfirmHTML(m, emails, senderURL)
 	bodyText := buildConfirmText(m, emails, senderURL)
-	if err := h.stores.Mail.Enqueue(nil, t.SenderEmail, subject, bodyHTML, bodyText); err != nil {
-		slog.Error("tus: enqueue sender confirmation", "to", t.SenderEmail, "error", err)
+	if err := h.stores.Mail.Enqueue(nil, store.MailAbout{TransferID: t.ID}, t.SenderEmail, subject, bodyHTML, bodyText); err != nil {
+		slog.Error("tus: enqueue sender confirmation", "transfer_id", t.ID, "error", err)
 	}
 
 	return nil
@@ -576,105 +542,9 @@ func (r *responseRecorder) Unwrap() http.ResponseWriter {
 
 // ── Mail body builders ────────────────────────────────────────────────────────
 
-// transferMail holds everything the transfer mails show.
-type transferMail struct {
-	SenderName  string
-	SenderEmail string
-	Title       string
-	Message     string
-	Files       []mail.FileItem
-	ExpiresAt   time.Time
-	Password    bool
-	Loc         *time.Location
-	BaseURL     string
-	Settings    *store.Settings
-	ManageURL   string // sender's manage page; empty for transfers from before migration 006
-}
-
 const confirmManageLabel = "Manage transfer"
 
-func (m transferMail) sender() string {
-	if m.SenderName != "" {
-		return m.SenderName
-	}
-	if m.SenderEmail != "" {
-		return m.SenderEmail
-	}
-	return "Someone"
-}
-
-// subjectTitle is the quoted title, or "N files" when the sender left the
-// (optional) title empty.
-func (m transferMail) subjectTitle() string {
-	if m.Title != "" {
-		return `"` + m.Title + `"`
-	}
-	return mail.Plural(len(m.Files), "file")
-}
-
-func buildAvailableHTML(m transferMail, downloadURL string) string {
-	company := mail.CompanyName(m.Settings)
-
-	from := "<strong>" + html.EscapeString(m.sender()) + "</strong>"
-	if m.SenderName != "" && m.SenderEmail != "" {
-		from += ` (<a href="mailto:` + html.EscapeString(m.SenderEmail) + `" style="color:#555;">` + html.EscapeString(m.SenderEmail) + `</a>)`
-	}
-
-	var b strings.Builder
-	b.WriteString(`<p style="margin:0 0 16px;">Hello,</p>`)
-	fmt.Fprintf(&b, `<p style="margin:0 0 20px;">%s has shared %s with you through %s.</p>`,
-		from, mail.Plural(len(m.Files), "file"), html.EscapeString(company))
-	if m.Title != "" {
-		fmt.Fprintf(&b, `<p style="margin:0 0 12px;font-size:18px;font-weight:600;color:#1a1a1a;line-height:1.3;">%s</p>`, html.EscapeString(m.Title))
-	}
-	b.WriteString(mail.QuoteHTML(m.Message))
-	b.WriteString(mail.FileListHTML(m.Files))
-	b.WriteString(mail.ButtonHTML(downloadURL, "Download files", m.Settings))
-	fmt.Fprintf(&b, `<p style="margin:0 0 8px;font-size:13px;color:#555;">The files are available until <strong>%s</strong>. After that date the link stops working.</p>`,
-		html.EscapeString(mail.FormatDate(m.ExpiresAt, m.Loc)))
-	if m.Password {
-		fmt.Fprintf(&b, `<p style="margin:0 0 8px;font-size:13px;color:#555;">This transfer is password protected. You need the password from %s to open it.</p>`,
-			html.EscapeString(m.sender()))
-	}
-	b.WriteString(mail.NoteHTML(fmt.Sprintf(
-		"You are receiving this email because %s entered your address to send you files. This link is personal to you, please do not forward it. If you were not expecting these files, you can ignore this email.",
-		m.sender())))
-
-	preheader := fmt.Sprintf("%s shared %s with you, available until %s.",
-		m.sender(), mail.Plural(len(m.Files), "file"), mail.FormatDate(m.ExpiresAt, m.Loc))
-	return mail.Wrap(m.Settings, m.BaseURL, preheader, b.String())
-}
-
-func buildAvailableText(m transferMail, downloadURL string) string {
-	var b strings.Builder
-	b.WriteString("Hello,\n\n")
-	from := m.sender()
-	if m.SenderName != "" && m.SenderEmail != "" {
-		from += " (" + m.SenderEmail + ")"
-	}
-	fmt.Fprintf(&b, "%s has shared %s with you through %s.\n\n",
-		from, mail.Plural(len(m.Files), "file"), mail.CompanyName(m.Settings))
-	if m.Title != "" {
-		b.WriteString(m.Title + "\n\n")
-	}
-	if m.Message != "" {
-		b.WriteString(m.Message + "\n\n")
-	}
-	if len(m.Files) > 0 {
-		b.WriteString("Files:\n" + mail.FileListText(m.Files) + "\n")
-	}
-	fmt.Fprintf(&b, "Download: %s\n\n", downloadURL)
-	fmt.Fprintf(&b, "The files are available until %s. After that date the link stops working.\n",
-		mail.FormatDate(m.ExpiresAt, m.Loc))
-	if m.Password {
-		fmt.Fprintf(&b, "This transfer is password protected. You need the password from %s to open it.\n", m.sender())
-	}
-	fmt.Fprintf(&b, "\n--\nYou are receiving this email because %s entered your address to send you files. This link is personal to you, please do not forward it. If you were not expecting these files, you can ignore this email.\n",
-		m.sender())
-	return b.String()
-}
-
-func buildConfirmHTML(m transferMail, recipients []string, senderURL string) string {
+func buildConfirmHTML(m mail.Transfer, recipients []string, senderURL string) string {
 	var b strings.Builder
 	b.WriteString(mail.HelloHTML(m.SenderName))
 	titlePart := ""
@@ -712,7 +582,7 @@ func buildConfirmHTML(m transferMail, recipients []string, senderURL string) str
 	return mail.Wrap(m.Settings, m.BaseURL, preheader, b.String())
 }
 
-func buildConfirmText(m transferMail, recipients []string, senderURL string) string {
+func buildConfirmText(m mail.Transfer, recipients []string, senderURL string) string {
 	var b strings.Builder
 	b.WriteString(mail.HelloText(m.SenderName))
 	titlePart := ""

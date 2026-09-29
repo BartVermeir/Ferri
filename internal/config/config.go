@@ -100,10 +100,9 @@ type JobsConfig struct {
 	MailIntervalMinutes   int `yaml:"mail_interval_minutes"`
 	StallTimeoutHours     int `yaml:"stall_timeout_hours"`
 	CleanupIntervalHours  int `yaml:"cleanup_interval_hours"`
-	MailRetentionDays     int `yaml:"mail_retention_days"`
-	// Days a deleted transfer or request stays in the database before it
-	// is purged, with its statistics.
-	PurgeDeletedAfterDays int `yaml:"purge_deleted_after_days"`
+	// Days a sent or failed mail stays in the queue. A mail about a
+	// transfer or request also goes as soon as that is deleted.
+	MailRetentionDays int `yaml:"mail_retention_days"`
 }
 
 // Defaults returns a Config with all default values pre-filled.
@@ -142,8 +141,7 @@ func Defaults() *Config {
 			MailIntervalMinutes:   2,
 			StallTimeoutHours:     48,
 			CleanupIntervalHours:  6,
-			MailRetentionDays:     90,
-			PurgeDeletedAfterDays: 14,
+			MailRetentionDays:     1,
 		},
 	}
 }
@@ -284,9 +282,6 @@ func (c *Config) validate() error {
 	}
 	if c.Jobs.MailRetentionDays <= 0 {
 		c.Jobs.MailRetentionDays = d.Jobs.MailRetentionDays
-	}
-	if c.Jobs.PurgeDeletedAfterDays <= 0 {
-		c.Jobs.PurgeDeletedAfterDays = d.Jobs.PurgeDeletedAfterDays
 	}
 	if c.Admin.SessionTTLHours <= 0 {
 		c.Admin.SessionTTLHours = d.Admin.SessionTTLHours

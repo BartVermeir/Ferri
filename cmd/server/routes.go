@@ -66,6 +66,7 @@ func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, stora
 		// Manage links: the token alone opens them, so internal only.
 		r.Get("/manage/{token}", handler.ManagePage(cfg, stores))
 		r.Post("/manage/{token}/extend", handler.ManageExtend(cfg, stores))
+		r.Post("/manage/{token}/recipients", handler.ManageAddRecipients(cfg, stores))
 		r.Post("/manage/{token}/delete", handler.ManageDelete(cfg, stores, storageMgr, scheduler))
 	})
 
@@ -90,6 +91,7 @@ func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, stora
 			r.Post("/admin/transfers/{id}/delete", handler.AdminTransferDelete(cfg, stores, storageMgr, scheduler))
 			r.Post("/admin/requests/{id}/delete", handler.AdminRequestDelete(cfg, stores, storageMgr))
 			r.Post("/admin/delete", handler.AdminBulkDelete(cfg, stores, storageMgr, scheduler))
+			r.Get("/admin/history", handler.AdminHistory(cfg, stores))
 			r.Get("/admin/mail", handler.AdminMail(cfg, stores))
 			r.Post("/admin/mail/{id}/retry", handler.AdminMailRetry(cfg, stores))
 			r.Post("/admin/mail/{id}/delete", handler.AdminMailDelete(cfg, stores))

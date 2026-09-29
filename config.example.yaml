@@ -56,5 +56,4 @@ jobs:
   mail_interval_minutes: 2              # How often the mail queue is processed
   stall_timeout_hours: 48               # Hours of inactivity before upload is considered abandoned
   cleanup_interval_hours: 6            # How often the cleanup and stalled-upload jobs run
-  mail_retention_days: 90              # Sent mails are pruned after this many days
-  purge_deleted_after_days: 14         # Deleted transfers/requests (and their statistics) leave the database after this many days
+  mail_retention_days: 1               # Sent and failed mails are pruned after this many days; a transfer's mails go with it

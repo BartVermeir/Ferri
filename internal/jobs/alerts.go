@@ -78,8 +78,8 @@ func (s *Scheduler) runAlertJob() {
 		bodyText := buildAlertText(settings, s.cfg.Server.BaseURL, a)
 		queued := false
 		for _, addr := range to {
-			if err := s.stores.Mail.Enqueue(nil, addr, subject, bodyHTML, bodyText); err != nil {
-				slog.Error("alert job: enqueue", "kind", a.Kind, "to", addr, "error", err)
+			if err := s.stores.Mail.Enqueue(nil, store.MailAbout{}, addr, subject, bodyHTML, bodyText); err != nil {
+				slog.Error("alert job: enqueue", "kind", a.Kind, "error", err)
 				continue
 			}
 			queued = true

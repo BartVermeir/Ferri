@@ -21,9 +21,12 @@ var migrationsFS embed.FS
 //
 // synchronous(NORMAL): in WAL mode a commit no longer waits for an fsync, only
 // checkpoints do. A power loss can lose the last commits, but never
-// corrupts the database. Litestream recommends it; with FULL every write, from
-// every upload and download, queued on the one connection behind an fsync.
-var connPragmas = []string{"busy_timeout(5000)", "foreign_keys(1)", "journal_mode(WAL)", "synchronous(NORMAL)"}
+// corrupts the database. With FULL every write, from every upload and
+// download, queued on the one connection behind an fsync.
+//
+// secure_delete(1): a deleted row is overwritten with zeros, so what was
+// deleted is gone from the file and not only unlinked.
+var connPragmas = []string{"busy_timeout(5000)", "foreign_keys(1)", "journal_mode(WAL)", "synchronous(NORMAL)", "secure_delete(1)"}
 
 // Open opens the SQLite database at the given path with the required PRAGMAs.
 func Open(path string) (*sql.DB, error) {

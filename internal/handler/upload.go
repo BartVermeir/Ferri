@@ -226,8 +226,8 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			subject := fmt.Sprintf("Received: %s for %s", mail.Plural(len(items), "file"), u.requestLabel())
 			bodyHTML := buildUploadCompleteHTML(u)
 			bodyText := buildUploadCompleteText(u)
-			if err := stores.Mail.Enqueue(nil, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
-				slog.Error("upload complete: enqueue mail", "to", req.RequesterEmail, "error", err)
+			if err := stores.Mail.Enqueue(nil, store.MailAbout{RequestID: req.ID}, req.RequesterEmail, subject, bodyHTML, bodyText); err != nil {
+				slog.Error("upload complete: enqueue mail", "request_id", req.ID, "error", err)
 			}
 		}
 

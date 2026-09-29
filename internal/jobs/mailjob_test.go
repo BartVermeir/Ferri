@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // fakeSMTP is a minimal SMTP server that counts connections and delivered
@@ -103,7 +105,7 @@ func TestMailJob_OneConnectionPerRun(t *testing.T) {
 	}
 	enqueue := func(to string) {
 		t.Helper()
-		if err := f.stores.Mail.Enqueue(nil, to, "Hello", "<p>hi</p>", "hi"); err != nil {
+		if err := f.stores.Mail.Enqueue(nil, store.MailAbout{}, to, "Hello", "<p>hi</p>", "hi"); err != nil {
 			t.Fatal(err)
 		}
 	}

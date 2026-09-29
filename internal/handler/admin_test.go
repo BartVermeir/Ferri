@@ -40,6 +40,7 @@ func newAdminRouter(cfg *config.Config, stores *store.Stores, mgr *storage.Manag
 		r.Get("/admin/transfers/{id}/files", AdminTransferFiles(cfg, stores))
 		r.Get("/admin/transfers/{id}/file/{fileID}", AdminTransferFile(cfg, stores, mgr))
 		r.Get("/admin/transfers/{id}/stats", AdminTransferStats(cfg, stores))
+		r.Get("/admin/history", AdminHistory(cfg, stores))
 		r.Get("/admin/requests/{id}/stats", AdminRequestStats(cfg, stores))
 		r.Get("/admin/requests/{id}/files", AdminRequestFiles(cfg, stores))
 		r.Get("/admin/requests/{id}/file/{fileID}", AdminRequestFile(cfg, stores, mgr))
@@ -208,8 +209,8 @@ func TestAdminTransferDelete_WithSessionCookieProceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted == nil || deleted.Status != "deleted" {
-		t.Fatalf("transfer status = %+v, want deleted", deleted)
+	if deleted != nil {
+		t.Fatalf("transfer still in the database: %+v", deleted)
 	}
 }
 
@@ -598,16 +599,17 @@ func TestAdminBulkDelete_DeletesSelectedOnly(t *testing.T) {
 		t.Fatalf("status = %d, location = %q, want 303 to /admin?deleted=3&failed=0", rr.Code, rr.Header().Get("Location"))
 	}
 
-	for id, want := range map[string]string{t1: "deleted", t2: "deleted", keepT: "active"} {
+	// "" = gone from the database.
+	for id, want := range map[string]string{t1: "", t2: "", keepT: "active"} {
 		tr, err := stores.Transfers.GetByID(id)
-		if err != nil || tr == nil || tr.Status != want {
-			t.Errorf("transfer %s = %+v (err %v), want %s", id, tr, err, want)
+		if err != nil || (tr != nil && tr.Status != want) || (tr == nil) != (want == "") {
+			t.Errorf("transfer %s = %+v (err %v), want %q", id, tr, err, want)
 		}
 	}
-	for id, want := range map[string]string{r1: "deleted", keepR: "open"} {
+	for id, want := range map[string]string{r1: "", keepR: "open"} {
 		ur, err := stores.Requests.GetByID(id)
-		if err != nil || ur == nil || ur.Status != want {
-			t.Errorf("request %s = %+v (err %v), want %s", id, ur, err, want)
+		if err != nil || (ur != nil && ur.Status != want) || (ur == nil) != (want == "") {
+			t.Errorf("request %s = %+v (err %v), want %q", id, ur, err, want)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, "tus-request")); !os.IsNotExist(err) {

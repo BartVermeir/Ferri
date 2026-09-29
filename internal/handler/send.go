@@ -270,7 +270,6 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		slog.Info("send: transfer created",
 			"transfer_id", result.TransferID,
-			"sender", senderEmail,
 			"recipients", len(recipients),
 			"files", len(files),
 			"expiry_hours", expiryHours,

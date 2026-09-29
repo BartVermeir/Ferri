@@ -1,0 +1,65 @@
+{{define "admin/history.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.PageTitle}} — Admin</title>
+  {{template "admin-css" .}}
+  <style>
+    .type-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+    .type-transfer { background: #f0f0ec; color: #444; }
+    .type-request  { background: #eff6ff; color: #1d4ed8; }
+    .badge-active  { background: #dcfce7; color: #166534; }
+    .badge-expired { background: #f1f5f9; color: #64748b; }
+    .now-section { margin-bottom: 28px; }
+    .now-table td, .history-table td { font-size: 12px; }
+    .now-table td.num, .history-table td.num { white-space: nowrap; color: #555; }
+    .history-table td.when { white-space: nowrap; font-weight: 500; }
+    .empty-row td { color: #bbb; text-align: center; padding: 32px !important; font-size: 13px; }
+  </style>
+</head>
+<body>
+<div class="admin-layout">
+  {{template "admin-nav" .}}
+  <main class="main-content">
+    <div class="page-header"><h1>Transfer history</h1></div>
+
+    <div class="now-section">
+      {{template "now-table" .Now}}
+      {{if not .Now.Rows}}<p style="font-size:13px; color:#aaa;">Nothing is being uploaded or downloaded right now.</p>{{end}}
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        All uploads and downloads
+        <span style="font-size:12px; font-weight:400; color:#aaa; margin-left:8px;">Newest first; only transfers and requests that are still live</span>
+      </div>
+      <table class="history-table">
+        <thead>
+          <tr><th>Started</th><th></th><th>Title</th><th>File</th><th>Who</th><th>From</th><th>Amount</th><th>Duration</th><th>Speed</th><th></th></tr>
+        </thead>
+        <tbody>
+          {{range .Rows}}
+          <tr>
+            <td class="when">{{formatDate .StartedAt}}</td>
+            <td style="white-space:nowrap;">{{if .Upload}}↑ upload{{else}}↓ download{{end}} <span class="type-badge type-{{.Item}}">{{.Item}}</span></td>
+            <td>{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
+            <td style="word-break:break-all;">{{.What}}</td>
+            <td>{{.Who}}</td>
+            <td class="num">{{.IP}}</td>
+            <td class="num">{{.Sent}}</td>
+            <td class="num">{{.Duration}}</td>
+            <td class="num">{{.Rate}}</td>
+            <td>{{if .Complete}}<span class="badge badge-active">complete</span>{{else if .Upload}}<span class="badge badge-expired">partial</span>{{else}}<span class="badge badge-expired">broken off</span>{{end}}</td>
+          </tr>
+          {{else}}
+          <tr class="empty-row"><td colspan="10">No uploads or downloads yet</td></tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+{{template "primary-text-script" .}}
+</body>
+</html>{{end}}

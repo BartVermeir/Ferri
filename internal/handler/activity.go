@@ -24,6 +24,9 @@ type activityRow struct {
 	Running  string // "12 min"
 	Progress string // "15.9 GB of 36.0 GB"
 	Rate     string // "1456 Mbps", "—" in the first second
+	// Remaining is a guess: what is left at the current speed ("~12 min").
+	// "—" without a known size or speed.
+	Remaining string
 }
 
 type activityView struct {
@@ -70,19 +73,24 @@ func buildActivityView(stores *store.Stores, snap activity.Snapshot) activityVie
 		if total > 0 {
 			row.Progress += " of " + mail.FormatSize(total)
 		}
+		row.Remaining = estimateRemaining(total-x.Position(), rate)
 		v.Rows = append(v.Rows, row)
 	}
 	v.UploadRate, v.DownloadRate = formatRate(upRate), formatRate(downRate)
 	return v
 }
 
-// StoreDownloadStreams is the activity.Registry.OnDone hook that keeps every
-// finished download for the statistics. Uploads are counted per
-// file in the tus handler instead; a download that sent nothing (a 304, a
-// refused Range) is not kept.
-func StoreDownloadStreams(stores *store.Stores) func(activity.Running, time.Duration) {
+// StoreStreams is the activity.Registry.OnDone hook that keeps every
+// finished download for the statistics and the transfer history, and every
+// upload chunk for the transfer history. Something that moved no bytes (a
+// 304, a refused Range, an empty PATCH) is not kept.
+func StoreStreams(stores *store.Stores) func(activity.Running, time.Duration) {
 	return func(x activity.Running, took time.Duration) {
-		if x.Kind != activity.Download || x.Bytes == 0 {
+		if x.Bytes == 0 {
+			return
+		}
+		if x.Kind == activity.Upload {
+			storeUploadChunk(stores, x, took)
 			return
 		}
 		d := store.DownloadStream{
@@ -98,6 +106,28 @@ func StoreDownloadStreams(stores *store.Stores) func(activity.Running, time.Dura
 		if err := stores.Stats.RecordStream(d); err != nil {
 			slog.Error("stats: record download stream", "item", x.ItemID, "error", err)
 		}
+	}
+}
+
+// storeUploadChunk: a chunk only knows its tusd upload ID; the file and who
+// uploads it come from the database, like on the dashboard.
+func storeUploadChunk(stores *store.Stores, x activity.Running, took time.Duration) {
+	l := uploadLabel(stores, x.UploadID)
+	if l == nil {
+		return
+	}
+	c := store.UploadChunk{
+		TUSUploadID: x.UploadID, Who: l.Who, What: l.FileName, IP: x.IP,
+		Offset: x.Offset, Bytes: x.Bytes, Total: l.Size,
+		StartedAt: x.Started, Duration: took,
+	}
+	if l.Who == "uploader" {
+		c.RequestID = l.ItemID
+	} else {
+		c.TransferID = l.ItemID
+	}
+	if err := stores.Stats.RecordUploadChunk(c); err != nil {
+		slog.Error("stats: record upload chunk", "item", l.ItemID, "error", err)
 	}
 }
 
@@ -127,6 +157,15 @@ func formatRate(bytesPerSec float64) string {
 		return fmt.Sprintf("%.1f Mbps", mbps)
 	}
 	return fmt.Sprintf("%.0f Mbps", mbps)
+}
+
+// estimateRemaining is left / speed, rounded like formatRunning. A ZIP is a
+// little larger than its files, so it can reach 0 before the end.
+func estimateRemaining(left int64, bytesPerSec float64) string {
+	if left <= 0 || bytesPerSec <= 0 {
+		return "—"
+	}
+	return "~" + formatRunning(time.Duration(float64(left)/bytesPerSec*float64(time.Second)))
 }
 
 func formatRunning(d time.Duration) string {

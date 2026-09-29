@@ -32,6 +32,7 @@ func newManageRouter(cfg *config.Config, stores *store.Stores, mgr *storage.Mana
 	r.Use(appMiddleware.CSRFProtect(cfg.Server.BaseURL))
 	r.Get("/manage/{token}", ManagePage(cfg, stores))
 	r.Post("/manage/{token}/extend", ManageExtend(cfg, stores))
+	r.Post("/manage/{token}/recipients", ManageAddRecipients(cfg, stores))
 	r.Post("/manage/{token}/delete", ManageDelete(cfg, stores, mgr, jobs.NewScheduler(cfg, stores, mgr)))
 	return r
 }
@@ -161,9 +162,8 @@ func TestManageDelete_TransferGoneAndSenderSummary(t *testing.T) {
 		!strings.Contains(rr.Body.String(), "Transfer deleted") {
 		t.Fatalf("delete: status = %d", rr.Code)
 	}
-	tr, _ := stores.Transfers.GetByID(res.TransferID)
-	if tr.Status != "deleted" {
-		t.Fatalf("status = %q, want deleted", tr.Status)
+	if tr, _ := stores.Transfers.GetByID(res.TransferID); tr != nil {
+		t.Fatalf("transfer still in the database: %+v", tr)
 	}
 	if _, err := os.Stat(filepath.Join(root, "tus-a")); !os.IsNotExist(err) {
 		t.Fatalf("file still on storage: %v", err)
@@ -354,5 +354,112 @@ func TestAdminSettings_AlertRecipients(t *testing.T) {
 	}
 	if got := stores.Settings.Get().AlertRecipientList(); len(got) != 2 {
 		t.Fatalf("invalid save changed the list: %q", got)
+	}
+}
+
+// An added recipient of a live transfer gets their own link by email at
+// once, shows on the page, and is not mailed twice.
+func TestManageAddRecipients_LiveTransferMailsAtOnce(t *testing.T) {
+	cfg, stores := newTestConfig(), newTestStores(t)
+	mgr, _ := newTestManager(t)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	res := liveTransfer(t, stores)
+	r := newManageRouter(cfg, stores, mgr)
+	path := "/manage/" + res.ManageToken + "/recipients"
+
+	rr := manageDo(t, r, cfg, http.MethodPost, path, url.Values{"recipients": {"Dave@Example.com"}})
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/manage/"+res.ManageToken+"?added=1" {
+		t.Fatalf("add: status = %d, location = %q", rr.Code, rr.Header().Get("Location"))
+	}
+	var dave *store.Recipient
+	rs, _ := stores.Transfers.GetRecipients(res.TransferID)
+	for i := range rs {
+		if rs[i].Email == "dave@example.com" {
+			dave = &rs[i]
+		}
+	}
+	if dave == nil || dave.IsSender || !dave.NotifiedAt.Valid {
+		t.Fatalf("dave: %+v, want a notified recipient row", dave)
+	}
+	items, _ := stores.Mail.FetchPending(10)
+	if len(items) != 1 || items[0].ToAddress != "dave@example.com" ||
+		!strings.Contains(items[0].BodyText, "/dl/"+dave.DownloadToken) || !strings.Contains(items[0].BodyText, "a.mov") {
+		t.Fatalf("want one mail to dave with his own link, got %+v", items)
+	}
+
+	if rr := manageDo(t, r, cfg, http.MethodPost, path, url.Values{"recipients": {"dave@example.com"}}); rr.Code != http.StatusBadRequest ||
+		!strings.Contains(rr.Body.String(), "Already a recipient: dave@example.com") {
+		t.Fatalf("again: status = %d, want 400 already a recipient", rr.Code)
+	}
+	if rr := manageDo(t, r, cfg, http.MethodPost, path, url.Values{"recipients": {"not-an-address"}}); rr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid address: status = %d, want 400", rr.Code)
+	}
+	if items, _ := stores.Mail.FetchPending(10); len(items) != 1 {
+		t.Fatalf("refused adds queued mail: %d mails", len(items))
+	}
+
+	page := manageDo(t, r, cfg, http.MethodGet, "/manage/"+res.ManageToken+"?added=1", nil).Body.String()
+	for _, want := range []string{"Added 1 recipient.", "dave@example.com", "Add a recipient"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page misses %q", want)
+		}
+	}
+}
+
+// A transfer still uploading takes the recipient but mails nobody yet: the
+// mail goes out with the rest when it goes live.
+func TestManageAddRecipients_PendingTransferWaits(t *testing.T) {
+	cfg, stores := newTestConfig(), newTestStores(t)
+	mgr, _ := newTestManager(t)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+		Recipients:       []string{"bob@example.com"},
+		Files:            []store.CreateFileInput{{OriginalName: "a.mov", StoragePath: "p", SizeBytes: 10}},
+		NotifyRecipients: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rr := manageDo(t, newManageRouter(cfg, stores, mgr), cfg, http.MethodPost,
+		"/manage/"+res.ManageToken+"/recipients", url.Values{"recipients": {"dave@example.com"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("add: status = %d", rr.Code)
+	}
+	if items, _ := stores.Mail.FetchPending(10); len(items) != 0 {
+		t.Fatalf("pending transfer mailed %d, want none yet", len(items))
+	}
+	rs, _ := stores.Transfers.GetRecipients(res.TransferID)
+	if len(rs) != 2 {
+		t.Fatalf("recipients = %d, want 2", len(rs))
+	}
+}
+
+// A link-only transfer has no recipients: no form, and the POST is refused.
+func TestManageAddRecipients_NotForLinkOnly(t *testing.T) {
+	cfg, stores := newTestConfig(), newTestStores(t)
+	mgr, _ := newTestManager(t)
+	res, err := stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+		Recipients: []string{"alice@example.com"},
+		Files:      []store.CreateFileInput{{OriginalName: "a.mov", StoragePath: "p", SizeBytes: 10}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newManageRouter(cfg, stores, mgr)
+	if page := manageDo(t, r, cfg, http.MethodGet, "/manage/"+res.ManageToken, nil).Body.String(); strings.Contains(page, "Add a recipient") {
+		t.Error("link-only manage page offers to add recipients")
+	}
+	rr := manageDo(t, r, cfg, http.MethodPost, "/manage/"+res.ManageToken+"/recipients", url.Values{"recipients": {"dave@example.com"}})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+	if rs, _ := stores.Transfers.GetRecipients(res.TransferID); len(rs) != 1 {
+		t.Fatalf("recipients = %d, want 1", len(rs))
 	}
 }

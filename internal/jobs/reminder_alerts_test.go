@@ -223,7 +223,7 @@ func TestAlerts_FailedMailsReportedOnceSkippingAlerts(t *testing.T) {
 	}
 	fail := func(subject string) {
 		t.Helper()
-		if err := stores.Mail.Enqueue(nil, "nobody@example.org", subject, "<p>x</p>", "x"); err != nil {
+		if err := stores.Mail.Enqueue(nil, store.MailAbout{}, "nobody@example.org", subject, "<p>x</p>", "x"); err != nil {
 			t.Fatal(err)
 		}
 		var id string

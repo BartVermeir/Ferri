@@ -54,7 +54,7 @@ func testRouter(t *testing.T) http.Handler {
 func TestRouter_Routes(t *testing.T) {
 	want := []string{
 		"GET /", "POST /send", "GET /request", "POST /request",
-		"GET /manage/{token}", "POST /manage/{token}/extend", "POST /manage/{token}/delete",
+		"GET /manage/{token}", "POST /manage/{token}/extend", "POST /manage/{token}/recipients", "POST /manage/{token}/delete",
 		"GET /health", "GET /favicon.ico", "* /static/*", "* /static/logo/*", "* /tus/*",
 		"GET /dl/{token}", "POST /dl/{token}", "GET /dl/{token}/file/{fileID}", "GET /dl/{token}/zip",
 		"GET /ul/{token}", "POST /ul/{token}", "POST /ul/{token}/complete",
@@ -64,7 +64,7 @@ func TestRouter_Routes(t *testing.T) {
 		"GET /admin/transfers/{id}/stats", "GET /admin/requests/{id}/stats",
 		"GET /admin/requests/{id}/files", "GET /admin/requests/{id}/file/{fileID}",
 		"POST /admin/transfers/{id}/delete", "POST /admin/requests/{id}/delete", "POST /admin/delete",
-		"GET /admin/mail", "POST /admin/mail/{id}/retry", "POST /admin/mail/{id}/delete",
+		"GET /admin/history", "GET /admin/mail", "POST /admin/mail/{id}/retry", "POST /admin/mail/{id}/delete",
 		"GET /admin/settings", "GET /admin/settings/branding", "POST /admin/settings/branding",
 		"GET /admin/settings/mail", "POST /admin/settings/mail", "GET /admin/settings/storage", "POST /admin/settings/logo", "POST /admin/settings/logo/delete",
 		"POST /admin/settings/storage", "POST /admin/settings/storage/test", "POST /admin/logout",

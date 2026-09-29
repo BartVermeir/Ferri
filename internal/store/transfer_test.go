@@ -216,3 +216,37 @@ func TestGetExpired_IncludesPendingTransfers(t *testing.T) {
 		t.Fatalf("GetExpired = %+v, want the pending transfer", expired)
 	}
 }
+
+// AddRecipients skips addresses already on the transfer (case-insensitive,
+// the sender's own link included) and keeps the maximum without that link.
+func TestAddRecipients_SkipsExistingAndKeepsMaximum(t *testing.T) {
+	stores := newRaceTestStores(t)
+	res, err := stores.Transfers.Create(CreateTransferInput{
+		SenderEmail: "Alice@example.com", ExpiresAt: time.Now().Add(time.Hour),
+		Recipients:       []string{"bob@example.com"},
+		NotifyRecipients: true, SenderLink: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, skipped, err := stores.Transfers.AddRecipients(res.TransferID,
+		[]string{"BOB@example.com", "alice@example.com", "dave@example.com", "DAVE@example.com"}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(added) != 1 || added[0].Email != "dave@example.com" || added[0].DownloadToken == "" {
+		t.Fatalf("added = %+v, want dave only", added)
+	}
+	if len(skipped) != 3 {
+		t.Fatalf("skipped = %v, want bob, alice and the second dave", skipped)
+	}
+	if _, _, err := stores.Transfers.AddRecipients(res.TransferID, []string{"erin@example.com"}, 2); err != ErrTooManyRecipients {
+		t.Fatalf("third recipient with maximum 2: err = %v, want ErrTooManyRecipients", err)
+	}
+	if ok, _ := stores.Transfers.ClaimRecipientNotify(added[0].ID); !ok {
+		t.Fatal("first claim failed")
+	}
+	if ok, _ := stores.Transfers.ClaimRecipientNotify(added[0].ID); ok {
+		t.Fatal("second claim succeeded")
+	}
+}

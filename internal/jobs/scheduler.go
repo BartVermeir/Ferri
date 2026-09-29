@@ -75,10 +75,9 @@ func (s *Scheduler) runLoop(name string, interval time.Duration, fn func()) {
 }
 
 // runJob executes one job tick, recovering from a panic so a single bad run is
-// logged instead of taking down the process. The container entrypoint is
-// `litestream replicate -exec /ferri`, so an unrecovered job panic exits the
-// whole container and Docker restarts it straight into the same panic on the
-// next tick.
+// logged instead of taking down the process. An unrecovered job panic exits
+// the whole container, and Docker restarts it straight into the same panic on
+// the next tick.
 func runJob(name string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -118,12 +117,12 @@ func (s *Scheduler) runMailJob() {
 		}
 	}
 
-	// Prune old sent mails
-	n, err := s.stores.Mail.PruneSent(s.cfg.Jobs.MailRetentionDays)
+	// Prune old sent and failed mails
+	n, err := s.stores.Mail.Prune(s.cfg.Jobs.MailRetentionDays)
 	if err != nil {
-		slog.Error("mail job: prune sent", "error", err)
+		slog.Error("mail job: prune", "error", err)
 	} else if n > 0 {
-		slog.Info("mail job: pruned sent mails", "count", n)
+		slog.Info("mail job: pruned mails", "count", n)
 	}
 }
 
@@ -131,13 +130,12 @@ func (s *Scheduler) sendBatch(sender *mail.Sender, items []store.MailItem) {
 	for _, item := range items {
 		if err := sender.Send(item); err != nil {
 			slog.Warn("mail job: send failed",
-				"id", item.ID, "to", item.ToAddress,
-				"attempt", item.Attempts+1, "error", err)
+				"id", item.ID, "attempt", item.Attempts+1, "error", err)
 			if err := s.stores.Mail.MarkFailed(item.ID, err.Error()); err != nil {
 				slog.Error("mail job: mark failed", "id", item.ID, "error", err)
 			}
 		} else {
-			slog.Info("mail sent", "id", item.ID, "to", item.ToAddress)
+			slog.Info("mail sent", "id", item.ID)
 			if err := s.stores.Mail.MarkSent(item.ID); err != nil {
 				slog.Error("mail job: mark sent", "id", item.ID, "error", err)
 			}
@@ -257,7 +255,13 @@ func (s *Scheduler) enqueueSummary(t store.Transfer, deletedAt time.Time, bySend
 	if !deletedAt.IsZero() {
 		subject = "Deleted: " + title
 	}
-	return s.stores.Mail.Enqueue(nil, t.SenderEmail, subject, buildExpirySummaryHTML(e), buildExpirySummaryText(e))
+	// The summary of a deleted transfer is queued just before the transfer
+	// leaves the database, so it must not go with it.
+	about := store.MailAbout{TransferID: t.ID}
+	if !deletedAt.IsZero() {
+		about = store.MailAbout{}
+	}
+	return s.stores.Mail.Enqueue(nil, about, t.SenderEmail, subject, buildExpirySummaryHTML(e), buildExpirySummaryText(e))
 }
 
 // ── Cleanup job ───────────────────────────────────────────────────────────────
@@ -376,23 +380,20 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 	}
 }
 
-// purgeDeleted removes deleted transfers and requests from the database
-// jobs.purge_deleted_after_days after they were deleted, with everything
-// that hangs on them (statistics included). Items with data possibly still
-// on storage stay until purgeLeftovers has removed it.
+// purgeDeleted removes deleted transfers and requests from the database,
+// with everything that hangs on them (statistics and mails included). Items
+// with data possibly still on storage stay until purgeLeftovers has removed it.
 func (s *Scheduler) purgeDeleted() {
-	age := time.Duration(s.cfg.Jobs.PurgeDeletedAfterDays) * 24 * time.Hour
-	t, err := s.stores.Transfers.PurgeDeleted(age)
+	t, err := s.stores.Transfers.PurgeDeleted()
 	if err != nil {
 		slog.Error("cleanup job: purge deleted transfers", "error", err)
 	}
-	r, err := s.stores.Requests.PurgeDeleted(age)
+	r, err := s.stores.Requests.PurgeDeleted()
 	if err != nil {
 		slog.Error("cleanup job: purge deleted requests", "error", err)
 	}
 	if t > 0 || r > 0 {
-		slog.Info("cleanup job: purged deleted items from the database", "transfers", t, "requests", r,
-			"after_days", s.cfg.Jobs.PurgeDeletedAfterDays)
+		slog.Info("cleanup job: purged deleted items from the database", "transfers", t, "requests", r)
 	}
 }
 

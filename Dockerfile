@@ -30,10 +30,6 @@ RUN mkdir -p /data && chown 1000:1000 /data
 # Distroless: minimal attack surface, no shell, no package manager
 FROM gcr.io/distroless/static-debian12
 
-# Copy Litestream for continuous SQLite replication
-# Version is pinned
-COPY --from=litestream/litestream:0.3.13 /usr/local/bin/litestream /litestream
-
 # Copy the application binary
 COPY --from=builder /ferri /ferri
 
@@ -43,19 +39,8 @@ COPY --from=builder /ferri /ferri
 # so this gives UID 1000 write access to the app_db volume without root at runtime.
 COPY --chown=1000:1000 --from=builder /data /data
 
-# Copy the example Litestream config as a fallback default.
-# In production, mount your actual litestream.yml over this path:
-#   volumes:
-#     - ./litestream.yml:/etc/litestream.yml:ro
-# Without a volume mount, Litestream uses this example config (local file replica only).
-COPY litestream.example.yml /etc/litestream.yml
-
 # Run as non-root user (UID 1000)
 # The NFS storage mount must allow writes from this UID
 USER 1000:1000
 
-# Litestream wraps the application:
-# - Starts replication before the app starts
-# - If Litestream exits, the app exits too (Docker restarts both)
-# - Credentials via LITESTREAM_ACCESS_KEY_ID and LITESTREAM_SECRET_ACCESS_KEY env vars
-ENTRYPOINT ["/litestream", "replicate", "-exec", "/ferri"]
+ENTRYPOINT ["/ferri"]

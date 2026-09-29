@@ -14,7 +14,8 @@ Self-hosted file transfer tool. Send large files to external recipients, or requ
 - **SMB/CIFS and local storage** — configure your storage backend via the admin panel; hot-swap without restart
 - **Branding** — configurable company name, logo, and colours via the admin panel
 - **Mail notifications** — recipients notified by email; sender notified on download; expiry summary on transfer expiry; the requester is reminded when nothing was uploaded a day before a request expires
-- **Manage link** — the sender or requester sees who downloaded what, extends or deletes, from the internal network
+- **Manage link** — the sender or requester sees who downloaded what, adds a recipient, extends or deletes, from the internal network
+- **Transfer history** — the admin sees every upload and download of live transfers and requests, newest first, with address and speed
 - **Admin alerts** — mail when the storage is almost full or unreachable, deleted files stay on it, or mails fail for good
 - **IP restriction** — only internal network users can create transfers; download links are publicly accessible
 - **Automatic cleanup** — expired transfers are removed from storage on a configurable schedule
@@ -58,10 +59,7 @@ SMTP_PASSWORD=<your SMTP relay password>
 
 ```bash
 cp config.example.yaml config.yaml
-cp litestream.example.yml litestream.yml
 ```
-
-`litestream.yml` is required — `docker-compose.yml` mounts it unconditionally. If you don't need database backups, edit the file and remove the `replicas:` block entirely. See `litestream.example.yml` for S3 and local-file replica options.
 
 Minimum required edits in `config.yaml`:
 
@@ -118,7 +116,6 @@ From the admin panel you can configure branding, mail settings, and connect your
 |---|---|
 | `.env` | Secrets (ADMIN_TOKEN, SMTP_PASSWORD). Never commit this. |
 | `config.yaml` | All other configuration. Copy from `config.example.yaml`. |
-| `litestream.yml` | SQLite replication config. Copy from `litestream.example.yml`. Required — docker-compose mounts it. |
 | `docker-compose.yml` | Container setup. Edit the storage volume mount. |
 
 ---

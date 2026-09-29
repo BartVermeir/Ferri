@@ -124,3 +124,40 @@ func TestEnqueueTransferMails_ListsOnlyCompleteFiles(t *testing.T) {
 		}
 	}
 }
+
+// A recipient added on the manage page while the upload still runs gets the
+// mail when the transfer goes live, and only once.
+func TestEnqueueTransferMails_AddedRecipientOnce(t *testing.T) {
+	h, _, stores := newTestHandler(t)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+		Recipients:       []string{"bob@example.com"},
+		Files:            []store.CreateFileInput{{OriginalName: "cut.mov", StoragePath: "p", SizeBytes: 10}},
+		NotifyRecipients: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := stores.Transfers.AddRecipients(res.TransferID, []string{"dave@example.com"}, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Transfers.SetFileComplete(res.Files[0].FileID, 10); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := h.enqueueTransferMails(res.TransferID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, _ := stores.Mail.FetchPending(10)
+	count := map[string]int{}
+	for _, it := range items {
+		count[it.ToAddress]++
+	}
+	if count["bob@example.com"] != 1 || count["dave@example.com"] != 1 {
+		t.Fatalf("recipient mails = %v, want one each for bob and dave", count)
+	}
+}

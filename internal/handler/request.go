@@ -141,7 +141,6 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		}
 
 		slog.Info("upload request created",
-			"requester", requesterEmail,
 			"links", len(links),
 			"expiry_hours", expiryHours,
 			"has_password", passwordHash != "",

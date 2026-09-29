@@ -30,7 +30,7 @@ func newCleanupTestConfig() *config.Config {
 	return cfg
 }
 
-func TestCleanupJob_RemovesExpiredTransferFilesAndMarksDeleted(t *testing.T) {
+func TestCleanupJob_RemovesExpiredTransferFilesAndRows(t *testing.T) {
 	d, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -91,20 +91,17 @@ func TestCleanupJob_RemovesExpiredTransferFilesAndMarksDeleted(t *testing.T) {
 		t.Fatalf("expected file to be removed from storage, stat err = %v", err)
 	}
 
+	// Files off storage, then the transfer out of the database, with its file rows.
 	transfer, err := stores.Transfers.GetByID(result.TransferID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if transfer == nil || transfer.Status != "deleted" {
-		t.Fatalf("transfer status = %+v, want deleted", transfer)
+	if transfer != nil {
+		t.Fatalf("transfer still in the database: %+v", transfer)
 	}
-
-	var fileStatus string
-	if err := d.QueryRow(`SELECT status FROM files WHERE id = ?`, fileID).Scan(&fileStatus); err != nil {
-		t.Fatal(err)
-	}
-	if fileStatus != "deleted" {
-		t.Fatalf("file status = %q, want deleted", fileStatus)
+	var files int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM files WHERE id = ?`, fileID).Scan(&files); err != nil || files != 0 {
+		t.Fatalf("file rows = %d (%v), want 0", files, err)
 	}
 }
 
@@ -274,8 +271,9 @@ func TestCleanupJob_ExpiredTransferRemovesFlatTUSFile(t *testing.T) {
 	f.s.runCleanupJob()
 
 	f.assertGone("tus-transfer")
-	if id := f.tusID("files", "tf"); id != "" {
-		t.Errorf("tus_upload_id = %q, want NULL (purged)", id)
+	var rows int
+	if err := f.d.QueryRow(`SELECT COUNT(*) FROM files WHERE id = 'tf'`).Scan(&rows); err != nil || rows != 0 {
+		t.Errorf("file rows = %d (%v), want 0: the transfer leaves the database once its data is gone", rows, err)
 	}
 }
 

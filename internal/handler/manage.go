@@ -6,6 +6,7 @@ package handler
 // Routes (IP-restricted — internal network only, like the send page):
 //   GET  /manage/{token}         — status, files, and per recipient what was downloaded
 //   POST /manage/{token}/extend  — move the expiry later, to one of expiry_options from now
+//   POST /manage/{token}/recipients — add recipients to a transfer, each with their own link
 //   POST /manage/{token}/delete  — delete at once, same path as the admin delete
 //
 // One manage token per transfer or request (migration 006), handed out in the
@@ -14,14 +15,18 @@ package handler
 // page, so it only answers on the internal network.
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/BartVermeir/Ferri/internal/config"
+	"github.com/BartVermeir/Ferri/internal/mail"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
@@ -91,6 +96,7 @@ type managePageData struct {
 	// now; empty when it already runs for the longest option.
 	Options  []config.ExpiryOption
 	Extended bool
+	Added    int // recipients just added (?added=N)
 	Error    string
 }
 
@@ -218,6 +224,7 @@ func ManagePage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 		d.Extended = r.URL.Query().Get("extended") == "1"
+		d.Added, _ = strconv.Atoi(r.URL.Query().Get("added"))
 		renderPage(w, "manage.html", d)
 	}
 }
@@ -286,6 +293,99 @@ func ManageExtend(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		}
 		http.Redirect(w, r, "/manage/"+tok+"?extended=1", http.StatusSeeOther)
 	}
+}
+
+// ManageAddRecipients handles POST /manage/{token}/recipients: each new
+// address gets its own recipient row and download link, tracked like the
+// others. A live transfer mails them at once; one still uploading mails them
+// with the rest when it goes live. Not for link-only transfers: those stay
+// without mail.
+func ManageAddRecipients(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tok := chi.URLParam(r, "token")
+		settings := appMiddleware.GetSettings(r)
+		m, err := lookupManaged(stores, tok)
+		if err != nil {
+			slog.Error("manage: lookup", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if m.Transfer == nil {
+			renderManageNotFound(w, settings)
+			return
+		}
+		t := m.Transfer
+
+		fail := func(msg string) {
+			d, err := buildManagePage(cfg, stores, settings, tok, m)
+			if err != nil {
+				slog.Error("manage: build page", "error", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			d.Error = msg
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			renderPage(w, "manage.html", d)
+		}
+
+		if !t.NotifyRecipients {
+			fail("A transfer shared as a link has no recipients to add.")
+			return
+		}
+		emails := parseRecipients(r.FormValue("recipients"))
+		if len(emails) == 0 {
+			fail("Enter an email address.")
+			return
+		}
+		for _, e := range emails {
+			if !isValidEmail(e) {
+				fail("Invalid email address: " + e)
+				return
+			}
+		}
+		added, skipped, err := stores.Transfers.AddRecipients(t.ID, emails, maxRecipients)
+		if errors.Is(err, store.ErrTooManyRecipients) {
+			fail(fmt.Sprintf("A transfer has at most %d recipients.", maxRecipients))
+			return
+		}
+		if err != nil {
+			slog.Error("manage: add recipients", "transfer_id", t.ID, "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if len(added) == 0 {
+			fail("Already a recipient: " + strings.Join(skipped, ", "))
+			return
+		}
+		slog.Info("manage: recipients added", "transfer_id", t.ID, "added", len(added))
+
+		// Read the status after the insert: a transfer that went live in
+		// between mails everyone it found, and claiming keeps it to one mail.
+		if err := mailAddedRecipients(cfg, stores, t.ID, added); err != nil {
+			slog.Error("manage: mail added recipients", "transfer_id", t.ID, "error", err)
+		}
+		http.Redirect(w, r, "/manage/"+tok+"?added="+strconv.Itoa(len(added)), http.StatusSeeOther)
+	}
+}
+
+// mailAddedRecipients sends the "shared with you" mail to recipients added
+// to a live transfer. A pending transfer mails them when it goes live.
+func mailAddedRecipients(cfg *config.Config, stores *store.Stores, transferID string, added []store.Recipient) error {
+	settings := stores.Settings.Get()
+	if settings.MailFromAddress == "" {
+		return nil
+	}
+	t, err := stores.Transfers.GetByID(transferID)
+	if err != nil || t == nil || t.Status != "active" {
+		return err
+	}
+	files, err := stores.Transfers.GetFilesByTransferID(transferID)
+	if err != nil {
+		return err
+	}
+	mail.EnqueueAvailable(stores, mail.NewTransfer(t, files, settings, cfg.Server.Location, cfg.Server.BaseURL), added)
+	return nil
 }
 
 // ManageDelete handles POST /manage/{token}/delete: deletes the transfer or

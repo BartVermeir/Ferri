@@ -87,7 +87,7 @@ func main() {
 
 	// ── Stores ─────────────────────────────────────────────────────────────
 	stores := store.New(database)
-	activity.Default.OnDone = handler.StoreDownloadStreams(stores)
+	activity.Default.OnDone = handler.StoreStreams(stores)
 
 	// ── Storage Manager ────────────────────────────────────────────────────
 	// Initialize from current settings. Defaults to local backend.
