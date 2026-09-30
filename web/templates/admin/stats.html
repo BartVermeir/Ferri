@@ -28,8 +28,8 @@
       {{range .Streams}}
       <tr>
         <td class="num">{{formatDate .StartedAt}}</td>
-        <td>{{.Who}}</td>
-        <td style="word-break:break-all;">{{.What}}</td>
+        <td class="wrap">{{.Who}}</td>
+        <td class="wrap-wide">{{.What}}</td>
         <td class="num">{{.IP}}</td>
         <td class="num">{{.Duration}}</td>
         <td class="num">{{.Sent}}</td>

@@ -140,17 +140,16 @@ func ButtonHTML(url, label string, settings *store.Settings) string {
 func ButtonsHTML(mainURL, mainLabel, manageURL, manageLabel string, settings *store.Settings) string {
 	primary := PrimaryColor(settings)
 	var b strings.Builder
-	b.WriteString(`<table role="presentation" cellpadding="0" cellspacing="0" style="margin:4px 0 12px;"><tr>`)
+	b.WriteString(`<div style="margin:4px 0 4px;">`)
 	if mainURL != "" {
-		b.WriteString(buttonCell(mainURL, mainLabel, primary, contrastText(primary)))
+		b.WriteString(buttonTable(mainURL, mainLabel, primary, contrastText(primary)))
 		if manageURL != "" {
-			b.WriteString(`<td style="width:8px;"></td>`)
-			b.WriteString(buttonCell(manageURL, manageLabel, "#ecece8", "#333333"))
+			b.WriteString(buttonTable(manageURL, manageLabel, "#ecece8", "#333333"))
 		}
 	} else if manageURL != "" {
-		b.WriteString(buttonCell(manageURL, manageLabel, primary, contrastText(primary)))
+		b.WriteString(buttonTable(manageURL, manageLabel, primary, contrastText(primary)))
 	}
-	b.WriteString(`</tr></table>`)
+	b.WriteString(`</div>`)
 	b.WriteString(`<p style="margin:0 0 20px;font-size:12px;color:#888;line-height:1.5;">`)
 	if mainURL != "" {
 		fmt.Fprintf(&b, `Or copy this link into your browser:<br><a href="%s" style="color:#555;word-break:break-all;">%s</a>`,
@@ -167,8 +166,11 @@ func ButtonsHTML(mainURL, mainLabel, manageURL, manageLabel string, settings *st
 	return b.String()
 }
 
-func buttonCell(url, label, bg, fg string) string {
-	return fmt.Sprintf(`<td style="border-radius:6px;background:%s;"><a href="%s" style="display:inline-block;padding:12px 20px;color:%s;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">%s</a></td>`,
+// buttonTable renders one button as its own inline table, so two buttons sit
+// side by side when they fit and the second moves below the first on a narrow
+// (phone) screen. Clients that ignore inline-table (Outlook on Windows) stack them.
+func buttonTable(url, label, bg, fg string) string {
+	return fmt.Sprintf(`<table role="presentation" cellpadding="0" cellspacing="0" style="display:inline-table;vertical-align:top;margin:0 8px 8px 0;"><tr><td style="border-radius:6px;background:%s;"><a href="%s" style="display:inline-block;padding:12px 20px;color:%s;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">%s</a></td></tr></table>`,
 		html.EscapeString(bg), html.EscapeString(url), html.EscapeString(fg), html.EscapeString(label))
 }
 

@@ -653,7 +653,7 @@
       '<div style="margin-bottom:8px;font-weight:500;">Upload complete — your download link:</div>' +
       '<div style="display:flex;gap:8px;align-items:center;">' +
         '<input type="text" readonly value="' + escHtml(url) + '" ' +
-          'style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #bbf7d0;' +
+          'style="flex:1;min-width:0;font-size:12px;padding:6px 8px;border:1px solid #bbf7d0;' +
           'border-radius:5px;background:#f0fdf4;color:#166534;outline:none;">' +
         '<button type="button" id="copy-link-btn" ' +
           'style="padding:6px 12px;border:none;border-radius:5px;background:#166534;' +

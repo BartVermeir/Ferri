@@ -150,9 +150,8 @@
             <th>To / Link</th>
             <th>Files</th>
             <th>Status</th>
-            <th>Created</th>
-            <th>Expires</th>
-            <th style="width:70px;"></th>
+            <th>Created / expires</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -162,9 +161,9 @@
           <tr>
             <td class="select-col"><input type="checkbox" name="transfer" value="{{.ID}}" form="bulk-delete" data-select aria-label="Select"></td>
             <td><button type="button" class="type-badge type-transfer stats-btn" data-stats="/admin/transfers/{{.ID}}/stats" title="Statistics">Send</button></td>
-            <td style="font-weight:500;">{{.Title}}</td>
-            <td style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
-            <td class="recipients">
+            <td class="wrap" style="font-weight:500;">{{.Title}}</td>
+            <td class="wrap" style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
+            <td class="recipients wrap-wide">
               {{range .Recipients}}
                 <a href="/dl/{{.DownloadToken}}" target="_blank">{{.Email}}</a>{{if .IsSender}} <span class="size-label">sender link</span>{{end}}
                 {{if .DownloadCount}}<span class="dl-count">({{.DownloadCount}}×)</span>{{end}}<br>
@@ -172,13 +171,12 @@
                 <span style="color:#ccc;">—</span>
               {{end}}
             </td>
-            <td style="font-size:12px; white-space:nowrap;">
-              {{if .FileCount}}<a href="/admin/transfers/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
+            <td class="nowrap" style="font-size:12px;">
+              {{if .FileCount}}<a href="/admin/transfers/{{.ID}}/files">{{.FileCount}} files</a><span class="sub">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
             </td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
-            <td style="font-size:12px; color:#aaa; white-space:nowrap;">{{.CreatedAt | formatDate}}</td>
-            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
-            <td>
+            <td class="nowrap" style="font-size:12px; color:#aaa;">{{.CreatedAt | formatDate}}<span class="expires-col" style="display:block;">→ {{.ExpiresAt | formatDate}}</span></td>
+            <td class="nowrap">
               <form method="POST" action="/admin/transfers/{{.ID}}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm"
                   data-confirm="Delete this transfer and all its files? This cannot be undone. If the transfer is live, the sender gets a summary of who downloaded what.">
@@ -192,21 +190,20 @@
           <tr>
             <td class="select-col"><input type="checkbox" name="request" value="{{.ID}}" form="bulk-delete" data-select aria-label="Select"></td>
             <td><button type="button" class="type-badge type-request stats-btn" data-stats="/admin/requests/{{.ID}}/stats" title="Statistics">Request</button></td>
-            <td style="font-weight:500;">{{.Title}}</td>
-            <td style="font-size:12px; color:#666;">{{.RequesterEmail}}</td>
-            <td class="recipients">
+            <td class="wrap" style="font-weight:500;">{{.Title}}</td>
+            <td class="wrap" style="font-size:12px; color:#666;">{{.RequesterEmail}}</td>
+            <td class="recipients wrap-wide">
               <a href="/ul/{{.UploadToken}}" target="_blank" title="/ul/{{.UploadToken}}">upload link</a>
               {{if .FileCount}}
               &nbsp;·&nbsp;<a href="/ul/{{.ViewPathToken}}/files" target="_blank" style="color:#aaa; font-size:11px;">view files</a>
               {{end}}
             </td>
-            <td style="font-size:12px; white-space:nowrap;">
-              {{if .FileCount}}<a href="/admin/requests/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
+            <td class="nowrap" style="font-size:12px;">
+              {{if .FileCount}}<a href="/admin/requests/{{.ID}}/files">{{.FileCount}} files</a><span class="sub">{{.TotalBytes | formatSize}}</span>{{else}}<span style="color:#ccc;">0</span>{{end}}
             </td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
-            <td style="font-size:12px; color:#aaa; white-space:nowrap;">{{.CreatedAt | formatDate}}</td>
-            <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
-            <td>
+            <td class="nowrap" style="font-size:12px; color:#aaa;">{{.CreatedAt | formatDate}}<span class="expires-col" style="display:block;">→ {{.ExpiresAt | formatDate}}</span></td>
+            <td class="nowrap">
               <form method="POST" action="/admin/requests/{{.ID}}/delete" style="display:inline;">
                 <button type="submit" class="btn btn-danger btn-sm"
                   data-confirm="Delete this upload request and all its files? This cannot be undone.">
@@ -219,7 +216,7 @@
           {{end}}
 
           {{if and (eq (len .Transfers) 0) (eq (len .Requests) 0)}}
-          <tr class="empty-row"><td colspan="10">No active transfers or upload requests</td></tr>
+          <tr class="empty-row"><td colspan="9">No active transfers or upload requests</td></tr>
           {{end}}
 
         </tbody>
@@ -242,8 +239,8 @@
           {{with .Transfer}}
           <tr>
             <td><button type="button" class="type-badge type-transfer stats-btn" data-stats="/admin/transfers/{{.ID}}/stats" title="Statistics">Send</button></td>
-            <td style="font-weight:500;">{{.Title}}</td>
-            <td style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
+            <td class="wrap" style="font-weight:500;">{{.Title}}</td>
+            <td class="wrap" style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
             <td style="font-size:12px; white-space:nowrap;"><a href="/admin/transfers/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span></td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
             <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
@@ -252,8 +249,8 @@
           {{with .Request}}
           <tr>
             <td><button type="button" class="type-badge type-request stats-btn" data-stats="/admin/requests/{{.ID}}/stats" title="Statistics">Request</button></td>
-            <td style="font-weight:500;">{{.Title}}</td>
-            <td style="font-size:12px; color:#666;">{{.RequesterEmail}}</td>
+            <td class="wrap" style="font-weight:500;">{{.Title}}</td>
+            <td class="wrap" style="font-size:12px; color:#666;">{{.RequesterEmail}}</td>
             <td style="font-size:12px; white-space:nowrap;"><a href="/admin/requests/{{.ID}}/files">{{.FileCount}} files</a><span class="size-label">{{.TotalBytes | formatSize}}</span></td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
             <td class="expires-col">{{.ExpiresAt | formatDate}}</td>
@@ -280,10 +277,10 @@
           <tbody>
             {{range .FailedMails}}
             <tr>
-              <td style="font-size:12px;">{{.ToAddress}}</td>
+              <td class="wrap" style="font-size:12px;">{{.ToAddress}}</td>
               <td style="font-size:12px;">{{.Subject}}</td>
               <td style="font-size:12px; color:#aaa;">{{.Attempts}}</td>
-              <td style="font-size:11px; color:#c00;">{{.ErrorMessage.String}}</td>
+              <td class="wrap" style="font-size:11px; color:#c00;">{{.ErrorMessage.String}}</td>
               <td style="white-space:nowrap;">
                 <form method="POST" action="/admin/mail/{{.ID}}/retry" style="display:inline;">
                   <button type="submit" class="btn btn-secondary btn-sm">Retry</button>
@@ -324,16 +321,15 @@
         </div>
         <table class="now-table">
           <thead>
-            <tr><th></th><th>Title</th><th>File</th><th>Who</th><th>From</th><th>Running</th><th>Progress</th><th>Speed</th><th>Est. remaining</th></tr>
+            <tr><th></th><th>Title</th><th>File</th><th>Who / from</th><th>Running</th><th>Progress</th><th>Speed</th><th>Est. remaining</th></tr>
           </thead>
           <tbody>
             {{range .Rows}}
             <tr>
-              <td style="white-space:nowrap;">{{if eq .Kind "upload"}}↑ upload{{else}}↓ download{{end}}{{if .Item}} <span class="type-badge type-{{.Item}}">{{.Item}}</span>{{end}}</td>
-              <td>{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
-              <td style="word-break:break-all;">{{.File}}</td>
-              <td>{{.Who}}</td>
-              <td class="num">{{.IP}}</td>
+              <td class="nowrap">{{if eq .Kind "upload"}}↑ upload{{else}}↓ download{{end}}{{if .Item}}<span class="sub"><span class="type-badge type-{{.Item}}">{{.Item}}</span></span>{{end}}</td>
+              <td class="wrap">{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
+              <td class="wrap-wide">{{.File}}</td>
+              <td class="wrap">{{.Who}}<span class="sub">{{.IP}}</span></td>
               <td class="num">{{.Running}}</td>
               <td class="num">{{.Progress}}</td>
               <td class="num">{{.Rate}}</td>

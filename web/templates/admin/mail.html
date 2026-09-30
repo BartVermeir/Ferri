@@ -20,11 +20,11 @@
           {{range .Mails}}
           <tr>
             <td style="font-size:12px; color:#888; white-space:nowrap;">{{formatDate .CreatedAt}}</td>
-            <td>{{.ToAddress}}</td>
-            <td>{{.Subject}}</td>
+            <td class="wrap">{{.ToAddress}}</td>
+            <td class="wrap">{{.Subject}}</td>
             <td><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
             <td>{{.Attempts}}</td>
-            <td style="color:#888; font-size:12px;">{{.ErrorMessage.String}}</td>
+            <td class="wrap" style="color:#888; font-size:12px;">{{.ErrorMessage.String}}</td>
             <td style="white-space:nowrap;">
               {{if eq .Status "failed"}}
               <form method="POST" action="/admin/mail/{{.ID}}/retry" style="display:inline;">

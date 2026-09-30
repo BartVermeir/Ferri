@@ -22,7 +22,7 @@
         <tbody>
           {{range .Files}}
           <tr>
-            <td style="word-break:break-all;">{{.Name}}</td>
+            <td class="wrap-wide">{{.Name}}</td>
             <td style="white-space:nowrap;">{{.Size | formatSize}}</td>
             <td style="text-align:right;"><a class="btn btn-sm" href="{{$.FileBase}}{{.ID}}">Download</a></td>
           </tr>

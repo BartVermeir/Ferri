@@ -36,24 +36,23 @@
       </div>
       <table class="history-table">
         <thead>
-          <tr><th>Started</th><th></th><th>Title</th><th>File</th><th>Who</th><th>From</th><th>Amount</th><th>Duration</th><th>Speed</th><th></th></tr>
+          <tr><th>Started</th><th></th><th>Title</th><th>File</th><th>Who / from</th><th>Amount</th><th>Duration</th><th>Speed</th><th></th></tr>
         </thead>
         <tbody>
           {{range .Rows}}
           <tr>
             <td class="when">{{formatDate .StartedAt}}</td>
-            <td style="white-space:nowrap;">{{if .Upload}}↑ upload{{else}}↓ download{{end}} <span class="type-badge type-{{.Item}}">{{.Item}}</span></td>
-            <td>{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
-            <td style="word-break:break-all;">{{.What}}</td>
-            <td>{{.Who}}</td>
-            <td class="num">{{.IP}}</td>
+            <td class="nowrap">{{if .Upload}}↑ upload{{else}}↓ download{{end}}<span class="sub"><span class="type-badge type-{{.Item}}">{{.Item}}</span></span></td>
+            <td class="wrap">{{if .Title}}{{.Title}}{{else}}<span style="color:#bbb;">untitled</span>{{end}}</td>
+            <td class="wrap-wide">{{.What}}</td>
+            <td class="wrap">{{.Who}}<span class="sub">{{.IP}}</span></td>
             <td class="num">{{.Sent}}</td>
             <td class="num">{{.Duration}}</td>
             <td class="num">{{.Rate}}</td>
-            <td>{{if .Complete}}<span class="badge badge-active">complete</span>{{else if .Upload}}<span class="badge badge-expired">partial</span>{{else}}<span class="badge badge-expired">broken off</span>{{end}}</td>
+            <td class="nowrap">{{if .Complete}}<span class="badge badge-active">complete</span>{{else if .Upload}}<span class="badge badge-expired">partial</span>{{else}}<span class="badge badge-expired">broken off</span>{{end}}</td>
           </tr>
           {{else}}
-          <tr class="empty-row"><td colspan="10">No uploads or downloads yet</td></tr>
+          <tr class="empty-row"><td colspan="9">No uploads or downloads yet</td></tr>
           {{end}}
         </tbody>
       </table>

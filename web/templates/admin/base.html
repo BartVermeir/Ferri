@@ -10,7 +10,7 @@
     a:hover { text-decoration: underline; }
     .admin-layout { display: flex; min-height: 100vh; }
     .sidebar {
-      width: 220px;
+      width: 180px;
       background: #fff;
       border-right: 1px solid #e8e8e4;
       padding: 24px 0;
@@ -42,14 +42,15 @@
       color: #aaa;
       padding: 16px 20px 4px;
     }
-    .main-content { flex: 1; padding: 24px; overflow: auto; }
+    .main-content { flex: 1; min-width: 0; padding: 20px; overflow: auto; }
     .page-header { margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; }
     .page-header h1 { font-size: 20px; font-weight: 500; }
     .card {
       background: #fff;
       border: 1px solid #e8e8e4;
       border-radius: 10px;
-      overflow: hidden;
+      /* A table too wide for the screen scrolls inside its card instead of being cut off. */
+      overflow-x: auto;
       margin-bottom: 24px;
     }
     .card-header {
@@ -63,8 +64,16 @@
     }
     .card-body { padding: 20px; }
     table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; padding: 10px 16px; font-size: 12px; font-weight: 500; color: #888; border-bottom: 1px solid #e8e8e4; background: #fafafa; }
-    td { padding: 12px 16px; border-bottom: 1px solid #f0f0ec; font-size: 13px; }
+    th { text-align: left; padding: 10px; font-size: 12px; font-weight: 500; color: #888; border-bottom: 1px solid #e8e8e4; background: #fafafa; }
+    td { padding: 12px 10px; border-bottom: 1px solid #f0f0ec; font-size: 13px; }
+    /* Addresses and file names have no spaces: let them wrap anywhere, but keep
+       the column readable. Without the ::before, the table squeezes such a column
+       down to a few characters (min-width on a cell is ignored by some browsers). */
+    td.wrap, td.wrap-wide { overflow-wrap: anywhere; }
+    td.wrap::before, td.wrap-wide::before { content: ""; display: block; width: 110px; }
+    td.wrap-wide::before { width: 180px; }
+    td.nowrap { white-space: nowrap; }
+    .sub { display: block; font-size: 11px; color: #aaa; }
     tr:last-child td { border-bottom: none; }
     tr:hover td { background: #fafafa; }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }

@@ -50,19 +50,25 @@ func Wrap(settings *store.Settings, baseURL, preheader, bodyHTML string) string 
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light">
 <title>%s</title>
+<style>
+@media (max-width:600px) {
+  .fx-outer { padding:16px 8px !important; }
+  .fx-pad { padding-left:20px !important; padding-right:20px !important; }
+}
+</style>
 </head>
 <body style="margin:0;padding:0;background:#f4f4f2;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a;">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">%s</div>
-<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" style="background:#f4f4f2;padding:32px 16px;">
+<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" class="fx-outer" style="background:#f4f4f2;padding:32px 16px;">
   <tr><td align="center">
     <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%%;">
-      <tr><td style="background:#fff;padding:24px 32px 0;border-radius:8px 8px 0 0;border:1px solid #e8e8e4;border-bottom:none;">
+      <tr><td class="fx-pad" style="background:#fff;padding:24px 32px 0;border-radius:8px 8px 0 0;border:1px solid #e8e8e4;border-bottom:none;">
         %s
       </td></tr>
-      <tr><td style="background:#fff;padding:0 32px;border-left:1px solid #e8e8e4;border-right:1px solid #e8e8e4;">
+      <tr><td class="fx-pad" style="background:#fff;padding:0 32px;border-left:1px solid #e8e8e4;border-right:1px solid #e8e8e4;">
         <div style="height:2px;background:%s;margin-top:18px;opacity:0.25;"></div>
       </td></tr>
-      <tr><td style="background:#fff;padding:24px 32px 32px;border-radius:0 0 8px 8px;border:1px solid #e8e8e4;border-top:none;font-size:14px;line-height:1.6;color:#333;">
+      <tr><td class="fx-pad" style="background:#fff;padding:24px 32px 32px;border-radius:0 0 8px 8px;border:1px solid #e8e8e4;border-top:none;font-size:14px;line-height:1.6;color:#333;">
         %s
       </td></tr>
       <tr><td style="padding:16px 8px;text-align:center;color:#999;font-size:11px;line-height:1.5;">
