@@ -164,8 +164,10 @@
             <td class="wrap" style="font-weight:500;">{{.Title}}</td>
             <td class="wrap" style="font-size:12px; color:#666;">{{.SenderEmail}}</td>
             <td class="recipients wrap-wide">
+              {{$linkOnly := not .NotifyRecipients}}
               {{range .Recipients}}
-                <a href="/dl/{{.DownloadToken}}" target="_blank">{{.Email}}</a>{{if .IsSender}} <span class="size-label">sender link</span>{{end}}
+                {{/* A link-only transfer's one recipient row carries the sender's address; it is the link they pass on. */}}
+                <a href="/dl/{{.DownloadToken}}" target="_blank">{{if $linkOnly}}shared link{{else}}{{.Email}}{{end}}</a>{{if .IsSender}} <span class="size-label">sender link</span>{{end}}
                 {{if .DownloadCount}}<span class="dl-count">({{.DownloadCount}}×)</span>{{end}}<br>
               {{else}}
                 <span style="color:#ccc;">—</span>

@@ -32,7 +32,7 @@ type Info struct {
 	ItemID   string
 	Title    string
 	File     string // file name, or "All files (ZIP)"
-	Who      string // recipient address, "requester", "admin"
+	Who      string // recipient address, "shared link", "requester", "admin"
 	IP       string
 	UploadID string // tusd upload ID (uploads)
 	Offset   int64  // position the bytes start at: Range start, Upload-Offset

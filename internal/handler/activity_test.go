@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BartVermeir/Ferri/internal/activity"
+	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 // A running upload chunk shows on the dashboard with its file, looked up by
@@ -177,5 +178,54 @@ func TestEstimateRemaining(t *testing.T) {
 		if got := estimateRemaining(c.left, c.rate); got != c.want {
 			t.Errorf("estimateRemaining(%d, %v) = %q, want %q", c.left, c.rate, got, c.want)
 		}
+	}
+}
+
+// A link-only transfer's one recipient row carries the sender's address:
+// the admin shows it, and its downloads, as "shared link".
+func TestAdmin_LinkOnlyShowsSharedLink(t *testing.T) {
+	cfg := newTestConfig()
+	stores := newTestStores(t)
+	mgr, root := newTestManager(t)
+	content := []byte("hello world")
+	res, err := stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(24 * time.Hour),
+		Recipients: []string{"alice@example.com"},
+		Files:      []store.CreateFileInput{{OriginalName: "a.txt", StoragePath: "transfers/lo/a.txt", SizeBytes: int64(len(content))}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeStorageFile(t, root, "transfers/lo/a.txt", content)
+	fileID := res.Files[0].FileID
+	if err := stores.Transfers.SetFileComplete(fileID, int64(len(content))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stores.Transfers.TryActivate(res.TransferID); err != nil {
+		t.Fatal(err)
+	}
+
+	activity.Default.OnDone = StoreStreams(stores)
+	defer func() { activity.Default.OnDone = nil }()
+	rr := httptest.NewRecorder()
+	newDownloadRouter(cfg, stores, mgr).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/dl/"+res.Recipients[0].DownloadToken+"/file/"+fileID, nil))
+	if rr.Body.String() != string(content) {
+		t.Fatalf("download body %q", rr.Body.String())
+	}
+	streams, err := stores.Stats.TransferStreams(res.TransferID)
+	if err != nil || len(streams) != 1 || streams[0].Who != "shared link" {
+		t.Fatalf("streams = %+v (%v), want one download by \"shared link\"", streams, err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	req.AddCookie(adminSessionCookie(t, cfg))
+	rr = httptest.NewRecorder()
+	newAdminRouter(cfg, stores, mgr).ServeHTTP(rr, req)
+	body := rr.Body.String()
+	if !strings.Contains(body, `target="_blank">shared link</a>`) {
+		t.Error("dashboard does not show the link-only recipient as shared link")
+	}
+	if strings.Contains(body, `target="_blank">alice@example.com</a>`) {
+		t.Error("dashboard shows the sender as the link-only recipient")
 	}
 }

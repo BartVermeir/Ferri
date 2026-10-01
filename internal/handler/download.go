@@ -281,7 +281,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		// This is critical for 400-600 GB files on flaky connections.
 		act := activity.Default.Start(activity.Info{
 			Kind: activity.Download, Item: "transfer", ItemID: transfer.ID, Title: transfer.Title,
-			File: targetFile.OriginalName, Who: recipient.Email, IP: appMiddleware.ClientIP(r, cfg.TrustedProxies),
+			File: targetFile.OriginalName, Who: downloadWho(transfer, recipient), IP: appMiddleware.ClientIP(r, cfg.TrustedProxies),
 			Offset: rangeStart(r), Total: targetFile.SizeBytes,
 		})
 		defer act.Done()
@@ -452,6 +452,16 @@ func downloadNotice(cfg *config.Config, settings *store.Settings, t *store.Trans
 	return n
 }
 
+// downloadWho is who a download shows as in the admin: the recipient's
+// address, or "shared link" for a link-only transfer, whose one recipient
+// row carries the sender's own address.
+func downloadWho(t *store.Transfer, r *store.Recipient) string {
+	if !t.NotifyRecipients {
+		return "shared link"
+	}
+	return r.Email
+}
+
 // transferLabel is the quoted title, or a neutral fallback for an untitled transfer.
 func transferLabel(t *store.Transfer) string {
 	if t.Title != "" {
@@ -569,7 +579,7 @@ func DownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.Manager)
 		}
 		act := activity.Default.Start(activity.Info{
 			Kind: activity.Download, Item: "transfer", ItemID: transfer.ID, Title: transfer.Title,
-			File: zipActivityName, Who: recipient.Email, IP: ip, Total: zipTotal(items),
+			File: zipActivityName, Who: downloadWho(transfer, recipient), IP: ip, Total: zipTotal(items),
 		})
 		defer act.Done() // also when streamZIP aborts with a panic
 		streamZIP(act.Writer(w), mgr, items, "zip")
