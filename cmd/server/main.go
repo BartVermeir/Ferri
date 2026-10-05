@@ -100,6 +100,10 @@ func main() {
 	}
 	storageMgr := storage.NewManager(initialBackend)
 	defer storageMgr.Close()
+	if cfg.Storage.DiagUploadHashes {
+		storageMgr.EnableUploadDiag()
+		slog.Warn("storage: upload diagnostics on, every upload is hashed and read back (storage.diag_upload_hashes, /admin/diag)")
+	}
 
 	// ── TUS handler ────────────────────────────────────────────────────────
 	tusHandler, err := ferritls.NewHandler(cfg, stores, storageMgr)

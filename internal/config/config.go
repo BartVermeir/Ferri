@@ -60,6 +60,9 @@ type ServerConfig struct {
 
 type StorageConfig struct {
 	Path string `yaml:"path"`
+	// DiagUploadHashes: hash every upload while it is received and again after
+	// reading it back from storage, to find where bytes change (/admin/diag).
+	DiagUploadHashes bool `yaml:"diag_upload_hashes"`
 }
 
 type DBConfig struct {

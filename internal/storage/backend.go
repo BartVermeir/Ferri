@@ -69,6 +69,7 @@ type Manager struct {
 	backend Backend
 	users   map[Backend]int  // open files and running upload calls per backend
 	retired map[Backend]bool // swapped out, close when users drops to 0
+	diag    *diagRecorder    // nil unless upload diagnostics are on (diag.go)
 }
 
 // NewManager creates a Manager with the given initial backend.
@@ -397,6 +398,14 @@ func (u *trackedUpload) WriteChunk(ctx context.Context, offset int64, src io.Rea
 		return 0, errBackendClosed
 	}
 	defer release()
+	if d := u.m.diag; d != nil {
+		if info, err := u.Upload.GetInfo(ctx); err == nil {
+			r := d.begin(info.ID, info.MetaData["filename"], info.Size, offset, src)
+			n, err := u.Upload.WriteChunk(ctx, offset, r)
+			r.done(n, err)
+			return n, err
+		}
+	}
 	return u.Upload.WriteChunk(ctx, offset, src)
 }
 
@@ -406,5 +415,13 @@ func (u *trackedUpload) FinishUpload(ctx context.Context) error {
 		return errBackendClosed
 	}
 	defer release()
-	return u.Upload.FinishUpload(ctx)
+	if err := u.Upload.FinishUpload(ctx); err != nil {
+		return err
+	}
+	if d := u.m.diag; d != nil {
+		if info, err := u.Upload.GetInfo(ctx); err == nil {
+			d.finish(info.ID, info.MetaData["filename"], info.Size)
+		}
+	}
+	return nil
 }

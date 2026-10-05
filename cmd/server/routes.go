@@ -92,6 +92,8 @@ func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, stora
 			r.Post("/admin/requests/{id}/delete", handler.AdminRequestDelete(cfg, stores, storageMgr))
 			r.Post("/admin/delete", handler.AdminBulkDelete(cfg, stores, storageMgr, scheduler))
 			r.Get("/admin/history", handler.AdminHistory(cfg, stores))
+			r.Get("/admin/diag", handler.AdminDiag(storageMgr))
+			r.Get("/admin/diag/{tusID}", handler.AdminDiagUpload(storageMgr))
 			r.Get("/admin/mail", handler.AdminMail(cfg, stores))
 			r.Post("/admin/mail/{id}/retry", handler.AdminMailRetry(cfg, stores))
 			r.Post("/admin/mail/{id}/delete", handler.AdminMailDelete(cfg, stores))
