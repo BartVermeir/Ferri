@@ -39,7 +39,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"time"
 
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 	"github.com/tus/tusd/v2/pkg/memorylocker"
@@ -126,7 +125,6 @@ func NewHandler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) 
 // admin dashboard shows it; after a successful PATCH, records activity on the
 // file row.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	started := time.Now()
 	if r.Method == http.MethodPatch {
 		offset, _ := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
 		act := activity.Default.Start(activity.Info{
@@ -142,7 +140,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handler.ServeHTTP(rw, r)
 
 	if r.Method == http.MethodPatch && rw.status >= 200 && rw.status < 300 {
-		h.recordPatchActivity(r, time.Since(started))
+		h.recordPatchActivity(r)
 	}
 }
 
@@ -477,7 +475,7 @@ func (h *Handler) enqueueTransferMails(transferID string) error {
 
 // ── Post-PATCH activity ───────────────────────────────────────────────────────
 
-func (h *Handler) recordPatchActivity(r *http.Request, took time.Duration) {
+func (h *Handler) recordPatchActivity(r *http.Request) {
 	tusID := path.Base(r.URL.Path)
 	if tusID == "" || tusID == "." || tusID == "/" {
 		return
@@ -486,7 +484,7 @@ func (h *Handler) recordPatchActivity(r *http.Request, took time.Duration) {
 	// Try transfer files first
 	fileID, err := h.stores.Transfers.GetFileIDByTUSID(tusID)
 	if err == nil && fileID != "" {
-		if err := h.stores.Transfers.UpdateTUSActivity(fileID, took); err != nil {
+		if err := h.stores.Transfers.UpdateTUSActivity(fileID); err != nil {
 			slog.Error("tus: update transfer activity", "file_id", fileID, "error", err)
 		}
 		return
@@ -495,7 +493,7 @@ func (h *Handler) recordPatchActivity(r *http.Request, took time.Duration) {
 	// Try request files
 	fileID, err = h.stores.Requests.GetFileIDByTUSID(tusID)
 	if err == nil && fileID != "" {
-		if err := h.stores.Requests.UpdateTUSActivity(fileID, took); err != nil {
+		if err := h.stores.Requests.UpdateTUSActivity(fileID); err != nil {
 			slog.Error("tus: update request activity", "file_id", fileID, "error", err)
 		}
 	}

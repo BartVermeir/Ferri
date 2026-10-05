@@ -7,6 +7,7 @@ package handler
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,8 +30,9 @@ type statsView struct {
 	UploadEnd   time.Time
 	Elapsed     string // start to last chunk, pauses included
 	ElapsedRate string
-	Net         string // summed chunk time; "" = not known (files from before v1.7.0)
+	Net         string // time files were uploading, overlap once; "" = not known (files from before v1.9.0)
 	NetRate     string
+	From        string // upload IPs, comma-separated; "" = not known
 
 	Streams   []streamRow
 	Complete  int // streams that reached the end
@@ -99,10 +101,10 @@ func buildStatsView(up store.UploadStats, streams []store.DownloadStream) statsV
 		elapsed := up.End.Sub(up.Start)
 		v.Elapsed = formatDuration(elapsed)
 		v.ElapsedRate = formatRate(bytesPerSec(up.Bytes, elapsed))
+		v.From = strings.Join(up.IPs, ", ")
 		if up.NetKnown {
-			net := time.Duration(up.NetMS) * time.Millisecond
-			v.Net = formatDuration(net)
-			v.NetRate = formatRate(bytesPerSec(up.Bytes, net))
+			v.Net = formatDuration(up.Net)
+			v.NetRate = formatRate(bytesPerSec(up.Bytes, up.Net))
 		}
 	}
 	var sent int64

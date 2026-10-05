@@ -396,7 +396,6 @@ func TestTUSPatch_RegisteredWhileRunning(t *testing.T) {
 	var during []activity.Running
 	body := &peekBody{Reader: strings.NewReader("0123456789"), peek: func() {
 		during = activity.Default.Snapshot().Running
-		time.Sleep(30 * time.Millisecond) // so the chunk takes measurable time
 	}}
 	req = httptest.NewRequest(http.MethodPatch, "/"+id, body)
 	req.Header.Set("Tus-Resumable", "1.0.0")
@@ -413,7 +412,7 @@ func TestTUSPatch_RegisteredWhileRunning(t *testing.T) {
 	if n := len(activity.Default.Snapshot().Running); n != 0 {
 		t.Fatalf("%d still registered after the PATCH", n)
 	}
-	// The chunk's time adds to the file's net upload time.
+	// The chunk marks the file's last activity, the end of the upload.
 	// Completion is marked by a hook goroutine, so wait for it.
 	var u store.UploadStats
 	for i := 0; i < 100 && u.Files == 0; i++ {
@@ -423,7 +422,7 @@ func TestTUSPatch_RegisteredWhileRunning(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if u.Files != 1 || !u.NetKnown || u.NetMS < 30 {
-		t.Fatalf("upload stats = %+v, want 1 file with at least 30 ms net", u)
+	if u.Files != 1 || u.End.IsZero() {
+		t.Fatalf("upload stats = %+v, want 1 file with its last activity", u)
 	}
 }

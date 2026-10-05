@@ -10,10 +10,11 @@
   {{if .Files}}
   <table class="stats-kv">
     <tr><th>Files</th><td>{{.Files}} · {{.Size}}</td></tr>
+    <tr><th>From</th><td>{{if .From}}{{.From}}{{else}}— <span class="stats-note">not measured before v1.9.0</span>{{end}}</td></tr>
     <tr><th>Started</th><td>{{formatDate .UploadStart}}</td></tr>
     <tr><th>Last data</th><td>{{formatDate .UploadEnd}}</td></tr>
     <tr><th>Start to end</th><td>{{.Elapsed}} · {{.ElapsedRate}} <span class="stats-note">pauses included</span></td></tr>
-    <tr><th>Net upload time</th><td>{{if .Net}}{{.Net}} · {{.NetRate}} <span class="stats-note">only while data came in</span>{{else}}— <span class="stats-note">not measured before v1.7.0</span>{{end}}</td></tr>
+    <tr><th>Net upload time</th><td>{{if .Net}}{{.Net}} · {{.NetRate}} <span class="stats-note">only while files were uploading, at the same time counts once</span>{{else}}— <span class="stats-note">not measured before v1.9.0</span>{{end}}</td></tr>
   </table>
   {{else}}
   <p class="stats-empty">No complete files yet.</p>

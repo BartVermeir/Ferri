@@ -572,11 +572,10 @@ func (s *RequestStore) SetFileComplete(fileID string, sizeBytes int64) error {
 }
 
 // UpdateTUSActivity updates tus_last_activity_at for a request file row.
-// took is how long the PATCH ran; it adds to upload_ms, the net upload time.
-func (s *RequestStore) UpdateTUSActivity(fileID string, took time.Duration) error {
+func (s *RequestStore) UpdateTUSActivity(fileID string) error {
 	_, err := s.db.Exec(
-		`UPDATE upload_request_files SET tus_last_activity_at = unixepoch(), upload_ms = upload_ms + ? WHERE id = ?`,
-		took.Milliseconds(), fileID,
+		`UPDATE upload_request_files SET tus_last_activity_at = unixepoch() WHERE id = ?`,
+		fileID,
 	)
 	return err
 }

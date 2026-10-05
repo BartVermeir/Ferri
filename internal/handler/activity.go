@@ -23,7 +23,7 @@ type activityRow struct {
 	IP       string
 	Running  string // "12 min"
 	Progress string // "15.9 GB of 36.0 GB"
-	Rate     string // "1456 Mbps", "—" in the first second
+	Rate     string // "1456 Mbps", "—" with less than a second to go on
 	// Remaining is a guess: what is left at the current speed ("~12 min").
 	// "—" without a known size or speed.
 	Remaining string

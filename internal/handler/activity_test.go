@@ -161,6 +161,63 @@ func TestAdminHistory_ShowsUploadsAndDownloads(t *testing.T) {
 	}
 }
 
+// The files of one upload or download are one line; another person, another
+// address or a long pause is another line.
+func TestGroupHistory_OneLinePerAction(t *testing.T) {
+	start := time.Now().Add(-time.Hour).Truncate(time.Second)
+	entry := func(upload bool, who, ip, file string, at, took time.Duration, bytes, total int64) store.HistoryEntry {
+		e := store.HistoryEntry{Upload: upload, Title: "Rushes", End: start.Add(at + took)}
+		e.DownloadStream = store.DownloadStream{TransferID: "t1", Who: who, What: file, IP: ip,
+			Bytes: bytes, Total: total, StartedAt: start.Add(at), Duration: took}
+		return e
+	}
+	// Oldest first here; History returns newest first.
+	entries := []store.HistoryEntry{
+		entry(true, "alice@example.com", "192.0.2.1", "a.mov", 0, 100*time.Second, 100, 100),
+		entry(true, "alice@example.com", "192.0.2.1", "b.mov", 0, 100*time.Second, 100, 100),
+		entry(true, "alice@example.com", "192.0.2.1", "c.mov", 50*time.Second, 50*time.Second, 50, 100), // broken off
+		entry(true, "alice@example.com", "192.0.2.1", "c.mov", 3*time.Minute, 50*time.Second, 50, 100),  // resumed within 5 min: same line
+		entry(false, "bob@example.com", "192.0.2.5", "a.mov", 10*time.Minute, 10*time.Second, 100, 100),
+		entry(false, "bob@example.com", "192.0.2.5", "b.mov", 11*time.Minute, 10*time.Second, 100, 100),
+		entry(false, "bob@example.com", "192.0.2.6", "c.mov", 11*time.Minute, 10*time.Second, 100, 100), // other address
+		entry(false, "bob@example.com", "192.0.2.5", "c.mov", 40*time.Minute, 10*time.Second, 10, 100),  // after a pause
+	}
+	entries[3].Offset = 50 // the resumed part of c.mov goes on where it broke off
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	var rows []historyRow
+	for _, a := range groupHistory(entries) {
+		rows = append(rows, buildHistoryRow(a))
+	}
+	type line struct {
+		upload   bool
+		what, ip string
+		sent     string
+		complete bool
+	}
+	want := []line{
+		{false, "c.mov", "192.0.2.5", "10 B", false},
+		{false, "c.mov", "192.0.2.6", "100 B", true},
+		{false, "2 files", "192.0.2.5", "200 B", true},
+		{true, "3 files", "192.0.2.1", "300 B", true},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("%d lines, want %d: %+v", len(rows), len(want), rows)
+	}
+	for i, w := range want {
+		r := rows[i]
+		if got := (line{r.Upload, r.What, r.IP, r.Sent, r.Complete}); got != w {
+			t.Errorf("line %d = %+v, want %+v", i, got, w)
+		}
+	}
+	// The upload: 0-100 s and 180-230 s moving, the parallel files once.
+	if up := rows[3]; up.Duration != formatDuration(150*time.Second) || !up.StartedAt.Equal(start) {
+		t.Errorf("upload line: started %v, duration %s, want %v and %s", up.StartedAt, up.Duration, start, formatDuration(150*time.Second))
+	}
+}
+
 // The remaining time is left / speed; without a size or a speed it is unknown.
 func TestEstimateRemaining(t *testing.T) {
 	for _, c := range []struct {

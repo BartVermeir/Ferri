@@ -61,33 +61,39 @@ type UploadStats struct {
 	Bytes int64 // their size
 	// First file started, last chunk arrived. Zero without complete files.
 	Start, End time.Time
-	// NetMS is the summed PATCH time; NetKnown only when every complete
-	// file has one (files from before migration 009 have 0).
-	NetMS    int64
+	// Net is the time at least one of the complete files was uploading,
+	// from their upload sessions: files that upload at the same time count
+	// once. NetKnown only when every complete file has a session (files from
+	// before migration 010 have none).
+	Net      time.Duration
 	NetKnown bool
+	// IPs the complete files were uploaded from, in the order they first
+	// appear; empty for files from before migration 010.
+	IPs []string
 }
 
 // TransferUploadStats returns the upload side of a transfer.
 func (s *StatsStore) TransferUploadStats(transferID string) (UploadStats, error) {
-	return s.uploadStats("files", "transfer_id", transferID)
+	return s.uploadStats("files", "transfer_id", "transfer_id", transferID)
 }
 
 // RequestUploadStats returns the upload side of an upload request.
 func (s *StatsStore) RequestUploadStats(requestID string) (UploadStats, error) {
-	return s.uploadStats("upload_request_files", "upload_request_id", requestID)
+	return s.uploadStats("upload_request_files", "upload_request_id", "request_id", requestID)
 }
 
-// uploadStats: table and column are one of two fixed pairs, never input.
-func (s *StatsStore) uploadStats(table, column, id string) (UploadStats, error) {
+// uploadStats: table, column and sessionColumn are one of two fixed sets,
+// never input.
+func (s *StatsStore) uploadStats(table, column, sessionColumn, id string) (UploadStats, error) {
 	var u UploadStats
 	var start, end sql.NullInt64
-	var withoutNet int
+	var withoutSession int
 	err := s.db.QueryRow(fmt.Sprintf(`
 		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), MIN(created_at),
 		       MAX(COALESCE(tus_last_activity_at, created_at)),
-		       COALESCE(SUM(upload_ms), 0), COALESCE(SUM(upload_ms = 0), 0)
-		FROM %s WHERE %s = ? AND status = 'complete'`, table, column), id,
-	).Scan(&u.Files, &u.Bytes, &start, &end, &u.NetMS, &withoutNet)
+		       COALESCE(SUM(NOT EXISTS (SELECT 1 FROM upload_sessions s WHERE s.tus_upload_id = f.tus_upload_id)), 0)
+		FROM %s f WHERE %s = ? AND status = 'complete'`, table, column), id,
+	).Scan(&u.Files, &u.Bytes, &start, &end, &withoutSession)
 	if err != nil {
 		return u, err
 	}
@@ -97,8 +103,56 @@ func (s *StatsStore) uploadStats(table, column, id string) (UploadStats, error) 
 	if end.Valid {
 		u.End = time.Unix(end.Int64, 0)
 	}
-	u.NetKnown = u.Files > 0 && withoutNet == 0
+	u.NetKnown = u.Files > 0 && withoutSession == 0
+	if u.Files == 0 {
+		return u, nil
+	}
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT s.started_at, s.ended_at, COALESCE(s.ip_address, '')
+		FROM upload_sessions s
+		JOIN %s f ON f.tus_upload_id = s.tus_upload_id AND f.%s = s.%s
+		WHERE f.%s = ? AND f.status = 'complete'
+		ORDER BY s.started_at`, table, column, sessionColumn, column), id)
+	if err != nil {
+		return u, err
+	}
+	defer rows.Close()
+	var spans [][2]int64
+	seen := map[string]bool{}
+	for rows.Next() {
+		var sp [2]int64
+		var ip string
+		if err := rows.Scan(&sp[0], &sp[1], &ip); err != nil {
+			return u, err
+		}
+		spans = append(spans, sp)
+		if ip != "" && !seen[ip] {
+			seen[ip] = true
+			u.IPs = append(u.IPs, ip)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return u, err
+	}
+	if u.NetKnown {
+		u.Net = time.Duration(Covered(spans)) * time.Second
+	}
 	return u, nil
+}
+
+// Covered is how much time the spans (start, end), sorted by start, cover
+// together, in the unit of the spans: where they overlap, it counts once.
+func Covered(spans [][2]int64) int64 {
+	var total, curStart, curEnd int64
+	for i, sp := range spans {
+		if i == 0 || sp[0] > curEnd {
+			total += curEnd - curStart
+			curStart, curEnd = sp[0], sp[1]
+			continue
+		}
+		curEnd = max(curEnd, sp[1])
+	}
+	return total + curEnd - curStart
 }
 
 // TransferStreams returns a transfer's download streams, oldest first.
@@ -137,11 +191,11 @@ func (s *StatsStore) streams(column, id string) ([]DownloadStream, error) {
 	return list, rows.Err()
 }
 
-// uploadSessionGap: a chunk that starts within this time after the previous
+// UploadSessionGap: a chunk that starts within this time after the previous
 // chunk of the same file ended, from the same address, continues its
 // session. tus-js-client sends the chunks of a file back to back; a longer
 // gap is a pause or a broken connection, and shows as a new row.
-const uploadSessionGap = 5 * time.Minute
+const UploadSessionGap = 5 * time.Minute
 
 // UploadChunk is one finished TUS PATCH. Exactly one of TransferID and
 // RequestID is set.
@@ -171,7 +225,7 @@ func (s *StatsStore) RecordUploadChunk(c UploadChunk) error {
 		  AND COALESCE(ip_address, '') = ?
 		  AND ended_at >= ?`,
 		c.Bytes, c.Duration.Milliseconds(), end.Unix(),
-		c.TUSUploadID, c.IP, c.StartedAt.Add(-uploadSessionGap).Unix(),
+		c.TUSUploadID, c.IP, c.StartedAt.Add(-UploadSessionGap).Unix(),
 	)
 	if err != nil {
 		return err
@@ -195,6 +249,7 @@ func (s *StatsStore) RecordUploadChunk(c UploadChunk) error {
 type HistoryEntry struct {
 	Upload bool
 	Title  string
+	End    time.Time // end of the stream or of the session's last chunk
 	DownloadStream
 }
 
@@ -210,9 +265,9 @@ func (s *StatsStore) History() ([]HistoryEntry, error) {
 	const cols = `COALESCE(x.transfer_id, ''), COALESCE(x.request_id, ''), COALESCE(t.title, r.title, ''),
 		x.who, x.what, COALESCE(x.ip_address, ''), x.offset_bytes, x.bytes_sent, x.total_bytes, x.started_at AS started, x.duration_ms`
 	rows, err := s.db.Query(`
-		SELECT 0, ` + cols + ` FROM download_streams x` + live + `
+		SELECT 0, ` + cols + `, x.started_at + (x.duration_ms + 999) / 1000 FROM download_streams x` + live + `
 		UNION ALL
-		SELECT 1, ` + cols + ` FROM upload_sessions x` + live + `
+		SELECT 1, ` + cols + `, x.ended_at FROM upload_sessions x` + live + `
 		ORDER BY started DESC`)
 	if err != nil {
 		return nil, err
@@ -221,12 +276,13 @@ func (s *StatsStore) History() ([]HistoryEntry, error) {
 	var list []HistoryEntry
 	for rows.Next() {
 		var e HistoryEntry
-		var started, ms int64
+		var started, ms, end int64
 		if err := rows.Scan(&e.Upload, &e.TransferID, &e.RequestID, &e.Title, &e.Who, &e.What, &e.IP,
-			&e.Offset, &e.Bytes, &e.Total, &started, &ms); err != nil {
+			&e.Offset, &e.Bytes, &e.Total, &started, &ms, &end); err != nil {
 			return nil, err
 		}
 		e.StartedAt = time.Unix(started, 0)
+		e.End = time.Unix(end, 0)
 		e.Duration = time.Duration(ms) * time.Millisecond
 		list = append(list, e)
 	}

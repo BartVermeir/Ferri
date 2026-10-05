@@ -310,11 +310,10 @@ func (s *TransferStore) SetFileComplete(fileID string, sizeBytes int64) error {
 }
 
 // UpdateTUSActivity records the latest TUS PATCH activity timestamp for a file.
-// took is how long the PATCH ran; it adds to upload_ms, the net upload time.
-func (s *TransferStore) UpdateTUSActivity(fileID string, took time.Duration) error {
+func (s *TransferStore) UpdateTUSActivity(fileID string) error {
 	_, err := s.db.Exec(
-		`UPDATE files SET tus_last_activity_at = unixepoch(), upload_ms = upload_ms + ? WHERE id = ?`,
-		took.Milliseconds(), fileID,
+		`UPDATE files SET tus_last_activity_at = unixepoch() WHERE id = ?`,
+		fileID,
 	)
 	return err
 }

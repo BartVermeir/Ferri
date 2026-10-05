@@ -50,12 +50,26 @@ type Handle struct {
 	done    atomic.Bool
 }
 
+// prevChunkMaxAge: the previous chunk of an upload counts in its speed only
+// when it ended this recently. tus-js-client sends the next chunk at once.
+const prevChunkMaxAge = time.Minute
+
+// chunk is a finished upload chunk: what it moved and how long it took.
+type chunk struct {
+	bytes int64
+	took  time.Duration
+	ended time.Time
+}
+
 // Registry holds the running transfers and the connection states.
 type Registry struct {
 	mu      sync.Mutex
 	next    uint64
 	running map[uint64]*Handle
 	conns   map[net.Conn]http.ConnState
+	// prev is the last finished chunk per tusd upload ID. A chunk of 200 MB
+	// takes about a second on a fast line, so its own bytes alone say little.
+	prev map[string]chunk
 
 	// OnDone, when set, runs once for every transfer that ends, with how
 	// long it took, on the goroutine of the request. Set it before serving.
@@ -66,7 +80,7 @@ type Registry struct {
 var Default = New()
 
 func New() *Registry {
-	return &Registry{running: map[uint64]*Handle{}, conns: map[net.Conn]http.ConnState{}}
+	return &Registry{running: map[uint64]*Handle{}, conns: map[net.Conn]http.ConnState{}, prev: map[string]chunk{}}
 }
 
 // Start registers a transfer that begins now.
@@ -85,11 +99,21 @@ func (h *Handle) Done() {
 	if h.done.Swap(true) {
 		return
 	}
+	now := time.Now()
+	took, bytes := now.Sub(h.started), h.bytes.Load()
 	h.reg.mu.Lock()
 	delete(h.reg.running, h.id)
+	if h.info.Kind == Upload && h.info.UploadID != "" && bytes > 0 {
+		h.reg.prev[h.info.UploadID] = chunk{bytes: bytes, took: took, ended: now}
+		for id, c := range h.reg.prev {
+			if now.Sub(c.ended) > prevChunkMaxAge {
+				delete(h.reg.prev, id)
+			}
+		}
+	}
 	h.reg.mu.Unlock()
 	if h.reg.OnDone != nil {
-		h.reg.OnDone(Running{Info: h.info, Started: h.started, Bytes: h.bytes.Load()}, time.Since(h.started))
+		h.reg.OnDone(Running{Info: h.info, Started: h.started, Bytes: bytes}, took)
 	}
 }
 
@@ -152,19 +176,24 @@ type Running struct {
 	Info
 	Started time.Time
 	Bytes   int64 // bytes moved on this connection
+	// The previous chunk of the same upload, when it ended less than
+	// prevChunkMaxAge ago; zero otherwise and for downloads.
+	PrevBytes int64
+	PrevTook  time.Duration
 }
 
 // Position is where the transfer is in the file: Offset plus what moved.
 func (x Running) Position() int64 { return x.Offset + x.Bytes }
 
-// Rate is the average speed on this connection in bytes per second, 0 in
-// the first second (too little to say anything).
+// Rate is the average speed in bytes per second: of this connection, and
+// for an upload also of its previous chunk. 0 when that covers less than a
+// second (too little to say anything).
 func (x Running) Rate(now time.Time) float64 {
-	d := now.Sub(x.Started).Seconds()
-	if d < 1 {
+	d := now.Sub(x.Started) + x.PrevTook
+	if d < time.Second {
 		return 0
 	}
-	return float64(x.Bytes) / d
+	return float64(x.Bytes+x.PrevBytes) / d.Seconds()
 }
 
 // Snapshot is the state at one moment.
@@ -179,7 +208,11 @@ func (r *Registry) Snapshot() Snapshot {
 	r.mu.Lock()
 	s := Snapshot{Taken: time.Now()}
 	for _, h := range r.running {
-		s.Running = append(s.Running, Running{Info: h.info, Started: h.started, Bytes: h.bytes.Load()})
+		x := Running{Info: h.info, Started: h.started, Bytes: h.bytes.Load()}
+		if c, ok := r.prev[h.info.UploadID]; ok && h.info.Kind == Upload && s.Taken.Sub(c.ended) <= prevChunkMaxAge {
+			x.PrevBytes, x.PrevTook = c.bytes, c.took
+		}
+		s.Running = append(s.Running, x)
 	}
 	for _, st := range r.conns {
 		s.OpenConns++

@@ -3,6 +3,7 @@ package store
 // Tests for the admin statistics and for purging deleted items.
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,27 +17,69 @@ func countRows(t *testing.T, s *Stores, query string, args ...any) int {
 	return n
 }
 
-func TestUploadStats_NetOnlyWhenEveryFileHasIt(t *testing.T) {
+// Net upload time comes from the upload sessions of the complete files:
+// files that upload at the same time count once, and it is only known when
+// every complete file has a session.
+func TestUploadStats_NetCountsParallelFilesOnce(t *testing.T) {
 	s := newRaceTestStores(t)
-	id := newExpectedTransfer(t, s, 2)
-	completeFile(t, s, id, "f1")
-	completeFile(t, s, id, "f2")
-	if err := s.Transfers.UpdateTUSActivity("f1", 1500*time.Millisecond); err != nil {
-		t.Fatal(err)
+	id := newExpectedTransfer(t, s, 3)
+	start := time.Now().Add(-time.Hour).Truncate(time.Second)
+	session := func(fileID, ip string, from, to time.Duration) {
+		t.Helper()
+		if err := s.Stats.RecordUploadChunk(UploadChunk{
+			TransferID: id, TUSUploadID: "tus-" + fileID, Who: "alice@example.com", What: fileID, IP: ip,
+			Bytes: 1, Total: 1, StartedAt: start.Add(from), Duration: to - from,
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	for _, f := range []string{"f1", "f2", "f3", "failed"} {
+		if err := s.Transfers.CreateFileRow(f, id, f+".mov", "p/"+f, 1); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Transfers.SetTUSUploadID(f, "tus-"+f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{"f1", "f2", "f3"} {
+		if err := s.Transfers.SetFileComplete(f, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session("f1", "192.0.2.1", 0, 100*time.Second)
+	session("f2", "192.0.2.1", 0, 100*time.Second) // same time as f1: counts once
+	session("failed", "192.0.2.9", 200*time.Second, 900*time.Second)
 
 	u, err := s.Stats.TransferUploadStats(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.Files != 2 || u.Bytes != 2 || u.NetKnown {
-		t.Fatalf("stats = %+v, want 2 files, 2 bytes, net unknown (f2 has none)", u)
+	if u.Files != 3 || u.Bytes != 3 || u.NetKnown {
+		t.Fatalf("stats = %+v, want 3 files, 3 bytes, net unknown (f3 has no session)", u)
 	}
-	if err := s.Transfers.UpdateTUSActivity("f2", 500*time.Millisecond); err != nil {
-		t.Fatal(err)
+	session("f3", "192.0.2.2", 50*time.Second, 160*time.Second) // overlaps the first 50 s
+	if u, _ = s.Stats.TransferUploadStats(id); !u.NetKnown || u.Net != 160*time.Second {
+		t.Fatalf("stats = %+v, want net 160 s (0-160, the failed file left out)", u)
 	}
-	if u, _ = s.Stats.TransferUploadStats(id); !u.NetKnown || u.NetMS != 2000 {
-		t.Fatalf("stats = %+v, want net 2000 ms", u)
+	if got := strings.Join(u.IPs, ","); got != "192.0.2.1,192.0.2.2" {
+		t.Fatalf("IPs = %q, want each address of the complete files once, the failed file left out", got)
+	}
+}
+
+func TestCovered(t *testing.T) {
+	for _, tc := range []struct {
+		spans [][2]int64
+		want  int64
+	}{
+		{nil, 0},
+		{[][2]int64{{10, 20}}, 10},
+		{[][2]int64{{0, 10}, {0, 10}, {5, 12}}, 12},
+		{[][2]int64{{0, 10}, {20, 25}}, 15},
+		{[][2]int64{{0, 30}, {5, 10}, {40, 41}}, 31},
+	} {
+		if got := Covered(tc.spans); got != tc.want {
+			t.Errorf("Covered(%v) = %d, want %d", tc.spans, got, tc.want)
+		}
 	}
 }
 

@@ -457,6 +457,36 @@ func TestAdminTransferFiles_DownloadIsNotARecipientDownload(t *testing.T) {
 	}
 }
 
+// The statistics dialog shows where the upload came from.
+func TestAdminTransferStats_ShowsUploadIP(t *testing.T) {
+	cfg := newTestConfig()
+	stores := store.New(newTestDB(t))
+	mgr, root := newTestManager(t)
+	r := newAdminRouter(cfg, stores, mgr)
+	_, fileID, _, _ := mustCreateActiveTransfer(t, stores, root, "")
+	f, err := stores.Transfers.GetFileByID(fileID)
+	if err != nil || f == nil {
+		t.Fatal(err)
+	}
+	if err := stores.Transfers.SetTUSUploadID(fileID, "tus-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Stats.RecordUploadChunk(store.UploadChunk{
+		TransferID: f.TransferID, TUSUploadID: "tus-1", Who: "alice@example.com", What: "test.txt",
+		IP: "192.0.2.7", Bytes: 1, Total: 1, StartedAt: time.Now().Add(-time.Minute), Duration: time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/transfers/"+f.TransferID+"/stats", nil)
+	req.AddCookie(adminSessionCookie(t, cfg))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if body := rr.Body.String(); rr.Code != http.StatusOK || !strings.Contains(body, "<th>From</th><td>192.0.2.7</td>") {
+		t.Fatalf("stats dialog: status %d, no upload IP:\n%s", rr.Code, body)
+	}
+}
+
 // Transfers and requests share one list on the dashboard, newest first: a
 // request must not sink below every transfer.
 func TestAdminDashboard_ListsTransfersAndRequestsByCreation(t *testing.T) {
