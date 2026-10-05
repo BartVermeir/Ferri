@@ -10,10 +10,13 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	tusd "github.com/tus/tusd/v2/pkg/handler"
 )
 
 // Upload diagnostics (storage.diag_upload_hashes in config.yaml). When on,
-// every upload is hashed per block while it is received, and once it is
+// the send page shows "Check upload integrity"; an upload sent with it ticked
+// is hashed per block while it is received, and once it is
 // finished the stored file is read back and hashed the same way. A block
 // whose two hashes differ changed between receiving and storing it. The
 // received hashes, compared with the original file (same block size, same
@@ -31,6 +34,15 @@ const (
 	diagStateVerified = "verified"
 )
 
+// diagFileIDKey: the upload's file row, set by the TUS pre-create hook.
+const diagFileIDKey = "ferri_file_id"
+
+// diagWanted: the sender ticked "Check upload integrity". Only for transfers:
+// those are created on the internal network, while /tus itself is public.
+func diagWanted(info tusd.FileInfo) bool {
+	return info.MetaData["ferri_diag"] == "1" && info.MetaData["transfer_id"] != ""
+}
+
 type diagSum struct {
 	sum [sha256.Size]byte
 	ok  bool
@@ -44,7 +56,7 @@ func (s diagSum) String() string {
 }
 
 type diagUpload struct {
-	id, name   string
+	id, fileID string
 	size       int64
 	started    time.Time
 	state      string
@@ -86,7 +98,7 @@ func (d *diagRecorder) run() {
 }
 
 // get returns the upload's record, creating it; d.mu must be held.
-func (d *diagRecorder) get(id, name string, size int64) *diagUpload {
+func (d *diagRecorder) get(id, fileID string, size int64) *diagUpload {
 	u := d.uploads[id]
 	if u == nil {
 		u = &diagUpload{id: id, started: time.Now(), state: "receiving", next: -1}
@@ -97,8 +109,8 @@ func (d *diagRecorder) get(id, name string, size int64) *diagUpload {
 			d.order = d.order[1:]
 		}
 	}
-	if name != "" {
-		u.name = name
+	if fileID != "" {
+		u.fileID = fileID
 	}
 	if size > 0 {
 		u.size = size
@@ -108,10 +120,10 @@ func (d *diagRecorder) get(id, name string, size int64) *diagUpload {
 
 // begin wraps one chunk's body. The caller passes the bytes the store wrote
 // to done.
-func (d *diagRecorder) begin(id, name string, size, offset int64, src io.Reader) *diagReader {
+func (d *diagRecorder) begin(id, fileID string, size, offset int64, src io.Reader) *diagReader {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	u := d.get(id, name, size)
+	u := d.get(id, fileID, size)
 	r := &diagReader{d: d, u: u, src: src, start: offset, pos: offset}
 	switch {
 	case u.block != nil && u.next == offset:
@@ -191,9 +203,9 @@ func (r *diagReader) done(written int64, err error) {
 }
 
 // finish closes the last, short block and queues the read-back.
-func (d *diagRecorder) finish(id, name string, size int64) {
+func (d *diagRecorder) finish(id, fileID string, size int64) {
 	d.mu.Lock()
-	u := d.get(id, name, size)
+	u := d.get(id, fileID, size)
 	u.size = size
 	if u.block != nil && u.next == size && size%d.blockSize != 0 {
 		i := size / d.blockSize
@@ -345,13 +357,13 @@ func (d *diagRecorder) readBack(id string, size int64) ([]diagSum, int64, error)
 
 // DiagUpload is one measured upload, as listed on /admin/diag.
 type DiagUpload struct {
-	ID, Name, State string
-	Size            int64
-	StoredSize      int64
-	Started         time.Time
-	Blocks          int64
-	NotMeasured     int // blocks without a received hash (resumed mid-block)
-	Differ          int
+	ID, FileID, State string
+	Size              int64
+	StoredSize        int64
+	Started           time.Time
+	Blocks            int64
+	NotMeasured       int // blocks without a received hash (resumed mid-block)
+	Differ            int
 }
 
 // DiagEnabled reports whether upload diagnostics are on.
@@ -383,7 +395,7 @@ func (m *Manager) DiagUploads() []DiagUpload {
 			}
 		}
 		out = append(out, DiagUpload{
-			ID: u.id, Name: u.name, State: u.state, Size: u.size, StoredSize: u.storedSize,
+			ID: u.id, FileID: u.fileID, State: u.state, Size: u.size, StoredSize: u.storedSize,
 			Started: u.started, Blocks: blocks, NotMeasured: notMeasured, Differ: u.mismatches,
 		})
 	}

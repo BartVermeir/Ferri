@@ -22,7 +22,7 @@ func AdminDiag(mgr *storage.Manager) http.HandlerFunc {
 		fmt.Fprintf(w, "not measured = no received hash (resumed mid-block), differ = stored block not what was received\n\n")
 		for _, u := range mgr.DiagUploads() {
 			fmt.Fprintf(w, "%s  %s  %s\n  size %d, stored %d, blocks %d, not measured %d, differ %d, %s\n\n",
-				u.Started.In(displayLocation).Format("2006-01-02 15:04:05"), u.ID, u.Name,
+				u.Started.In(displayLocation).Format("2006-01-02 15:04:05"), u.ID, "file "+u.FileID,
 				u.Size, u.StoredSize, u.Blocks, u.NotMeasured, u.Differ, u.State)
 		}
 	}

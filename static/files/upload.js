@@ -346,8 +346,12 @@
       var current = attempt;
 
       try {
+        var meta = { transfer_id: current.transferId };
+        // Only shown when the server has upload diagnostics on.
+        var diag = document.getElementById('diag-upload');
+        if (diag && diag.checked) meta.ferri_diag = '1';
         await uploadFiles(uploads.filter(function (u) { return !current.uploaded[uploadKey(u)]; }),
-          { transfer_id: current.transferId },
+          meta,
           function (pct, label) { updateProgress(progFill, progLbl, pct, label); },
           function (item) { current.uploaded[uploadKey(item)] = true; });
       } catch (err) {

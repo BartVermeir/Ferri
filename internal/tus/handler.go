@@ -214,13 +214,16 @@ func (h *Handler) preCreateTransferFile(
 	slog.Info("tus: upload created", "file_id", fileID, "transfer_id", transferID,
 		"name", originalName, "size", uploadLength)
 
-	return tusd.HTTPResponse{}, tusd.FileInfoChanges{
-		MetaData: tusd.MetaData{
-			metaKeyFileID: fileID,
-			"context":     metaContextTransfer,
-			"transfer_id": transferID,
-		},
-	}, nil
+	changes := tusd.MetaData{
+		metaKeyFileID: fileID,
+		"context":     metaContextTransfer,
+		"transfer_id": transferID,
+	}
+	// "Check upload integrity" on the send page, read by storage's upload diagnostics.
+	if meta["ferri_diag"] == "1" {
+		changes["ferri_diag"] = "1"
+	}
+	return tusd.HTTPResponse{}, tusd.FileInfoChanges{MetaData: changes}, nil
 }
 
 func (h *Handler) preCreateRequestFile(

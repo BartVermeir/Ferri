@@ -30,12 +30,17 @@ func diagManager(t *testing.T) (*Manager, string) {
 	return m, root
 }
 
+// ticked: the metadata of a transfer upload sent with "Check upload integrity".
+func ticked() tusd.MetaData {
+	return tusd.MetaData{"ferri_file_id": "f1", "transfer_id": "t1", "ferri_diag": "1"}
+}
+
 // upload sends data through the Manager's TUS store in the given chunks.
 func upload(t *testing.T, m *Manager, data []byte, chunks ...int) string {
 	t.Helper()
 	ctx := context.Background()
 	store := m.TUSDataStore()
-	up, err := store.NewUpload(ctx, tusd.FileInfo{Size: int64(len(data)), MetaData: tusd.MetaData{"filename": "a.bin"}})
+	up, err := store.NewUpload(ctx, tusd.FileInfo{Size: int64(len(data)), MetaData: ticked()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +88,7 @@ func TestDiag_ReceivedMatchesStored(t *testing.T) {
 		t.Errorf("blocks:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	u := m.DiagUploads()[0]
-	if u.Differ != 0 || u.NotMeasured != 0 || u.State != diagStateVerified || u.Name != "a.bin" {
+	if u.Differ != 0 || u.NotMeasured != 0 || u.State != diagStateVerified || u.FileID != "f1" {
 		t.Errorf("summary = %+v", u)
 	}
 }
@@ -93,7 +98,7 @@ func TestDiag_StoredBlockChangedIsReported(t *testing.T) {
 	data := []byte("0123456789")
 	ctx := context.Background()
 	store := m.TUSDataStore()
-	up, _ := store.NewUpload(ctx, tusd.FileInfo{Size: 10})
+	up, _ := store.NewUpload(ctx, tusd.FileInfo{Size: 10, MetaData: ticked()})
 	info, _ := up.GetInfo(ctx)
 	if _, err := up.WriteChunk(ctx, 0, bytes.NewReader(data)); err != nil {
 		t.Fatal(err)
@@ -140,6 +145,32 @@ func TestDiag_FailedChunkAndUnalignedResume(t *testing.T) {
 	}
 	if got[0].String() != sumHex(data[0:4]) || got[2].String() != sumHex(data[8:10]) {
 		t.Errorf("hashes = %v %v", got[0], got[2])
+	}
+}
+
+// Only a ticked transfer upload is measured: not one without the tick, and
+// not a request upload (the request upload page is public).
+func TestDiag_OnlyTickedTransferUploads(t *testing.T) {
+	m, _ := diagManager(t)
+	ctx := context.Background()
+	store := m.TUSDataStore()
+	for _, meta := range []tusd.MetaData{
+		{"transfer_id": "t1"},
+		{"upload_request_token": "r1", "ferri_diag": "1"},
+	} {
+		up, err := store.NewUpload(ctx, tusd.FileInfo{Size: 4, MetaData: meta})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := up.WriteChunk(ctx, 0, strings.NewReader("abcd")); err != nil {
+			t.Fatal(err)
+		}
+		if err := up.FinishUpload(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := m.DiagUploads(); len(got) != 0 {
+		t.Errorf("measured %d uploads, want 0", len(got))
 	}
 }
 

@@ -10,7 +10,7 @@ server:
 
 storage:
   path: "/data/storage"                  # Inside the container. Mount your NFS share here.
-  # diag_upload_hashes: true             # Temporary: hash each upload on receipt and after read-back, results on /admin/diag
+  # diag_upload_hashes: true             # Temporary: shows "Check upload integrity" on the send page; ticked uploads are hashed on receipt and after read-back, results on /admin/diag
 
 db:
   path: "/data/app.db"                   # SQLite database file inside the container.

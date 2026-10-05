@@ -102,7 +102,7 @@ func main() {
 	defer storageMgr.Close()
 	if cfg.Storage.DiagUploadHashes {
 		storageMgr.EnableUploadDiag()
-		slog.Warn("storage: upload diagnostics on, every upload is hashed and read back (storage.diag_upload_hashes, /admin/diag)")
+		slog.Warn("storage: upload diagnostics on, uploads sent with \"Check upload integrity\" are hashed and read back (storage.diag_upload_hashes, /admin/diag)")
 	}
 
 	// ── TUS handler ────────────────────────────────────────────────────────

@@ -87,8 +87,15 @@
               <option value="{{.Hours}}">{{.Label}}</option>
               {{end}}
             </select>
-            <label>Password <span class="text-muted">(optional)</span></label>
-            <input type="password" name="password" autocomplete="new-password">
+            <details class="more-options">
+              <summary>Additional options</summary>
+              <label>Password <span class="text-muted">(optional)</span></label>
+              <input type="password" name="password" autocomplete="new-password">
+              {{if .DiagUpload}}
+              <label class="check"><input type="checkbox" id="diag-upload"> Check upload integrity</label>
+              <p class="text-muted">Slower. Only when asked to, for troubleshooting.</p>
+              {{end}}
+            </details>
             <div class="mt-24">
               <button type="submit" class="btn btn-primary" id="submit-btn">Send files</button>
             </div>
@@ -122,8 +129,11 @@
             <label>Number of links</label>
             <input type="number" name="link_count" value="1" min="1" max="{{.MaxRequestLinks}}" required>
             <p class="text-muted" style="font-size:13px; margin-top:4px;">One link per person you ask. More than one: each gets the title with #1, #2, … and its own mail when files come in.</p>
-            <label>Password <span class="text-muted">(optional)</span></label>
-            <input type="password" name="password" autocomplete="new-password">
+            <details class="more-options">
+              <summary>Additional options</summary>
+              <label>Password <span class="text-muted">(optional)</span></label>
+              <input type="password" name="password" autocomplete="new-password">
+            </details>
             <div class="mt-24">
               <button type="submit" class="btn btn-primary">Create upload link</button>
             </div>

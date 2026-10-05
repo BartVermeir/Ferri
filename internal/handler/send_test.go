@@ -190,6 +190,25 @@ func TestSendPage_CarriesLimits(t *testing.T) {
 	}
 }
 
+// The password sits under "Additional options" on both panels; "Check upload
+// integrity" only shows when upload diagnostics are on.
+func TestSendPage_AdditionalOptions(t *testing.T) {
+	stores := newTestStores(t)
+	for _, on := range []bool{false, true} {
+		cfg := newTestConfig()
+		cfg.Storage.DiagUploadHashes = on
+		rr := httptest.NewRecorder()
+		SendPage(cfg, stores).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+		body := rr.Body.String()
+		if n := strings.Count(body, "<summary>Additional options</summary>\n              <label>Password"); n != 2 {
+			t.Errorf("diag %v: password under Additional options %d times, want 2", on, n)
+		}
+		if got := strings.Contains(body, `id="diag-upload"`); got != on {
+			t.Errorf("diag %v: integrity checkbox shown = %v", on, got)
+		}
+	}
+}
+
 // Bodies, names and addresses are bounded, and an address with a line break
 // is refused (a mail to it would fail for good later).
 func TestSendCreate_Bounds(t *testing.T) {

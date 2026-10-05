@@ -99,6 +99,25 @@ func TestPreUploadCreate_TransferOversizedRejected(t *testing.T) {
 	}
 }
 
+// The hook replaces the metadata, so "Check upload integrity" must be carried
+// over for storage to see it, and only when it was ticked.
+func TestPreUploadCreate_KeepsIntegrityCheck(t *testing.T) {
+	h, _, stores := newTestHandler(t)
+	for _, tick := range []string{"1", ""} {
+		meta := tusd.MetaData{"transfer_id": mustCreatePendingTransfer(t, stores), "filename": "a.bin"}
+		if tick != "" {
+			meta["ferri_diag"] = tick
+		}
+		_, changes, err := h.preUploadCreate(tusd.HookEvent{Upload: tusd.FileInfo{Size: 10, MetaData: meta}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := changes.MetaData["ferri_diag"]; got != tick {
+			t.Errorf("ticked %q: ferri_diag = %q", tick, got)
+		}
+	}
+}
+
 func TestPreUploadCreate_TransferValidSizeAccepted(t *testing.T) {
 	h, cfg, stores := newTestHandler(t)
 	transferID := mustCreatePendingTransfer(t, stores)

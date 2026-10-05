@@ -69,6 +69,8 @@ type homePageData struct {
 	MaxUploadBytes int64
 	// MaxRequestLinks caps "Number of links" on the request form.
 	MaxRequestLinks int
+	// DiagUpload shows "Check upload integrity" (storage.diag_upload_hashes).
+	DiagUpload bool
 }
 
 // renderHomePage renders the combined send/request page (send.html).
@@ -89,6 +91,7 @@ func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.S
 		MaxFiles:        cfg.Limits.MaxFilesPerTransfer,
 		MaxUploadBytes:  cfg.Limits.MaxUploadBytes,
 		MaxRequestLinks: maxRequestLinks,
+		DiagUpload:      cfg.Storage.DiagUploadHashes,
 	})
 }
 
