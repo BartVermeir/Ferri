@@ -9,7 +9,7 @@ package handler
 //   POST /manage/{token}/recipients — add recipients to a transfer, each with their own link
 //   POST /manage/{token}/delete  — delete at once, same path as the admin delete
 //
-// One manage token per transfer or request (migration 006), handed out in the
+// One manage token per transfer or request, handed out in the
 // sender's confirmation mail, on the screen after an upload, on the "upload
 // link created" page and in the requester's mails. The token alone opens the
 // page, so it only answers on the internal network.
@@ -39,9 +39,7 @@ type managed struct {
 	Request  *store.UploadRequest
 }
 
-// minExtension: an extend must add at least this much. Without it "1 day"
-// was offered for a transfer created a moment ago for one day, and "extended"
-// it by a few milliseconds.
+// minExtension: an extend must move the expiry at least this much later.
 const minExtension = time.Hour
 
 func (m managed) found() bool { return m.Transfer != nil || m.Request != nil }
@@ -92,8 +90,8 @@ type managePageData struct {
 	LinkOnly   bool
 	UploadURL  string // requests only
 	ViewURL    string // requests only
-	// Options are the expiry options that would make it last longer than
-	// now; empty when it already runs for the longest option.
+	// Options are the expiry options that move the expiry later (by at least
+	// minExtension); empty when it already runs for the longest option.
 	Options  []config.ExpiryOption
 	Extended bool
 	Added    int // recipients just added (?added=N)
@@ -231,7 +229,7 @@ func ManagePage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 // ManageExtend handles POST /manage/{token}/extend: the new expiry is now
 // plus one of expiry_options, and must be later than the current one.
-// Recipients are not mailed; their links simply keep working longer.
+// Recipients are not mailed; their links work until the new expiry.
 func ManageExtend(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := chi.URLParam(r, "token")
@@ -360,8 +358,9 @@ func ManageAddRecipients(cfg *config.Config, stores *store.Stores) http.HandlerF
 		}
 		slog.Info("manage: recipients added", "transfer_id", t.ID, "added", len(added))
 
-		// Read the status after the insert: a transfer that went live in
-		// between mails everyone it found, and claiming keeps it to one mail.
+		// The status is read after the insert. A transfer that went live in
+		// between mails the recipients it found; EnqueueAvailable claims each
+		// recipient first, so each gets one mail.
 		if err := mailAddedRecipients(cfg, stores, t.ID, added); err != nil {
 			slog.Error("manage: mail added recipients", "transfer_id", t.ID, "error", err)
 		}

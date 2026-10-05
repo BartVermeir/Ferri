@@ -17,8 +17,8 @@ var untrustedForwardWarn sync.Once
 // Blocked requests are passed to denied, which must respond with a 403.
 //
 // Forwarded headers (X-Real-IP, X-Forwarded-For) are only trusted when the direct
-// TCP connection originates from a configured trusted proxy. This prevents clients
-// from spoofing their IP by injecting these headers directly.
+// TCP connection originates from a configured trusted proxy, so a direct client
+// cannot spoof its IP with these headers.
 func IPAllow(allowlist []*net.IPNet, trustedProxies []*net.IPNet, denied http.Handler) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,11 +43,6 @@ func IPAllow(allowlist []*net.IPNet, trustedProxies []*net.IPNet, denied http.Ha
 	}
 }
 
-// ClientIP returns the real client IP using the same trusted-proxy logic as the
-// IP allowlist. Use this anywhere a client IP is recorded (e.g. audit logs) so a
-// direct client cannot spoof it via X-Real-IP / X-Forwarded-For headers.
-// It only trusts X-Real-IP / X-Forwarded-For when the direct TCP connection
-// (r.RemoteAddr) comes from a known trusted proxy. Otherwise RemoteAddr is used.
 // forwardedClient picks the visitor from an X-Forwarded-For chain: the
 // rightmost address that is not one of our trusted proxies. Each proxy
 // appends the address it received from, so everything left of that is what
@@ -67,6 +62,11 @@ func forwardedClient(header string, trustedProxies []*net.IPNet) string {
 	return strings.TrimSpace(hops[0])
 }
 
+// ClientIP returns the real client IP using the same trusted-proxy logic as the
+// IP allowlist. Use this anywhere a client IP is recorded (e.g. audit logs) so a
+// direct client cannot spoof it via X-Real-IP / X-Forwarded-For headers.
+// It only trusts X-Real-IP / X-Forwarded-For when the direct TCP connection
+// (r.RemoteAddr) comes from a known trusted proxy. Otherwise RemoteAddr is used.
 func ClientIP(r *http.Request, trustedProxies []*net.IPNet) string {
 	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -83,9 +83,9 @@ func ClientIP(r *http.Request, trustedProxies []*net.IPNet) string {
 		}
 	}
 
-	// Forwarding headers from a peer we don't trust almost always means the
-	// reverse proxy is missing from (or mistyped in) server.trusted_proxies.
-	// The request is then judged on the proxy's IP, not the visitor's.
+	// Forwarding headers from an untrusted peer: the reverse proxy is missing
+	// from (or mistyped in) server.trusted_proxies. The request is judged on
+	// the proxy's IP, not the visitor's.
 	if r.Header.Get("X-Real-IP") != "" || r.Header.Get("X-Forwarded-For") != "" {
 		untrustedForwardWarn.Do(func() {
 			slog.Warn("forwarding headers received from an untrusted peer — if this is your reverse proxy, add it to server.trusted_proxies",

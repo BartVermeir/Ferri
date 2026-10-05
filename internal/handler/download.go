@@ -7,7 +7,7 @@ package handler
 //   POST /dl/:token          — validate password, set session cookie, redirect
 //   GET  /dl/:token/file/:fileID — stream file with Range support
 //
-// Key points from architecture.md §7:
+// Key points:
 //   - http.ServeContent for Range/206 support — never io.Copy
 //   - Content-Disposition MUST be set before ServeContent (it doesn't set it)
 //   - RFC 5987 filename encoding for non-ASCII filenames
@@ -42,8 +42,7 @@ import (
 )
 
 // zipCopyBufSize is the step in which a ZIP entry is copied from its
-// readAhead, which reads storage in parallel 1MB blocks: one block per step,
-// instead of io.Copy's 32KB.
+// readAhead, which reads storage in parallel 1MB blocks: one block per step.
 const zipCopyBufSize = fileReadAheadSize
 
 // downloadPasswordCookie unlocks a password-protected download page for the
@@ -59,8 +58,8 @@ const downloadNotifyWindow = time.Hour
 // countsAsDownload reports whether a file request starts a download, as
 // opposed to continuing one. A request without Range, or with a Range starting
 // at byte 0, starts one; a Range starting later is a resume or a parallel
-// chunk of a download already counted. Without this, a download manager or a
-// resumed 400 GB download counted (and mailed) once per request.
+// chunk of a download already counted. A download manager or a resumed
+// download sends many such requests for one download.
 func countsAsDownload(r *http.Request) bool {
 	h := strings.TrimSpace(r.Header.Get("Range"))
 	return h == "" || strings.HasPrefix(h, "bytes=0-")
@@ -108,9 +107,7 @@ func DownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		// Password check — render password form directly rather than redirecting.
-		// Redirecting to ?auth=1 and then checking the query param creates a loop:
-		// DownloadPage → redirect → DownloadPage → redirect → ...
+		// Password check: the password form is rendered here, not redirected to.
 		if transfer.PasswordHash.Valid {
 			if !downloadPasswordValid(cfg, r, transfer.PasswordHash.String) {
 				renderPasswordPage(w, tok, settings, "")
@@ -226,11 +223,11 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		}
 		defer f.Close()
 
-		// Record download event — in a transaction with recipient counter update.
-		// Do this before streaming so the event is recorded even if the client
-		// disconnects mid-download. Use the trusted-proxy-aware client IP so a
-		// direct client cannot forge the audit-log source via X-Real-IP.
-		// Resumes and later chunks (Range not starting at 0) are not a new download.
+		// Record the download event, in one transaction with the recipient
+		// counter, before streaming: it is recorded even if the client
+		// disconnects mid-download. ClientIP reads X-Real-IP only from a
+		// trusted proxy. Resumes and later chunks (Range not starting at 0) are
+		// not a new download.
 		notify := false
 		if countsAsDownload(r) {
 			ip := appMiddleware.ClientIP(r, cfg.TrustedProxies)
@@ -240,15 +237,14 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 				recipient.ID, targetFile.ID, targetFile.OriginalName, ip, ua, downloadNotifyWindow,
 			)
 			if err != nil {
-				// Log but continue — a recording failure should not block the download
+				// Log and continue: the download goes on without the event.
 				logDownloadError("record download event", err, fileID)
 			}
 			notify = err == nil && !recent
 		}
 
 		// Enqueue the download notification if enabled, at most once per
-		// recipient per downloadNotifyWindow. Not for the sender's own link:
-		// telling the sender they downloaded their own file is noise.
+		// recipient per downloadNotifyWindow. Not for the sender's own link.
 		if notify && settings.NotifyOnDownload && settings.MailFromAddress != "" && !recipient.IsSender {
 			n := downloadNotice(cfg, settings, transfer, recipient, targetFile.OriginalName)
 			subject := fmt.Sprintf("Downloaded: %s", targetFile.OriginalName)
@@ -259,11 +255,9 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 			}
 		}
 
-		// Set Content-Disposition BEFORE calling http.ServeContent.
-		// http.ServeContent does NOT set this header — it only sets Content-Type.
-		// Without an explicit Content-Disposition: attachment, browsers may render
-		// the file inline instead of saving it. This is especially wrong for
-		// video files, PDFs, and images.
+		// Set Content-Disposition BEFORE calling http.ServeContent, which only
+		// sets Content-Type. "attachment" makes browsers save the file instead
+		// of showing it inline.
 		w.Header().Set("Content-Disposition", buildContentDisposition(relpath.Base(targetFile.OriginalName)))
 
 		// Determine modTime for conditional request validation.
@@ -278,7 +272,6 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 		//   - If-Range and If-Modified-Since conditional requests
 		//   - Content-Range response headers
 		//   - Full response (HTTP 200) when no Range header is present
-		// This is critical for 400-600 GB files on flaky connections.
 		act := activity.Default.Start(activity.Info{
 			Kind: activity.Download, Item: "transfer", ItemID: transfer.ID, Title: transfer.Title,
 			File: targetFile.OriginalName, Who: downloadWho(transfer, recipient), IP: appMiddleware.ClientIP(r, cfg.TrustedProxies),
@@ -301,9 +294,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 //
 //	attachment; filename="Sequence_finale.mov"; filename*=UTF-8''S%C3%A9quence%20finale.mov
 //
-// Modern browsers use `filename*`; older browsers fall back to `filename`.
-// This is required for media filenames that routinely contain
-// non-ASCII characters and special characters.
+// Browsers use `filename*`; those without support fall back to `filename`.
 func buildContentDisposition(originalName string) string {
 	ascii := sanitiseASCIIFilename(originalName)
 	encoded := rfc5987Encode(originalName)
@@ -365,8 +356,7 @@ func downloadPasswordValid(cfg *config.Config, r *http.Request, bcryptHash strin
 	return passwordCookieValid(cfg, "dl", tok, bcryptHash, cookie.Value, time.Now())
 }
 
-// ── Template rendering placeholders ──────────────────────────────────────────
-// Replace with real template rendering when web/templates/ are implemented.
+// ── Template rendering ────────────────────────────────────────────────────────
 
 type downloadPageData struct {
 	Settings  *store.Settings
@@ -430,8 +420,7 @@ type downloadNoticeData struct {
 	Loc      *time.Location
 	Transfer *store.Transfer
 	// Who is the recipient's email, or "" for a link-only transfer: there
-	// the one link is shared by the sender, so the address on the row is the
-	// sender's own and says nothing about who actually downloaded.
+	// the one recipient row carries the sender's own address.
 	Who  string
 	What string
 	At   time.Time
@@ -489,8 +478,8 @@ func (n downloadNoticeData) laterNote() string {
 }
 
 func buildDownloadNotifyHTML(n downloadNoticeData) string {
-	// Recipient email, filename (client TUS metadata) and title are all
-	// attacker-influenced, so they MUST be HTML-escaped before interpolation.
+	// Recipient email, filename (client TUS metadata) and title come from
+	// users and are HTML-escaped before interpolation.
 	var b strings.Builder
 	b.WriteString(mail.HelloHTML(n.Transfer.SenderName))
 	fmt.Fprintf(&b, `<p style="margin:0 0 20px;"><strong>%s</strong> downloaded <strong>%s</strong> from %s.</p>`,
@@ -514,7 +503,7 @@ func buildDownloadNotifyText(n downloadNoticeData) string {
 		n.laterNote(), mail.CompanyName(n.Settings))
 }
 
-// ── Logging helper ────────────────────────────────────────────────────────────
+// ── ZIP download ──────────────────────────────────────────────────────────────
 
 // DownloadZIP handles GET /dl/:token/zip.
 // Streams all files in the transfer as a ZIP archive.
@@ -600,13 +589,11 @@ const zipActivityName = "All files (ZIP)"
 
 // streamZIP writes items as a ZIP to w, for transfers and requests alike.
 // Entries are stored, not deflated: the files are mostly video, which does
-// not compress, and deflating hundreds of GB costs a lot of CPU for nothing.
+// not compress.
 //
-// Failures are never silent. A file that cannot be opened is left
-// out and named in MISSING_FILES.txt inside the ZIP. A failure while a file
-// is being written aborts the whole response: the entry would otherwise end
-// up truncated in an archive that looks fine, while an aborted download shows
-// as failed in the browser.
+// A file that cannot be opened is left out and named in MISSING_FILES.txt
+// inside the ZIP. A failure while a file is being written aborts the whole
+// response, so the browser shows the download as failed.
 func streamZIP(w http.ResponseWriter, mgr *storage.Manager, items []zipItem, logPrefix string) {
 	zw := zip.NewWriter(w)
 	seen := map[string]int{}
@@ -620,9 +607,8 @@ func streamZIP(w http.ResponseWriter, mgr *storage.Manager, items []zipItem, log
 			missing = append(missing, it.Name)
 			continue
 		}
-		// Names are cleaned on upload already; cleaning again here keeps a
-		// row from before that (or from anywhere else) from writing outside
-		// the archive. A folder path becomes folders inside the ZIP.
+		// relpath.Clean keeps any stored name from writing outside the
+		// archive. A folder path becomes folders inside the ZIP.
 		entry, err := zw.CreateHeader(&zip.FileHeader{Name: uniqueZipName(seen, relpath.Clean(it.Name)), Method: zip.Store, Modified: now})
 		if err == nil {
 			ra := newReadAhead(src)

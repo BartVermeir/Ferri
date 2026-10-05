@@ -94,8 +94,8 @@ func zipText(t *testing.T, zf *zip.File) string {
 	return string(b)
 }
 
-// M8: a received file keeps its name. url.QueryEscape made
-// "Café scene; v2.mov" into "Caf%C3%A9+scene%3B+v2.mov".
+// A received file keeps its name: accents, spaces and semicolons are not
+// percent-encoded or turned into '+'.
 func TestRequestDownloadFile_KeepsFileName(t *testing.T) {
 	f := newReqFixture(t, "Test")
 	f.file("f1", "Café scene; v2.mov", "data", true, true)
@@ -109,8 +109,7 @@ func TestRequestDownloadFile_KeepsFileName(t *testing.T) {
 	}
 }
 
-// M8: ZIP names. An untitled request gave ".zip"; accents in a transfer
-// title came out percent-encoded.
+// ZIP names: an untitled request gets "files.zip"; accents in a title are kept.
 func TestZIPFileNames(t *testing.T) {
 	f := newReqFixture(t, "")
 	f.file("f1", "a.mov", "data", true, true)
@@ -122,7 +121,7 @@ func TestZIPFileNames(t *testing.T) {
 	}
 }
 
-// M9: a file still (or forever) 'uploading' is not offered to the requester:
+// A file still (or forever) 'uploading' is not offered to the requester:
 // not on the page, not as a download, not in the ZIP.
 func TestRequestRoutes_OnlyCompleteFiles(t *testing.T) {
 	f := newReqFixture(t, "Test")
@@ -180,7 +179,7 @@ type brokenReader struct{ io.ReadSeekCloser }
 
 func (brokenReader) Read(p []byte) (int, error) { return 0, errors.New("connection reset") }
 
-// M9: a read failure halfway a file must abort the download (the browser
+// A read failure halfway a file must abort the download (the browser
 // then shows it failed), not end in a ZIP holding a truncated file.
 func TestZIP_ReadErrorAbortsDownload(t *testing.T) {
 	f := newReqFixture(t, "Test")
@@ -197,8 +196,8 @@ func TestZIP_ReadErrorAbortsDownload(t *testing.T) {
 }
 
 // Folder paths become folders in the ZIP; a raw "../" in a stored
-// name (a row from before names were cleaned) cannot leave the archive. A
-// single download is named after the file, without its folder.
+// name cannot leave the archive. A single download is named after the file,
+// without its folder.
 func TestZIP_FolderStructure(t *testing.T) {
 	f := newReqFixture(t, "Series")
 	f.file("a", "Series/day1/img001.jpg", "one", true, true)

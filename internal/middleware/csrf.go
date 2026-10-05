@@ -13,8 +13,8 @@ import (
 // forgery: a form auto-submitted from an attacker page carries the attacker's
 // Origin, which will not match, and is rejected.
 //
-// allowedBaseURL (server.base_url) is accepted as an additional valid origin so
-// deployments behind a reverse proxy that rewrites the Host header keep working.
+// allowedBaseURL (server.base_url) is accepted as an additional valid origin,
+// for a reverse proxy that rewrites the Host header.
 // Safe methods (GET/HEAD/OPTIONS/TRACE) always pass through.
 func CSRFProtect(allowedBaseURL string) func(http.Handler) http.Handler {
 	allowedHost := ""

@@ -24,7 +24,7 @@ type activityRow struct {
 	Running  string // "12 min"
 	Progress string // "15.9 GB of 36.0 GB"
 	Rate     string // "1456 Mbps", "—" with less than a second to go on
-	// Remaining is a guess: what is left at the current speed ("~12 min").
+	// Remaining is an estimate: what is left at the current speed ("~12 min").
 	// "—" without a known size or speed.
 	Remaining string
 }
@@ -144,7 +144,7 @@ func uploadLabel(stores *store.Stores, tusID string) *store.UploadLabel {
 }
 
 // formatRate shows a speed in Mbps (megabits, 1 Mbps = 125,000 bytes per
-// second), the unit line speeds and online speed tests use.
+// second).
 func formatRate(bytesPerSec float64) string {
 	if bytesPerSec <= 0 {
 		return "—"

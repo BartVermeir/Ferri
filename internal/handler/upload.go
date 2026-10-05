@@ -7,10 +7,10 @@ package handler
 //   POST /ul/:token          — validate password, set session cookie, redirect
 //   POST /ul/:token/complete — external party signals they are done uploading
 //
-// Flow (architecture.md §5b):
+// Flow:
 //   External party receives a link /ul/:token from the requester.
 //   They open the page, optionally enter a password, then upload files via TUS
-//   (JS sends X-Upload-Request-Token in TUS metadata).
+//   (JS sends upload_request_token in TUS metadata).
 //   When done they click "Done" → POST /ul/:token/complete.
 //   The handler marks the request completed and enqueues a notification mail.
 
@@ -185,9 +185,8 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			}
 		}
 
-		// Verify at least one file was uploaded before marking complete.
-		// Without this, a user who bypasses the JS can mark a request complete
-		// with zero files, causing a misleading "files received" notification.
+		// At least one file must be uploaded before the request is marked
+		// complete; the server checks this regardless of the JS.
 		files, err := waitForRequestFiles(r.Context(), stores.Requests, req.ID)
 		if err != nil {
 			slog.Error("upload complete: get files", "request_id", req.ID, "error", err)
@@ -246,13 +245,12 @@ const requestFilesSettlePoll = 50 * time.Millisecond
 // waitForRequestFiles returns the request's files once none is still
 // 'uploading', or whatever is there when the timeout runs out.
 //
-// Why wait at all: upload.js submits /complete as soon as the last PATCH is
-// answered, but tusd hands the completion event to our hook goroutine before
-// that answer and the hook marks the file complete in parallel. When the
-// browser wins that race, the last file is still 'uploading' here and would be
-// left out of the "files received" mail. Normally the hook needs milliseconds.
-// A stray 'uploading' row (an attempt the uploader abandoned) never settles;
-// then this costs the full timeout once and the mail lists the complete files.
+// upload.js submits /complete as soon as the last PATCH is answered; tusd
+// hands the completion event to the hook goroutine before that answer, and the
+// hook marks the file complete in parallel, so the last file can still be
+// 'uploading' here for a few milliseconds. A row of an abandoned attempt never
+// settles: then this waits the full timeout and the mail lists the complete
+// files.
 func waitForRequestFiles(ctx context.Context, requests *store.RequestStore, requestID string) ([]store.UploadRequestFile, error) {
 	deadline := time.Now().Add(requestFilesSettleTimeout)
 	for {
@@ -311,7 +309,7 @@ func (u uploadCompleteMail) viewURL() string {
 	return u.BaseURL + "/ul/" + u.Request.ViewPathToken() + "/files"
 }
 
-// manageURL is empty for a request from before migration 006.
+// manageURL is empty for a request without a manage token.
 func (u uploadCompleteMail) manageURL() string {
 	if !u.Request.ManageToken.Valid || u.Request.ManageToken.String == "" {
 		return ""
@@ -377,7 +375,7 @@ func buildUploadCompleteText(u uploadCompleteMail) string {
 	return b.String()
 }
 
-// ── Template rendering placeholders ──────────────────────────────────────────
+// ── Requester view and rendering ──────────────────────────────────────────────
 
 // RequestDownloadPage handles GET /ul/:token/files — shows uploaded files for requester.
 func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
@@ -391,8 +389,8 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 			return
 		}
 
-		// A password-protected request gates file access too — the token alone
-		// must not reveal uploaded files. Match the upload-page password check.
+		// A password-protected request needs the password for the file listing
+		// too, as on the upload page.
 		if req.PasswordHash.Valid && !uploadPasswordValid(cfg, r, tok, req.PasswordHash.String) {
 			renderUploadPasswordPage(w, tok, settings, "")
 			return
@@ -503,9 +501,8 @@ func RequestDownloadZIP(cfg *config.Config, stores *store.Stores, mgr *storage.M
 }
 
 // completeRequestFiles keeps the files that finished uploading. A row stays
-// 'uploading' while a file is still coming in, and for good when that upload
-// broke off (until the stalled cleanup); the requester must not get its
-// partial data as if it were the file.
+// 'uploading' while a file is still coming in, and when that upload broke off,
+// until the stalled-upload cleanup removes it.
 func completeRequestFiles(files []store.UploadRequestFile) []store.UploadRequestFile {
 	var out []store.UploadRequestFile
 	for _, f := range files {

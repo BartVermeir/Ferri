@@ -11,8 +11,8 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
-// Admin alerts: problems that would otherwise show up only as WARN lines in
-// the logs are mailed to the addresses under "Alerts" in the admin settings. At most
+// Admin alerts: problems that are logged as WARN lines are also mailed to
+// the addresses under "Alerts" in the admin settings. At most
 // one mail per kind per alertRepeatAfter; nothing is checked while no address
 // is set.
 const (
@@ -29,7 +29,7 @@ const (
 )
 
 // alertSubjectPrefix starts every alert subject. FailedSince skips mails
-// with it: a failed alert mail would otherwise report itself every day.
+// with it, so a failed alert mail does not report itself.
 const alertSubjectPrefix = "[Alert] "
 
 // Alert kinds, the keys in alert_state.

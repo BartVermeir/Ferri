@@ -37,8 +37,7 @@ func TestRemoveUpload_RemovesAllPaths(t *testing.T) {
 }
 
 // The data of a TUS upload lives at the flat <tus_upload_id>; storage_path
-// never exists for those. Missing paths must count as removed, or every
-// purge would fail and be retried forever.
+// never exists for those. Missing paths count as removed.
 func TestRemoveUpload_MissingPathsAreNotAnError(t *testing.T) {
 	root := t.TempDir()
 	m := NewManager(NewLocalBackend(root))
@@ -96,7 +95,7 @@ type closeCounter struct {
 func (c *closeCounter) Close() error { c.closed++; return nil }
 
 // A swapped-out backend closes when its last open file is closed, or
-// immediately when nothing uses it, so running downloads are not broken off.
+// immediately when nothing uses it; open files keep working until then.
 func TestSwap_ClosesOldBackendAfterLastUse(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "f"), []byte("data"), 0o644); err != nil {

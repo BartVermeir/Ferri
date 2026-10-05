@@ -12,9 +12,8 @@ import (
 )
 
 // Health returns a handler for GET /health.
-// Returns HTTP 200 with {"status":"ok"} when the database is reachable, and
-// HTTP 503 otherwise so the Docker healthcheck and external monitoring see a
-// wedged database as unhealthy rather than "ok".
+// Returns HTTP 200 with {"status":"ok"} when the database answers a ping
+// within 2 seconds, and HTTP 503 otherwise. The Docker healthcheck uses it.
 func Health(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -33,8 +32,7 @@ func Health(db *sql.DB) http.HandlerFunc {
 }
 
 // Static returns a handler that serves embedded static files from static/files/.
-// Files are embedded at compile time via the static package — no runtime
-// filesystem dependency. The binary is fully self-contained.
+// Files are embedded at compile time via the static package.
 func Static() http.Handler {
 	sub, err := fs.Sub(static.FS, "files")
 	if err != nil {
@@ -44,10 +42,9 @@ func Static() http.Handler {
 }
 
 // LogoFileServer serves the uploaded branding logo from dir on the local
-// filesystem. Logos are deliberately kept on local disk even when the file
-// storage backend is SMB (see AdminLogoUpload) — they are small, public, and
-// not part of user data. Unlike a bare http.FileServer this never renders a
-// directory listing: any request that resolves to a directory is a 404.
+// filesystem, also when the file storage backend is SMB (see AdminLogoUpload).
+// It never renders a directory listing: any request that resolves to a
+// directory is a 404.
 func LogoFileServer(dir string) http.Handler {
 	return http.FileServer(noListingFS{http.Dir(dir)})
 }

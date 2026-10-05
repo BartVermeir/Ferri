@@ -19,8 +19,7 @@ func TestSecurityHeadersCSP(t *testing.T) {
 	if !strings.Contains(csp, "script-src 'self'") {
 		t.Errorf("script-src is not 'self'-based: %q", csp)
 	}
-	// All inline <script> blocks have been moved to static/files/*.js, so
-	// script-src must be exactly 'self' — no 'unsafe-inline' allowance left.
+	// script-src is exactly 'self', without 'unsafe-inline'.
 	if !strings.Contains(csp, "script-src 'self';") {
 		t.Errorf("script-src is not exactly 'self': %q", csp)
 	}

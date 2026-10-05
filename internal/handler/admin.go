@@ -7,8 +7,8 @@ package handler
 //   POST /admin/login                    — validate token, set session cookie
 //   POST /admin/logout                   — clear session cookie
 //   GET  /admin                          — dashboard
-//   GET  /admin/transfers                — list all transfers
-//   POST /admin/transfers/:id/delete     — soft-delete a transfer
+//   GET  /admin/transfers                — redirect to /admin
+//   POST /admin/transfers/:id/delete     — delete a transfer and its files
 //   GET  /admin/mail                     — mail queue overview
 //   POST /admin/mail/:id/retry           — reset failed mail to pending
 //   POST /admin/mail/:id/delete          — delete mail from queue
@@ -16,10 +16,10 @@ package handler
 //   GET  /admin/settings/{branding,mail,storage} — the three settings pages
 //   POST /admin/settings/{branding,mail} — save that page's settings
 //
-// Authentication (architecture.md §4 admin authentication):
+// Authentication:
 //   Login: compare submitted token with cfg.Admin.Token using subtle.ConstantTimeCompare.
 //   Session: HMAC-SHA256 signed cookie, validated by AdminAuth middleware.
-//   On invalid session: redirect to /admin/login (not 403 — hides admin panel existence).
+//   On invalid session: redirect to /admin/login, not 403.
 
 import (
 	"crypto/subtle"
@@ -68,11 +68,10 @@ func AdminLoginPost(cfg *config.Config) http.HandlerFunc {
 
 		submitted := r.FormValue("token")
 
-		// Constant-time compare — prevents timing attacks that could
-		// reveal the length or partial content of the admin token.
+		// Constant-time compare: the time taken does not depend on how much
+		// of the token matches.
 		if subtle.ConstantTimeCompare([]byte(submitted), []byte(cfg.Admin.Token)) != 1 {
-			// Add a small deliberate delay to further slow brute-force attempts.
-			// The IP allowlist is the primary protection; this is defence-in-depth.
+			// Delay to slow brute-force attempts.
 			time.Sleep(500 * time.Millisecond)
 			renderAdminLogin(w, "Invalid token.")
 			return
@@ -85,13 +84,10 @@ func AdminLoginPost(cfg *config.Config) http.HandlerFunc {
 
 // AdminLogout handles POST /admin/logout.
 //
-// Sessions are stateless HMAC cookies (no server-side store), so logout clears
-// the browser's cookie but cannot invalidate a cookie value captured elsewhere;
-// such a cookie remains valid until its embedded expiry (admin.session_ttl_hours,
-// default 8h). To revoke ALL sessions immediately, rotate ADMIN_TOKEN — the
-// signing key is derived from it, so every existing cookie fails validation.
-// Accepted trade-off: the admin panel is reachable from the internal network
-// only, and a server-side session store would add state for little gain.
+// Sessions are stateless HMAC cookies (no server-side store): logout clears
+// the browser's cookie, and a copy of the cookie value stays valid until its
+// embedded expiry (admin.session_ttl_hours, default 8h). Rotating ADMIN_TOKEN
+// invalidates every session: the signing key is derived from it.
 func AdminLogout(cfg *config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		appMiddleware.ClearAdminCookie(w, cfg.Server.SecureCookies)
@@ -144,8 +140,8 @@ func mergeExpired(transfers []store.TransferSummary, requests []store.RequestSum
 	return items
 }
 
-// mergeOverview puts transfers and requests in one list, newest first, so a
-// request shows up where it was created instead of below every transfer.
+// mergeOverview puts transfers and requests in one list, newest first by
+// creation time.
 func mergeOverview(transfers []store.TransferSummary, requests []store.RequestSummary) []overviewItem {
 	items := make([]overviewItem, 0, len(transfers)+len(requests))
 	for i := range transfers {
@@ -177,7 +173,7 @@ func AdminDashboard(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		// Non-fatal: the page is still useful without the expired section.
+		// Non-fatal: the page renders without the expired section.
 		expiredT, err := stores.Transfers.ListExpiredForAdmin(500)
 		if err != nil {
 			slog.Error("admin overview: list expired transfers", "error", err)
@@ -276,16 +272,12 @@ func AdminOrphanClean(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 				continue
 			}
 			name := e.Name()
-			// Only what looks like a TUS upload is ever a candidate: anything
-			// else in the folder (a database, a probe file) is not ours to
-			// delete.
+			// Only names that look like a TUS upload ID are candidates.
 			if known[name] || !isTUSUploadID(name) {
 				continue
 			}
-			// UUID not in known set. Fall back to the .info file: it may belong to
-			// an abandoned upload whose row was never written, or a legacy request
-			// file uploaded before tus_upload_id was retained on completion. Keep it
-			// if its .info still references a live transfer/request.
+			// Not in the known set: kept if its .info still references an
+			// existing transfer or request.
 			if ref, _ := orphanInfoReferenced(storagePath, name, stores.Files); ref {
 				kept++
 				continue
@@ -318,8 +310,8 @@ func orphanInfoReferenced(storageRoot, name string, files *store.FilesStore) (bo
 	if err := json.Unmarshal(data, &info); err != nil {
 		return false, nil
 	}
-	// The TUS handler replaces the client's metadata with transfer_id or
-	// request_id; upload_request_token only occurs in old .info files.
+	// The TUS handler stores transfer_id or request_id in the metadata;
+	// upload_request_token is matched for .info files that carry it.
 	return files.TransferOrRequestExists(
 		info.MetaData["transfer_id"],
 		info.MetaData["request_id"],
@@ -334,8 +326,7 @@ var tusIDPattern = regexp.MustCompile(`^([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0
 func isTUSUploadID(name string) bool { return tusIDPattern.MatchString(name) }
 
 // pathContainsDB reports whether the database file lies in dir or below it.
-// Such a storage path is refused: orphan cleanup would treat the database as
-// an unknown file.
+// Such a storage path is refused: orphan cleanup deletes unknown files in it.
 func pathContainsDB(dir, dbPath string) bool {
 	if dir == "" || dbPath == "" || dbPath == ":memory:" {
 		return false
@@ -377,8 +368,8 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 
 // deleteTransferNow deletes a transfer at once, no grace period: the admin
 // delete and the sender's "Delete" on the manage page (bySender) both go
-// through here. First the sender's "who downloaded what" summary (the file
-// list is empty afterwards; a failure must not stop the delete), then the
+// through here. First the sender's "who downloaded what" summary, which needs
+// the file list (a failure there is logged and the delete goes on), then the
 // files off storage, then the rows. A failed removal keeps the file's
 // tus_upload_id, so the cleanup job retries it on its next run.
 func deleteTransferNow(stores *store.Stores, mgr *storage.Manager, summaries deletionSummarizer, id string, bySender bool) error {
@@ -716,9 +707,8 @@ func AdminMailDelete(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 // The settings are split over three pages under Configure. Each page posts
-// only its own fields and saves only those: an unchecked checkbox sends
-// nothing, so a page that saved every key would switch the mail checkboxes
-// off each time Branding is saved.
+// and saves only its own fields: an unchecked checkbox sends nothing, so
+// saving another page's keys turns its checkboxes off.
 type settingsPage struct {
 	tmpl  string
 	title string
@@ -776,17 +766,17 @@ func settingsGet(cfg *config.Config, page settingsPage) http.HandlerFunc {
 var hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{3,8}$`)
 
 // allowedFonts is the server-side mirror of the font-family <select> in
-// admin/settings.html. Anything outside this set is rejected so a crafted POST
-// cannot inject an arbitrary font-family value into the public CSS.
+// admin/settings_branding.html. Anything outside this set is rejected; the
+// value lands in the public CSS.
 var allowedFonts = map[string]bool{
 	"":                                    true,
 	"'Georgia', serif":                    true,
 	"'Helvetica Neue', Arial, sans-serif": true,
 }
 
-// validateBranding checks the free-form branding inputs against strict formats
-// (defense-in-depth — these settings are admin-only but land unescaped in
-// public CSS / <img src>). Returns "" when acceptable, else a user-facing message.
+// validateBranding checks the free-form branding inputs against strict formats;
+// they land unescaped in public CSS and <img src>. Returns "" when acceptable,
+// else a user-facing message.
 func validateBranding(vals map[string]string) string {
 	for _, key := range []string{"branding.primary_color", "branding.accent_color", "branding.bg_color"} {
 		if v := strings.TrimSpace(vals[key]); v != "" && !hexColorRe.MatchString(v) {
@@ -871,8 +861,8 @@ func AdminMailSettingsSave(cfg *config.Config, stores *store.Stores) http.Handle
 		}
 
 		// An unchecked checkbox sends no value, so FormValue returns "". The
-		// settings cache reads '' != "false" as true, meaning an unchecked
-		// box would stay on. Normalise to "true"/"false".
+		// settings cache reads anything other than "false" as true, so the
+		// value is normalised to "true"/"false".
 		checkboxVal := func(formKey string) string {
 			v := r.FormValue(formKey)
 			if v == "1" || v == "true" {
@@ -897,9 +887,7 @@ func AdminMailSettingsSave(cfg *config.Config, stores *store.Stores) http.Handle
 }
 
 // saveSettings saves each key and goes back to the page with "saved". If one
-// fails, earlier saves are not rolled back — a partial update is possible.
-// For independent key-value settings this is acceptable; a retry saves them
-// all again.
+// fails, earlier saves are not rolled back; saving again writes them all.
 func saveSettings(w http.ResponseWriter, r *http.Request, cfg *config.Config, stores *store.Stores, page settingsPage, vals map[string]string) {
 	for key, value := range vals {
 		if err := stores.Settings.Save(key, strings.TrimSpace(value)); err != nil {
@@ -912,14 +900,12 @@ func saveSettings(w http.ResponseWriter, r *http.Request, cfg *config.Config, st
 	http.Redirect(w, r, page.path+"?saved=1", http.StatusSeeOther)
 }
 
-// ── Template rendering placeholders ──────────────────────────────────────────
+// ── Logo and rendering ────────────────────────────────────────────────────────
 
 // AdminLogoUpload handles POST /admin/settings/logo.
 //
-// The logo is written to <storage.path>/logo on the LOCAL filesystem via os.*,
-// not through the storage.Manager — this is deliberate. The logo is small,
-// public branding, not user data, and keeping it local avoids a round-trip to
-// the SMB share on every page render. It is served by handler.LogoFileServer.
+// The logo is written to <storage.path>/logo on the local filesystem via os.*,
+// not through the storage.Manager, and served by handler.LogoFileServer.
 func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(5 << 20); err != nil {
@@ -935,7 +921,7 @@ func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 
 		// Validate extension
 		ext := strings.ToLower(filepath.Ext(header.Filename))
-		// SVG is excluded: browsers render SVG as HTML, enabling stored XSS via a malicious logo file.
+		// SVG is excluded: browsers run scripts inside an SVG.
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
 			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
@@ -1071,10 +1057,8 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 			"storage.smb_domain":    strings.TrimSpace(r.FormValue("storage.smb_domain")),
 		}
 
-		// Only update password if a new one was provided (empty = keep existing).
-		// Keeping it is only allowed for the same server and account: the
-		// backend reload below would otherwise log in to a new host with the
-		// stored credential.
+		// Empty password = keep the saved one, only for the same server and
+		// account (mayReuseSMBPassword).
 		newPassword := r.FormValue("storage.smb_password")
 		if newPassword == "" && storageType == "smb" && !mayReuseSMBPassword(stores.Settings.Get(), r) {
 			http.Redirect(w, r, "/admin/settings/storage?storage_error="+url.QueryEscape(msgSMBPasswordAgain), http.StatusSeeOther)
@@ -1117,10 +1101,9 @@ const msgSMBPasswordAgain = "Enter the password again: host, share, username or 
 
 // mayReuseSMBPassword reports whether an empty password field may fall back
 // to the saved password: only when there is none, or when the form's host,
-// share, username and domain match the saved ones. Otherwise anyone with an
-// admin session could enter their own server and capture the service
-// account's NTLM login. Host and domain are case-insensitive, like
-// DNS and Windows domains.
+// share, username and domain match the saved ones, so the saved credential
+// is only sent to the server it belongs to. Host and domain are
+// case-insensitive, like DNS and Windows domains.
 func mayReuseSMBPassword(saved *store.Settings, r *http.Request) bool {
 	if saved.SMBPasswordEncrypted == "" {
 		return true

@@ -24,9 +24,7 @@ func newMailTestStore(t *testing.T) *MailStore {
 	return New(d).Mail
 }
 
-// fetchOne re-reads a single mail_queue row via FetchPending's sibling
-// query path (ListFailed for 'failed' rows, otherwise a raw lookup through
-// FetchPending semantics is awkward — read directly via a tiny query here).
+// fetchOne reads a single mail_queue row directly.
 func fetchMailItem(t *testing.T, s *MailStore, id string) MailItem {
 	t.Helper()
 	rows, err := s.db.Query(`
@@ -86,9 +84,8 @@ func TestMarkFailed_BackoffSchedule(t *testing.T) {
 			t.Fatalf("attempt %d: last_attempt_at not set", i+1)
 		}
 		// last_attempt_at and next_attempt_at are both computed from
-		// unixepoch() within the same UPDATE statement; allow 1s of slack
-		// for the (extremely unlikely) case the two calls straddle a
-		// second boundary.
+		// unixepoch() within the same UPDATE statement; 1s of slack covers
+		// the two calls straddling a second boundary.
 		gotDelay := item.NextAttemptAt - item.LastAttemptAt.Int64
 		wantDelay := wantMinutes * 60
 		if gotDelay < wantDelay-1 || gotDelay > wantDelay+1 {

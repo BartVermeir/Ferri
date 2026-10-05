@@ -1,8 +1,7 @@
 package mail
 
-// Shared building blocks for mail bodies. Every builder uses these so all
-// mails look alike and the HTML and plain-text parts carry the same content:
-// a text part that says much less than the HTML part is a spam signal.
+// Shared building blocks for mail bodies. Every builder uses these, so all
+// mails look alike and the HTML and plain-text parts carry the same content.
 
 import (
 	"fmt"
@@ -124,9 +123,7 @@ func FileListText(files []FileItem) string {
 }
 
 // ButtonHTML renders a call-to-action button followed by the same URL as
-// readable text. The visible URL lets recipients see where the link goes and
-// still works in clients that strip button styling; filters also score a
-// mail whose only link hides behind a button slightly worse.
+// readable text, which also works in clients that strip button styling.
 func ButtonHTML(url, label string, settings *store.Settings) string {
 	return ButtonsHTML(url, label, "", "", settings)
 }

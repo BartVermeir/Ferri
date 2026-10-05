@@ -89,7 +89,7 @@ func TestReadAhead_ServeContent(t *testing.T) {
 		if rr.Code != http.StatusOK || !bytes.Equal(rr.Body.Bytes(), data) {
 			t.Fatalf("parallel=%v full download: status %d, %d bytes, want %d identical bytes", parallel, rr.Code, rr.Body.Len(), len(data))
 		}
-		// 4 blocks of data plus at most a read that finds the end; 32KB steps would be ~100.
+		// 4 blocks of data plus at most a read that finds the end.
 		if n := src.reads.Load(); n > 6 {
 			t.Fatalf("parallel=%v full download took %d storage reads, want at most 6", parallel, n)
 		}
@@ -196,8 +196,7 @@ func TestReadAhead_SeekWhileReading(t *testing.T) {
 	}
 }
 
-// openStored reads the flat TUS file first and falls back to storage_path,
-// which only holds the data for legacy local uploads.
+// openStored reads the flat TUS file first and falls back to storage_path.
 func TestOpenStored_TUSPathFirst(t *testing.T) {
 	root := t.TempDir()
 	mgr := storage.NewManager(storage.NewLocalBackend(root))

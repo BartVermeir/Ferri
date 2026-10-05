@@ -81,8 +81,8 @@ func viewTokenOf(t *testing.T, stores *store.Stores, uploadToken string) string 
 	return req.ViewToken.String
 }
 
-// assertUploadNotFoundPage checks the 404 for dead upload links. It must not
-// be the thank-you page: that told uploaders their files had been received.
+// assertUploadNotFoundPage checks the 404 for dead upload links. It is not
+// the thank-you page.
 func assertUploadNotFoundPage(t *testing.T, rr *httptest.ResponseRecorder) {
 	t.Helper()
 	assertNotFoundPage(t, rr)
@@ -295,8 +295,8 @@ func postPassword(r http.Handler, path, password string) *httptest.ResponseRecor
 
 // A password-protected request must stay reachable for the requester after the
 // uploader completed it. The requester arrives via the mail link to /files,
-// without a cookie, and the password form posts back to /files. That POST used
-// to 405, and POST /ul/:token 404s once the request is no longer open.
+// without a cookie, and the password form posts back to /files
+// (POST /ul/:token 404s once the request is no longer open).
 func TestRequestFiles_PasswordUnlocksCompletedRequest(t *testing.T) {
 	stores := newTestStores(t)
 	mgr, root := newTestManager(t)
@@ -367,8 +367,8 @@ func TestRequestFiles_PasswordUnlocksCompletedRequest(t *testing.T) {
 	}
 }
 
-// The requester routes must stop serving files at expires_at, as the mails
-// promise, not when the cleanup job removes the files.
+// The requester routes stop serving files at expires_at, not when the
+// cleanup job removes the files.
 func TestRequesterRoutes_StopAtExpiry(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -461,7 +461,7 @@ func receivedMail(t *testing.T, stores *store.Stores) store.MailItem {
 
 // The browser submits /complete right after the last PATCH is answered, while
 // the TUS hook may still be marking that file complete. The mail must wait for
-// it instead of leaving the last file out.
+// it and list the last file too.
 func TestUploadComplete_WaitsForLastFileToSettle(t *testing.T) {
 	stores := newTestStores(t)
 	mgr, _ := newTestManager(t)
@@ -515,8 +515,8 @@ func TestUploadComplete_GivesUpAfterTimeout(t *testing.T) {
 
 // ── Separate upload and view tokens ───────────────────────────────
 
-// The upload link goes to external parties. It must not open the received
-// files: with several uploaders on one link, each could download the others'.
+// The upload link, held by external parties, does not open the received
+// files.
 func TestRequesterRoutes_RejectUploadToken(t *testing.T) {
 	stores := newTestStores(t)
 	mgr, root := newTestManager(t)
@@ -567,8 +567,8 @@ func TestViewToken_CannotUploadOrComplete(t *testing.T) {
 	}
 }
 
-// Requests from before migration 005 have no view token; their upload token
-// keeps opening /files so links in mails already sent keep working.
+// A request without a view token (NULL view_token) opens /files with its
+// upload token.
 func TestRequesterRoutes_LegacyRequestWithoutViewToken(t *testing.T) {
 	d := newTestDB(t)
 	stores := store.New(d)

@@ -27,10 +27,8 @@ func NewLocalBackend(root string) *LocalBackend {
 }
 
 // abs resolves a relative storage path to an absolute one and enforces that it
-// stays within the backend root. filepath.Join already collapses ".." segments;
-// the prefix check rejects any path that would still escape root — a defensive
-// invariant so no future caller can introduce path traversal, even though all
-// current paths are server-generated.
+// stays within the backend root. filepath.Join collapses ".." segments; the
+// prefix check rejects any path that still escapes root.
 func (b *LocalBackend) abs(path string) (string, error) {
 	clean := filepath.Join(b.root, filepath.FromSlash(path))
 	if clean != b.root && !strings.HasPrefix(clean, b.root+string(os.PathSeparator)) {

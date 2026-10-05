@@ -11,8 +11,7 @@ import (
 
 // openStored opens an uploaded file's data. The bytes live at the flat TUS
 // path (tus_upload_id); storage_path is only a real file for legacy local
-// uploads, so it is the fallback. Trying storage_path first cost a failed
-// open, on SMB a round trip, for every download and every ZIP entry.
+// uploads, so it is the fallback.
 func openStored(mgr *storage.Manager, storagePath string, tusUploadID sql.NullString) (io.ReadSeekCloser, error) {
 	if tusUploadID.Valid && tusUploadID.String != "" {
 		if f, err := mgr.Open(tusUploadID.String); err == nil {
@@ -23,14 +22,12 @@ func openStored(mgr *storage.Manager, storagePath string, tusUploadID sql.NullSt
 }
 
 // fileReadAheadSize is how much a download reads from storage per request.
-// http.ServeContent copies in 32KB steps, and on SMB every step is a round
-// trip to the share, so latency caps the speed (a few tens of Mbps at a few ms).
-// 1MB is go-smb2's ceiling per SMB read.
+// http.ServeContent copies in 32KB steps; on SMB every read is a round trip
+// to the share. 1MB is go-smb2's ceiling per SMB read.
 const fileReadAheadSize = 1 << 20 // 1MB
 
 // fileReadAheadDepth is how many blocks are requested from storage at once.
-// go-smb2 waits for each read's answer before the next one, so one block at a
-// time capped a download far below what a fast LAN carries. On SMB the
+// go-smb2 waits for each read's answer before sending the next. On SMB the
 // blocks are spread over the backend's connections (storage.stripedFile).
 // Memory: depth+1 blocks of 1MB per running download.
 const fileReadAheadDepth = 8

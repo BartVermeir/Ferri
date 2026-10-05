@@ -19,8 +19,7 @@ import (
 	ferritls "github.com/BartVermeir/Ferri/internal/tus"
 )
 
-// Handler tests build their own small routers, so a route missing from main
-// would go unnoticed there. These tests use the router main really serves.
+// These tests use the router that main serves.
 
 func testRouter(t *testing.T) http.Handler {
 	t.Helper()
@@ -49,8 +48,7 @@ func testRouter(t *testing.T) http.Handler {
 	return newRouter(cfg, database, stores, mgr, tusHandler, jobs.NewScheduler(cfg, stores, mgr))
 }
 
-// The full route list. A route added or removed in main must be added or
-// removed here too; that is the point.
+// The full route list; it must match the routes main registers.
 func TestRouter_Routes(t *testing.T) {
 	want := []string{
 		"GET /", "POST /send", "GET /request", "POST /request",

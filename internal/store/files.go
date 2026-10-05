@@ -35,9 +35,10 @@ func (s *FilesStore) AllTUSUploadIDs() (map[string]bool, error) {
 }
 
 // TransferOrRequestExists reports whether the given transfer ID, upload request ID
-// or (legacy .info files) upload request token still has a DB record. Used by the
-// orphan scan to verify a TUS .info file whose UUID is not in the DB (an abandoned
-// upload, or a legacy row) before deleting the file.
+// or upload request token (some .info files carry the token instead of an ID)
+// still has a DB record. Used by the orphan scan to verify a TUS .info file whose
+// UUID is not in the DB (an abandoned upload, or a row without tus_upload_id)
+// before deleting the file.
 func (s *FilesStore) TransferOrRequestExists(transferID, requestID, requestToken string) (bool, error) {
 	if requestID != "" {
 		var n int
@@ -91,8 +92,7 @@ type Unpurged struct {
 }
 
 // ListUnpurged returns deleted file rows, from both tables, that still carry a
-// tus_upload_id: failed removals, and uploads deleted before removal was fixed
-// to include the flat TUS file.
+// tus_upload_id: their data may still be on storage.
 func (s *FilesStore) ListUnpurged() ([]Unpurged, error) {
 	rows, err := s.db.Query(`
 		SELECT 'files', id, storage_path, tus_upload_id, size_bytes FROM files

@@ -63,12 +63,12 @@ type UploadStats struct {
 	Start, End time.Time
 	// Net is the time at least one of the complete files was uploading,
 	// from their upload sessions: files that upload at the same time count
-	// once. NetKnown only when every complete file has a session (files from
-	// before migration 010 have none).
+	// once. NetKnown only when every complete file has a session (files
+	// uploaded before upload_sessions existed have none).
 	Net      time.Duration
 	NetKnown bool
 	// IPs the complete files were uploaded from, in the order they first
-	// appear; empty for files from before migration 010.
+	// appear; empty for files uploaded before upload_sessions existed.
 	IPs []string
 }
 

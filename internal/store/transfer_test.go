@@ -1,7 +1,6 @@
 package store
 
-// Race-safety test for TryActivate: the atomic
-// UPDATE ... WHERE (SELECT COUNT(*) ... != 'complete') = 0
+// Race-safety test for TryActivate: its atomic conditional UPDATE
 // must let exactly one caller win the transition to 'active', even when
 // many goroutines race to mark files complete and call TryActivate
 // concurrently. See internal/tus/handler.go's completeTransferFile, which
@@ -177,8 +176,8 @@ func TestTryActivate_StrayUploadingRowDoesNotBlock(t *testing.T) {
 	}
 }
 
-// Transfers created before migration 004 have no expected_files and keep the
-// old rule, so uploads in flight during a deploy still activate.
+// A transfer without expected_files goes live once none of its file rows is
+// incomplete.
 func TestTryActivate_LegacyTransferKeepsOldRule(t *testing.T) {
 	stores := newRaceTestStores(t)
 	id := newExpectedTransfer(t, stores, 0)
@@ -197,8 +196,7 @@ func TestTryActivate_LegacyTransferKeepsOldRule(t *testing.T) {
 	}
 }
 
-// Abandoned uploads leave a transfer pending; it must still expire, or its
-// complete files would never be cleaned up.
+// A transfer left pending by abandoned uploads still expires.
 func TestGetExpired_IncludesPendingTransfers(t *testing.T) {
 	stores := newRaceTestStores(t)
 	res, err := stores.Transfers.Create(CreateTransferInput{

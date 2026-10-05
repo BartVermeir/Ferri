@@ -128,11 +128,10 @@ func main() {
 		ReadTimeout:  0, // TUS uploads can take hours
 		WriteTimeout: 0,
 		IdleTimeout:  120 * time.Second,
-		// Only the headers: a client that trickles them in holds a
-		// connection forever otherwise (slowloris). Bodies are
-		// not limited, so long TUS PATCHes are unaffected.
+		// Limits only the headers (slowloris); bodies have no limit,
+		// so long TUS PATCHes keep running.
 		ReadHeaderTimeout: 30 * time.Second,
-		// Keeps the open connections for the "Now" block in /admin: the
+		// Tracks open connections for the "Now" block in /admin: the
 		// same connections scripts/deploy.sh waits for.
 		ConnState: activity.Default.ConnState,
 	}

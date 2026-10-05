@@ -32,7 +32,8 @@ func InitTemplates(loc *time.Location) {
 }
 
 func init() {
-	// Default init with UTC so tests that never call InitTemplates still work.
+	// Builds the templates with UTC for code that never calls InitTemplates,
+	// such as tests.
 	buildTemplates()
 }
 
@@ -97,8 +98,8 @@ func buildTemplates() {
 }
 
 // renderPage renders a named template with the given data. It renders into a
-// buffer first, so a template that fails halfway sends a plain 500 instead of
-// half a page; the error goes to the log.
+// buffer first: a template that fails halfway sends a plain 500, and the
+// error goes to the log.
 func renderPage(w http.ResponseWriter, name string, data any) {
 	var buf bytes.Buffer
 	if err := templates.ExecuteTemplate(&buf, name, data); err != nil {

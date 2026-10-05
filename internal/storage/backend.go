@@ -142,8 +142,7 @@ func (f *trackedFile) Close() error {
 
 // trackedFileAt is a trackedFile whose file can also ReadAt, so a download
 // can read several blocks in parallel (handler.readAhead). Only returned when
-// the backend's file supports it: a ReadAt that always failed would make the
-// caller pick the parallel path and break.
+// the backend's file implements io.ReaderAt.
 type trackedFileAt struct {
 	*trackedFile
 	at io.ReaderAt
@@ -189,12 +188,12 @@ func (m *Manager) Remove(path string) error {
 // RemoveUpload removes every file an upload can leave on the backend: the
 // logical storage_path (only a real file for legacy local uploads) and the flat
 // TUS file <tus_upload_id>, each with its .info sidecar, plus <tus_upload_id>.offset. Empty arguments are
-// skipped — Remove("") would resolve to the storage root itself. A path that
-// does not exist counts as removed, so calling this twice is safe.
+// skipped: Remove("") resolves to the storage root itself. A path that does
+// not exist counts as removed, so calling this twice is safe.
 //
 // Returns the joined errors of the removals that failed; nil means nothing of
 // this upload is left. All deletion code (cleanup, stalled uploads, admin
-// delete) goes through here so no caller can forget one of the paths again.
+// delete) goes through here.
 func (m *Manager) RemoveUpload(storagePath, tusUploadID string) error {
 	var paths []string
 	if storagePath != "" {
@@ -217,8 +216,8 @@ func (m *Manager) RemoveUpload(storagePath, tusUploadID string) error {
 // PurgeUpload removes one file's data (RemoveUpload) and, only once that fully
 // succeeded, clears its tus_upload_id (store.FilesStore.MarkPurged). On
 // failure the id stays, which is how the cleanup job knows to retry it
-// (jobs.Scheduler.purgeLeftovers). Callers still mark the row deleted either
-// way: the download link must stop working now, not after the retry.
+// (jobs.Scheduler.purgeLeftovers). Callers mark the row deleted either way,
+// so the download link stops working before the retry.
 func PurgeUpload(m *Manager, files *store.FilesStore, table store.FileTable, fileID, storagePath, tusUploadID string) error {
 	if err := m.RemoveUpload(storagePath, tusUploadID); err != nil {
 		return err
@@ -252,9 +251,8 @@ func (m *Manager) MkdirAll(path string) error {
 // active backend. Replacing the backend via Swap does not invalidate the store —
 // subsequent TUS operations will use the new backend automatically.
 //
-// Note: uploads already in progress when Swap is called will fail if the
-// new backend does not have their existing upload data. This is expected
-// behaviour and documented as a known limitation.
+// Uploads in progress when Swap is called fail if the new backend does not
+// have their upload data.
 func (m *Manager) TUSDataStore() tusd.DataStore {
 	return &managerTUSStore{m: m}
 }

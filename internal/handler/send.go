@@ -6,7 +6,7 @@ package handler
 //   GET  /        — render send form
 //   POST /send    — create transfer, return JSON {transfer_id}
 //
-// Flow (architecture.md §5a):
+// Flow:
 //   1. GET / renders the send form with expiry options and branding.
 //   2. POST /send validates input, hashes password if provided,
 //      creates transfer + file rows + recipient rows in one transaction,
@@ -15,8 +15,8 @@ package handler
 //      No per-file tokens are returned here — tusd generates upload IDs itself.
 //   4. TUS UploadFinisher handles activation and mail enqueue.
 //
-// POST /send returns JSON, not a redirect, because the browser JS
-// needs the transfer_id to start TUS uploads immediately.
+// POST /send returns JSON: the browser JS needs the transfer_id to start the
+// TUS uploads.
 
 import (
 	"encoding/json"
@@ -35,9 +35,8 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
-// Input bounds shared by the send and request forms. These are sanity limits to
-// keep one POST from creating an unbounded number of recipient / mail_queue rows
-// or storing megabytes of free text — not business rules.
+// Input bounds shared by the send and request forms: they cap the recipient /
+// mail_queue rows and the free text one POST can create.
 const (
 	maxRecipients = 100
 	maxTitleLen   = 200
@@ -48,7 +47,7 @@ const (
 	// maxFormBytes caps a /request body, maxSendBytes a /send body. /send
 	// carries the file list: up to max_files_per_transfer (5000) paths in
 	// folders, a few hundred bytes each at most. Without a cap, a multipart
-	// body would go to /tmp, which is RAM in the container.
+	// body goes to /tmp, which is RAM in the container.
 	maxFormBytes = 1 << 20
 	maxSendBytes = 4 << 20
 )
@@ -64,7 +63,7 @@ type homePageData struct {
 	Error          string // request panel validation error
 	// Limits for upload.js: at most MaxFiles files per transfer, folders
 	// included, each at most MaxUploadBytes. The server enforces
-	// both again.
+	// both too.
 	MaxFiles       int
 	MaxUploadBytes int64
 	// MaxRequestLinks caps "Number of links" on the request form.
@@ -114,10 +113,9 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		r.Body = http.MaxBytesReader(w, r.Body, maxSendBytes)
 
 		// The JS client sends FormData, which the browser encodes as
-		// multipart/form-data. Only a non-multipart body may fall back to
-		// ParseForm: a multipart body that fails to parse (e.g. Go's limit of
-		// 1000 parts) must be reported as such, not fall through with every
-		// field empty.
+		// multipart/form-data. Only a non-multipart body falls back to
+		// ParseForm; a multipart body that fails to parse (e.g. Go's limit of
+		// 1000 parts) is reported as an error.
 		if err := r.ParseMultipartForm(1 << 20); err != nil {
 			if !errors.Is(err, http.ErrNotMultipart) {
 				slog.Warn("send: parse multipart form", "error", err)
@@ -169,7 +167,7 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		var recipients []string
 		if linkOnly {
 			// Link-only: use sender as sole recipient to generate a download token.
-			// No notification email will be sent.
+			// No notification email is sent.
 			recipients = []string{senderEmail}
 		} else {
 			recipients = parseRecipients(recipientsRaw)
@@ -285,10 +283,9 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			"recipient_count": len(result.Recipients),
 			"link_only":       linkOnly,
 		}
-		// In link-only mode return the download URL so the JS can display it,
-		// and the manage URL: the sender gets no mail, so the screen after the
-		// upload is the only place they get it. With mail it is only in the
-		// confirmation mail.
+		// In link-only mode the response carries the download URL and the
+		// manage URL for the page to show; the sender gets no mail. With mail,
+		// the manage URL is only in the confirmation mail.
 		if linkOnly {
 			resp["manage_url"] = cfg.Server.BaseURL + "/manage/" + result.ManageToken
 			if len(result.Recipients) > 0 {
@@ -308,10 +305,9 @@ type announcedFile struct {
 }
 
 // parseAnnouncedFiles reads the file list of POST /send: one JSON field
-// `files` ([{"name":…,"size":…}]). One field, however many files — the old
-// format used two form fields per file and broke at 500 files on Go's
-// multipart part limit. That old format (filenames[] + sizes[]) is still
-// accepted for a page that was open during a deploy.
+// `files` ([{"name":…,"size":…}]). Without it, it reads the field pairs
+// filenames[] and sizes[], as sent by an earlier upload.js still open in a
+// browser.
 func parseAnnouncedFiles(r *http.Request) ([]announcedFile, error) {
 	if raw := r.FormValue("files"); raw != "" {
 		var list []announcedFile
@@ -339,13 +335,11 @@ func parseAnnouncedFiles(r *http.Request) ([]announcedFile, error) {
 }
 
 // isValidEmail is a minimal email validator. It checks for the presence of
-// exactly one '@' with non-empty local and domain parts. Full RFC 5322
-// validation is deliberately avoided — it is vastly complex and rejects
-// addresses that real mail servers accept. The SMTP relay will reject
-// truly invalid addresses at send time.
+// exactly one '@' with non-empty local and domain parts. It is not a full
+// RFC 5322 check; the SMTP relay rejects invalid addresses at send time.
 func isValidEmail(email string) bool {
-	// No whitespace or control characters, and at most 254 characters: a CR
-	// or LF would only fail when the mail is sent, and then for good.
+	// No whitespace or control characters (a CR or LF fails at send time),
+	// and at most 254 characters.
 	if len(email) > 254 || strings.IndexFunc(email, func(r rune) bool { return r <= ' ' || r == 0x7f }) >= 0 {
 		return false
 	}
@@ -357,8 +351,7 @@ func isValidEmail(email string) bool {
 }
 
 // isValidExpiryOption checks that the submitted hours value matches one of the
-// configured expiry options. This prevents a client from submitting an arbitrary
-// expiry duration that bypasses the intended options.
+// configured expiry options.
 func isValidExpiryOption(hours int, options []config.ExpiryOption) bool {
 	for _, opt := range options {
 		if opt.Hours == hours {
@@ -406,6 +399,3 @@ func jsonError(w http.ResponseWriter, msg string, status int) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
-
-// ── Template rendering placeholder ───────────────────────────────────────────
-// Replace with real template rendering when web/templates/ are implemented.

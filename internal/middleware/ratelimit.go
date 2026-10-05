@@ -15,12 +15,10 @@ import (
 //
 // The key combines the trusted-proxy-aware client IP with the request path, so
 // password endpoints (whose path contains the transfer/request token) are
-// limited per (IP, token): a shared NAT egress IP does not cause one visitor's
-// attempts against transfer A to lock out another visitor's access to transfer B.
-// For the admin login the path is constant, so it limits per IP.
+// limited per (IP, token). For the admin login the path is constant, so it
+// limits per IP.
 //
-// State is per-process, which is sufficient for Ferri's single-container
-// deployment. It is not shared across replicas.
+// State is per-process, not shared across replicas.
 type RateLimiter struct {
 	mu       sync.Mutex
 	windows  map[string]*rlWindow

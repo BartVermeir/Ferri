@@ -23,8 +23,8 @@ type Scheduler struct {
 	stop      chan struct{}
 	wg        sync.WaitGroup
 	startOnce sync.Once // guards against Start() being called more than once
-	// cleanupMu keeps one cleanup run at a time: "Force cleanup" in the
-	// admin could otherwise overlap the scheduled run.
+	// cleanupMu keeps one cleanup run at a time, scheduled or "Force cleanup"
+	// in the admin.
 	cleanupMu sync.Mutex
 }
 
@@ -74,10 +74,8 @@ func (s *Scheduler) runLoop(name string, interval time.Duration, fn func()) {
 	}
 }
 
-// runJob executes one job tick, recovering from a panic so a single bad run is
-// logged instead of taking down the process. An unrecovered job panic exits
-// the whole container, and Docker restarts it straight into the same panic on
-// the next tick.
+// runJob executes one job tick. A panic is recovered and logged; the process
+// keeps running.
 func runJob(name string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -99,7 +97,6 @@ const (
 
 // runMailJob sends pending mails, see the batch constants above.
 // Sends via SMTP and updates status. Retries on failure with exponential backoff.
-// See architecture.md §10 (Mail job) for the full specification.
 func (s *Scheduler) runMailJob() {
 	// Load settings once per run — provides runtime from_address and from_name.
 	sender := mail.NewSender(s.cfg, s.stores.Settings.Get())
@@ -163,7 +160,7 @@ func (s *Scheduler) runExpiryJob() {
 
 		// Build and enqueue expiry summary mail if enabled and from-address is configured.
 		// Not for a transfer that never went live (upload abandoned while
-		// pending): nobody was sent a link, so "never opened" would mislead.
+		// pending): no link was sent.
 		settings := s.stores.Settings.Get()
 		if t.ActivatedAt.Valid && settings.ExpirySummary && settings.MailFromAddress != "" {
 			if err := s.enqueueSummary(t, time.Time{}, false); err != nil {
@@ -239,8 +236,8 @@ func (s *Scheduler) enqueueSummary(t store.Transfer, deletedAt time.Time, bySend
 		DeletedAt:  deletedAt,
 		BySender:   bySender,
 	}
-	// Only complete files: a dead 'uploading' row (a lost TUS create) was
-	// never part of the transfer the recipients saw.
+	// Only complete files: an 'uploading' row (a lost TUS create) is not
+	// part of the transfer the recipients saw.
 	for _, f := range dbFiles {
 		if f.Status == "complete" {
 			e.Files = append(e.Files, f)
@@ -409,8 +406,8 @@ func (s *Scheduler) cleanupStalled() {
 	var removed int
 	for _, f := range stalledFiles {
 		// The data lives at the flat <tus_upload_id>, not at storage_path.
-		// Both content and .info go: with only the content gone, tusd would
-		// still offer the upload for resumption.
+		// Both content and .info go: tusd offers an upload with an .info
+		// for resumption.
 		s.removeAndPurge(store.TransferFiles, f.ID, f.StoragePath, f.TUSUploadID.String)
 
 		if err := s.stores.Transfers.MarkFileDeleted(f.ID); err != nil {
@@ -453,9 +450,9 @@ func (s *Scheduler) removeAndPurge(table store.FileTable, fileID, storagePath, t
 }
 
 // purgeLeftovers retries the physical removal of every deleted file row that
-// still has a tus_upload_id. That covers removals that failed earlier (e.g. an
-// SMB hiccup) and all stalled uploads deleted before removal included the flat
-// TUS file — on SMB there is no orphan scan to catch those otherwise.
+// still has a tus_upload_id: removals that failed (e.g. an SMB error) and
+// deleted stalled uploads whose flat TUS file is still on storage. SMB has no
+// orphan scan.
 func (s *Scheduler) purgeLeftovers() {
 	leftovers, err := s.stores.Files.ListUnpurged()
 	if err != nil {
@@ -481,8 +478,6 @@ func (s *Scheduler) purgeLeftovers() {
 			"count", waiting, "gb", float64(waitingBytes)/1_073_741_824)
 	}
 }
-
-// ── Mail sending ─────────────────────────────────────────────────────────────
 
 // ── Expiry summary builders ───────────────────────────────────────────────────
 
@@ -521,7 +516,7 @@ type recipientSummary struct {
 
 // maxSummaryLines caps the files listed per recipient, and the names in
 // "Not downloaded": a folder can hold thousands of files. A ZIP of
-// everything is one "All files" line anyway.
+// everything is one "All files" line.
 const maxSummaryLines = 20
 
 type summaryLine struct {
@@ -631,9 +626,9 @@ func sameTimes(lines []summaryLine) bool {
 	return true
 }
 
-// label names a history row: the sender's own link and the one shared link
-// of a link-only transfer carry the sender's address, which would read as
-// if the sender downloaded their own files.
+// label names a history row. The sender's own link and the shared link of a
+// link-only transfer carry the sender's address, so they get a fixed label
+// instead of the address.
 func (e expirySummary) label(h store.RecipientHistory) string {
 	switch {
 	case h.IsSender:
@@ -673,7 +668,7 @@ func (e expirySummary) cleanupNote() string {
 
 // buildExpirySummaryHTML renders the expiry summary mail as HTML. Per
 // recipient: which files they downloaded and when, and which not
-// (recipients()). Format (architecture.md §8):
+// (recipients()). Format:
 //
 //	bob@example.org: 3 of 5 files
 //	  • a.mov: 11 Sep 13:14, 12 Sep 09:02

@@ -2,7 +2,7 @@ module github.com/BartVermeir/Ferri
 
 go 1.26.0
 
-// Security patches of the standard library (audit M5); bump with the Dockerfile.
+// Keep equal to the Go version of the Dockerfile base image.
 toolchain go1.26.8
 
 require (

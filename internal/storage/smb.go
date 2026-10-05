@@ -28,17 +28,16 @@ type SMBConfig struct {
 }
 
 // smbMaxCredits caps the SMB credits each connection holds, and so how much
-// can be in flight on it: a credit covers 64KB, so 512 = 32MB.
-// go-smb2's default of 128 (8MB) was used up by two downloads reading 4
-// blocks ahead. Uploads keep 4 blocks of 1MB in flight per connection
+// can be in flight on it: a credit covers 64KB, so 512 = 32MB (go-smb2's
+// default is 128). Uploads keep 4 blocks of 1MB in flight per connection
 // (writeDepth), downloads 2 (handler.fileReadAheadDepth, 8 over the
 // connections). The server may grant fewer: then less is in flight.
 const smbMaxCredits = 512
 
 // smbConnections is how many SMB connections the backend opens to the share.
-// The share limits each connection: one connection wrote ~2000 Mbps at most,
-// two wrote ~4400 Mbps together. A file's data is striped over all of them
-// (stripedFile); the first connection also carries all small operations.
+// The share limits the throughput of each connection. A file's data is
+// striped over all of them (stripedFile); the first connection also carries
+// all small operations.
 const smbConnections = 4
 
 // SMBBackend stores files on a remote SMB/CIFS share using a pure-Go SMB2 client.
@@ -79,9 +78,8 @@ func (c *smbConn) connect(cfg SMBConfig) error {
 	// Close any existing connection silently
 	c.disconnectLocked()
 
-	// A timeout, so an unreachable host fails in seconds instead of hanging
-	// the admin's connection test (~2 min); keepalives, so a connection the
-	// server silently dropped is noticed.
+	// The timeout makes an unreachable host fail in seconds; keepalives
+	// detect a connection the server dropped silently.
 	dialer := net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	conn, err := dialer.Dial("tcp", cfg.Host+":445")
 	if err != nil {
@@ -148,14 +146,14 @@ func (b *SMBBackend) withConn(i int, fn func(*smb2.Share) error) error {
 
 	var err error
 	if share == nil {
-		// Not opened yet, or an earlier reconnect failed and left no share:
-		// (re)connect rather than calling fn with nil.
+		// Not opened yet, or a failed reconnect left no share: (re)connect
+		// before calling fn.
 		err = errors.New("smb: not connected")
 	} else {
 		if err = fn(share); err == nil {
 			return nil
 		}
-		// Only reconnect on probable connection-level errors
+		// Reconnect only on connection-level errors
 		if !isConnectionError(err) {
 			return err
 		}
@@ -164,9 +162,8 @@ func (b *SMBBackend) withConn(i int, fn func(*smb2.Share) error) error {
 	c.mu.Lock()
 	var reconnErr error
 	if c.share == share {
-		// First to notice: reconnect. Another goroutine may already have
-		// done so (parallel uploads hit the same dead session); reconnecting
-		// again would tear down its fresh connection mid-use.
+		// Only the first goroutine to notice reconnects; parallel uploads
+		// hit the same dead session and use the share it opened.
 		if share != nil {
 			slog.Warn("storage: SMB connection error, reconnecting", "connection", i, "error", err)
 		}
@@ -282,8 +279,7 @@ func isConnectionError(err error) bool {
 
 // smbPath returns the full path on the share for a given relative path.
 // path.Clean with a leading slash collapses any "." / ".." segments and cannot
-// escape above root, so the result always stays within BasePath — a defensive
-// invariant against path traversal regardless of the caller.
+// escape above root, so the result always stays within BasePath.
 func (b *SMBBackend) smbPath(relPath string) string {
 	base := strings.Trim(b.cfg.BasePath, "/")
 	rel := strings.TrimPrefix(path.Clean("/"+strings.TrimPrefix(relPath, "/")), "/")
@@ -357,7 +353,7 @@ func (b *SMBBackend) TUSStore() tusd.DataStore {
 }
 
 // FreeSpace returns the bytes available to this user on the share
-// (the caller-available units, which respect quotas). Gotcha: go-smb2's
+// (the caller-available units, which respect quotas). go-smb2's
 // BlockSize is the sector size and FragmentSize the sectors per allocation
 // unit, so one unit is BlockSize × FragmentSize bytes.
 func (b *SMBBackend) FreeSpace() (uint64, error) {

@@ -67,8 +67,8 @@ type Registry struct {
 	next    uint64
 	running map[uint64]*Handle
 	conns   map[net.Conn]http.ConnState
-	// prev is the last finished chunk per tusd upload ID. A chunk of 200 MB
-	// takes about a second on a fast line, so its own bytes alone say little.
+	// prev is the last finished chunk per tusd upload ID; it counts in the
+	// speed of the upload's running chunk.
 	prev map[string]chunk
 
 	// OnDone, when set, runs once for every transfer that ends, with how
@@ -187,7 +187,7 @@ func (x Running) Position() int64 { return x.Offset + x.Bytes }
 
 // Rate is the average speed in bytes per second: of this connection, and
 // for an upload also of its previous chunk. 0 when that covers less than a
-// second (too little to say anything).
+// second.
 func (x Running) Rate(now time.Time) float64 {
 	d := now.Sub(x.Started) + x.PrevTook
 	if d < time.Second {

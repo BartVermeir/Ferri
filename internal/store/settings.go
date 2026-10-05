@@ -121,7 +121,7 @@ func (s *SettingsStore) load() (*Settings, error) {
 		if err := rows.Scan(&k, &v); err != nil {
 			return nil, err
 		}
-		kv[k] = v.String // empty string when NULL; orDefault() handles empty strings correctly
+		kv[k] = v.String // empty string when NULL; orDefault() then returns the default
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

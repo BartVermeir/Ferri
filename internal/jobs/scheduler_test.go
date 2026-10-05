@@ -78,7 +78,7 @@ func TestCleanupJob_RemovesExpiredTransferFilesAndRows(t *testing.T) {
 	}
 
 	// Push expired_at well past the grace period — SetExpired stamps "now",
-	// which GetForCleanup would not yet consider due for cleanup.
+	// which GetForCleanup does not yet consider due for cleanup.
 	if _, err := d.Exec(`UPDATE transfers SET expired_at = unixepoch() - 1000000 WHERE id = ?`, result.TransferID); err != nil {
 		t.Fatalf("backdate expired_at: %v", err)
 	}
@@ -277,9 +277,9 @@ func TestCleanupJob_ExpiredTransferRemovesFlatTUSFile(t *testing.T) {
 	}
 }
 
-// Rows deleted before the fix still point at data on storage. The next
-// cleanup run must find and remove it — on SMB nothing else would.
-func TestCleanupJob_PurgesLeftoversFromBeforeTheFix(t *testing.T) {
+// Deleted rows that still carry a tus_upload_id point at data on storage. The
+// next cleanup run finds and removes it.
+func TestCleanupJob_PurgesLeftovers(t *testing.T) {
 	f := newPurgeFixture(t)
 	f.transferFile("tf", "tus-transfer")
 	f.requestFile("rf", "tus-request")

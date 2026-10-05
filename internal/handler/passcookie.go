@@ -12,8 +12,8 @@ import (
 )
 
 // passwordCookieTTL is how long an unlocked password-protected link stays
-// unlocked in a browser. The cookie itself is a session cookie; this bounds
-// it on the server side too.
+// unlocked in a browser. The cookie is a session cookie; the server also
+// rejects it after this.
 const passwordCookieTTL = 24 * time.Hour
 
 // Password cookies (download page, upload request) prove that the visitor
@@ -21,9 +21,8 @@ const passwordCookieTTL = 24 * time.Hour
 // HMAC-SHA256 over the scope, the link token, the password's bcrypt hash and
 // the expiry.
 //
-// The key is derived from the admin token, so rotating ADMIN_TOKEN logs every
-// unlocked browser out. Including the bcrypt hash means a changed password
-// invalidates old cookies as well.
+// The key is derived from the admin token: a new ADMIN_TOKEN invalidates every
+// cookie, and a changed password invalidates the cookies of that link.
 
 func passwordCookieKey(cfg *config.Config) []byte {
 	m := hmac.New(sha256.New, []byte(cfg.Admin.Token))

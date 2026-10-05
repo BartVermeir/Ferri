@@ -11,7 +11,7 @@ const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 // tokenLen is the fixed output length for all generated tokens.
 // 32 random bytes = 256 bits. ceil(256 * log(2) / log(58)) = ceil(43.7) = 44.
-// Using 43 would truncate the top ~4 bits of entropy. 44 covers the full space.
+// 44 covers the full space.
 // Shorter results are left-padded with the first alphabet character ('1').
 const tokenLen = 44
 

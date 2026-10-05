@@ -3,7 +3,7 @@ package handler
 // Shared test helpers for the handler package's HTTP-level tests
 // (download_test.go, upload_test.go, admin_test.go). Builds a real config,
 // a fresh in-memory migrated SQLite DB, and a local storage backend rooted
-// at a temp dir — no mocks, matching the rest of this codebase's test style.
+// at a temp dir.
 
 import (
 	"database/sql"

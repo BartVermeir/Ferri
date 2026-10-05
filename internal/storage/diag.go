@@ -182,7 +182,7 @@ func (r *diagReader) Read(p []byte) (int, error) {
 }
 
 // done records the blocks the store wrote. A block read but not written is
-// sent again by the client, maybe with other bytes, so it is not kept.
+// sent again by the client, so it is not kept.
 func (r *diagReader) done(written int64, err error) {
 	r.d.mu.Lock()
 	defer r.d.mu.Unlock()

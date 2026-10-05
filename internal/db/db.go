@@ -19,10 +19,9 @@ var migrationsFS embed.FS
 // connPragmas are set by the driver on every new connection, via the DSN, so
 // a connection database/sql opens later (after an error) has them too.
 //
-// synchronous(NORMAL): in WAL mode a commit no longer waits for an fsync, only
-// checkpoints do. A power loss can lose the last commits, but never
-// corrupts the database. With FULL every write, from every upload and
-// download, queued on the one connection behind an fsync.
+// synchronous(NORMAL): in WAL mode a commit does not wait for an fsync, only
+// checkpoints do. A power loss can lose the last commits but does not
+// corrupt the database.
 //
 // secure_delete(1): a deleted row is overwritten with zeros, so what was
 // deleted is gone from the file and not only unlinked.
@@ -104,9 +103,8 @@ func Migrate(db *sql.DB) error {
 			return fmt.Errorf("read migration %s: %w", filename, err)
 		}
 
-		// Run the migration and record it in a single transaction.
-		// This ensures a crash between statement execution and registration
-		// does not cause the migration to run again on next startup.
+		// Run the migration and record it in a single transaction, so a
+		// crash in between does not run it again on next startup.
 		err = TxFunc(db, func(tx *sql.Tx) error {
 			if err := execStatements(tx, string(content)); err != nil {
 				return fmt.Errorf("statements: %w", err)
@@ -129,11 +127,10 @@ func Migrate(db *sql.DB) error {
 }
 
 // StartupHooks runs operations that must complete before the server starts.
-// Currently: resets any mail_queue rows stuck in 'sending' state due to a previous crash.
+// It resets mail_queue rows left in 'sending' by a crash.
 func StartupHooks(db *sql.DB) error {
 	// Recover mail_queue rows stuck in 'sending' for more than 10 minutes.
-	// COALESCE is required: last_attempt_at is NULL on first attempt.
-	// Without it, rows that crashed on their first attempt are permanently stuck.
+	// COALESCE: last_attempt_at is NULL until the first attempt ends.
 	result, err := db.Exec(`
 		UPDATE mail_queue
 		SET    status          = 'pending',
@@ -160,19 +157,16 @@ type sqlExecutor interface {
 // each one separately. The split is semicolon-aware: it ignores semicolons
 // inside single-quoted string literals and inside -- line comments.
 //
-// PRAGMA statements are silently skipped: they are connection-level settings
-// that cannot be changed inside a transaction (journal_mode, foreign_keys),
-// or would have no effect. Open() sets all required PRAGMAs before Migrate()
-// is called.
+// PRAGMA statements are skipped: they are connection-level settings that
+// cannot be changed inside a transaction (journal_mode, foreign_keys). Open()
+// sets all required PRAGMAs before Migrate() is called.
 //
-// This is required because modernc/sqlite does not reliably execute multiple
-// statements in a single Exec call.
+// modernc/sqlite does not reliably execute multiple statements in a single
+// Exec call.
 func execStatements(ex sqlExecutor, script string) error {
 	stmts := splitSQL(script)
 	for _, stmt := range stmts {
-		// Skip PRAGMA statements — they must not run inside a transaction.
-		// journal_mode and foreign_keys are connection-level and are already
-		// set by Open(). Running them inside a TX is either a no-op or an error.
+		// Skip PRAGMA statements: Open() sets them on the connection.
 		upper := strings.ToUpper(strings.TrimSpace(stmt))
 		if strings.HasPrefix(upper, "PRAGMA") {
 			continue
@@ -186,8 +180,7 @@ func execStatements(ex sqlExecutor, script string) error {
 
 // splitSQL splits a SQL script on statement-terminating semicolons,
 // correctly ignoring semicolons inside string literals and line comments.
-// CRLF line endings are normalised to LF first, so the parser works correctly
-// on scripts committed or edited on Windows.
+// CRLF line endings are normalised to LF first.
 func splitSQL(script string) []string {
 	// Normalise Windows line endings before parsing
 	script = strings.ReplaceAll(script, "\r\n", "\n")
@@ -258,10 +251,7 @@ func truncate(s string, n int) string {
 
 // TxFunc executes fn inside a transaction. If fn returns an error, the
 // transaction is rolled back; otherwise it is committed.
-//
-// Note: store packages define a local txFunc to avoid importing this package
-// (which would create an import cycle via the migrations embed). Both
-// implementations are identical. If the logic changes, update both.
+// The store package has an identical txFunc.
 func TxFunc(db *sql.DB, fn func(tx *sql.Tx) error) error {
 	tx, err := db.Begin()
 	if err != nil {

@@ -1,11 +1,10 @@
 -- Statistics per transfer and request and purging deleted
 -- items.
 --
--- upload_ms:   sum of the time the TUS PATCHes of this file took, so the
---              net upload time (pauses left out). 0 = before migration 009.
--- deleted_at:  when the item got status 'deleted'; purged from the database
---              jobs.purge_deleted_after_days later. NULL = before 009, then
---              expires_at counts.
+-- upload_ms:   not read by the application; upload timing is in
+--              upload_sessions.
+-- deleted_at:  when the item first got status 'deleted'. NULL = not
+--              deleted, or deleted before this column existed.
 ALTER TABLE files ADD COLUMN upload_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE upload_request_files ADD COLUMN upload_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE transfers ADD COLUMN deleted_at INTEGER;

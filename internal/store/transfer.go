@@ -29,7 +29,7 @@ type Transfer struct {
 	CreatedAt        time.Time
 	NotifyRecipients bool // false = link-only mode, skip notification emails
 	// ManageToken opens the sender's manage page (/manage/<token>). NULL for
-	// transfers from before migration 006.
+	// transfers created before the manage_token column existed.
 	ManageToken sql.NullString
 }
 
@@ -72,13 +72,12 @@ type CreateTransferInput struct {
 	Files            []CreateFileInput
 	NotifyRecipients bool // false = link-only, skip notification emails
 	// ExpectedFiles is how many files the sender announced; the transfer
-	// activates once that many are complete. 0 = unknown (stored as NULL),
-	// which keeps the old "no incomplete files" rule.
+	// activates once that many are complete. 0 = unknown (stored as NULL):
+	// the transfer then activates once no file is incomplete.
 	ExpectedFiles int
 	// SenderLink adds a separate recipient row (is_sender = 1) for the sender,
-	// unless the sender is already one of the recipients — then that row is
-	// the sender's link, and the unique (transfer_id, email) index forbids a
-	// second one anyway.
+	// unless the sender is already one of the recipients: then that row is
+	// the sender's link (unique index on transfer_id, email).
 	SenderLink bool
 }
 
@@ -266,11 +265,10 @@ func (s *TransferStore) GetFileByID(fileID string) (*File, error) {
 // goroutine wins.
 //
 // With expected_files set: activate when at least that many files are
-// complete. "At least" rather than "no incomplete rows": a TUS client that
-// gets a 404 on resume creates a fresh upload and leaves the old row
-// 'uploading' — that stray row must not block the transfer forever.
-// Without expected_files (transfers from before migration 004): the old rule,
-// no file row may be incomplete.
+// complete. Incomplete rows do not block it: a TUS client that gets a 404 on
+// resume creates a fresh upload and leaves the old row 'uploading'.
+// Without expected_files (transfers created before that column existed): no
+// file row may be incomplete.
 func (s *TransferStore) TryActivate(transferID string) (bool, error) {
 	result, err := s.db.Exec(`
 		UPDATE transfers
@@ -297,7 +295,7 @@ func (s *TransferStore) TryActivate(transferID string) (bool, error) {
 
 // SetFileComplete marks a file as complete and records the final size.
 // tus_upload_id is kept so the download handler can locate the file via
-// tusd's storage layout (<storage_path>/<tus_upload_id>).
+// tusd's storage layout (<storage_root>/<tus_upload_id>).
 func (s *TransferStore) SetFileComplete(fileID string, sizeBytes int64) error {
 	_, err := s.db.Exec(`
 		UPDATE files
@@ -397,7 +395,7 @@ func (s *TransferStore) MarkFilesDeleted(transferID string) error {
 	})
 }
 
-// SumFileSizes returns total size_bytes for complete files. Call BEFORE os.RemoveAll.
+// SumFileSizes returns total size_bytes for complete files. Call before the files are removed.
 func (s *TransferStore) SumFileSizes(transferID string) (int64, error) {
 	var total int64
 	err := s.db.QueryRow(`
@@ -584,7 +582,8 @@ func (s *TransferStore) ValidateForTUS(transferID string) (bool, error) {
 }
 
 // CountFiles returns how many live (not deleted) file rows a transfer has, and
-// the number of files /send announced for it (NULL for pre-004 transfers).
+// the number of files /send announced for it (NULL for transfers created
+// before expected_files existed).
 func (s *TransferStore) CountFiles(transferID string) (int, sql.NullInt64, error) {
 	var count int
 	var expected sql.NullInt64
@@ -790,7 +789,7 @@ func (s *TransferStore) filesByTransferID(transferID string) ([]File, error) {
 
 // scanTransfers scans rows from the transfers table.
 // expires_at and created_at are INTEGER (Unix epoch) in SQLite — scan into int64,
-// then convert to time.Time. Scanning directly into time.Time would fail at runtime.
+// then convert to time.Time.
 // The column list must match the queries in GetExpired / GetForCleanup /
 // GetByID, including the trailing notify_recipients and manage_token.
 func scanTransfers(rows *sql.Rows) ([]Transfer, error) {
@@ -899,7 +898,7 @@ func (s *TransferStore) listForAdmin(tail string, limit int) ([]TransferSummary,
 		return nil, err
 	}
 
-	// Enrich with recipients (N+1 is fine for admin page sizes)
+	// Enrich with recipients, one query per transfer
 	for i := range list {
 		recipients, err := s.GetRecipients(list[i].ID)
 		if err != nil {
@@ -911,8 +910,7 @@ func (s *TransferStore) listForAdmin(tail string, limit int) ([]TransferSummary,
 }
 
 // txFunc executes fn inside a transaction, rolling back on error.
-// Note: db.TxFunc in the db package does the same — this local version
-// avoids an import cycle since store packages don't import db directly.
+// db.TxFunc in the db package is identical.
 func txFunc(db *sql.DB, fn func(tx *sql.Tx) error) error {
 	tx, err := db.Begin()
 	if err != nil {

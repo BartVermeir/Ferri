@@ -9,9 +9,8 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
-// TestBuildMessage_SubjectCRLFInjection guards against header injection: a
-// Subject containing a raw CRLF must not be able to inject an extra header
-// (e.g. Bcc) into the sent message.
+// TestBuildMessage_SubjectCRLFInjection checks that a Subject containing a raw
+// CRLF cannot inject an extra header (e.g. Bcc) into the sent message.
 // go-mail Q-encodes header values (RFC 2047), so CR/LF bytes never reach the
 // wire unescaped.
 func TestBuildMessage_SubjectCRLFInjection(t *testing.T) {
@@ -43,9 +42,8 @@ func TestBuildMessage_SubjectCRLFInjection(t *testing.T) {
 	}
 }
 
-// TestBuildMessage_RecipientCRLFInjection ensures a recipient address
-// carrying a CRLF sequence is rejected outright rather than silently
-// smuggled into the header block. go-mail validates addresses via
+// TestBuildMessage_RecipientCRLFInjection checks that a recipient address
+// carrying a CRLF sequence is rejected. go-mail validates addresses via
 // net/mail.ParseAddress, which rejects control characters.
 func TestBuildMessage_RecipientCRLFInjection(t *testing.T) {
 	item := store.MailItem{

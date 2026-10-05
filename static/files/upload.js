@@ -84,9 +84,8 @@
     });
   }
 
-  // confirmLargeTotal: files can each be under the limit and still add up to
-  // more. That is allowed after a warning: 600 GB per transfer is what users
-  // are told, not a hard rule.
+  // confirmLargeTotal asks for confirmation when the files together are more
+  // than limits.maxBytes; each file on its own is checked in buildUploads.
   function confirmLargeTotal(uploads, limits) {
     var total = uploads.reduce(function (sum, u) { return sum + u.size; }, 0);
     if (total <= limits.maxBytes) return true;
@@ -215,8 +214,7 @@
     });
   }
 
-  // Past this many rows the list scrolls on its own, so a folder of 1800
-  // files does not push the upload button far down the page.
+  // Past this many rows the list scrolls on its own.
   var LIST_VISIBLE_ROWS = 20;
 
   function renderFileList(collection, listEl, noteEl, limits) {
@@ -290,7 +288,6 @@
     // attempt is the transfer of the last try that did not finish. A new
     // try with the same form and files continues it, and sends only the
     // files that did not arrive yet; anything changed makes a new transfer.
-    // Before, a failure at file 500 of 605 meant a new transfer from file 1.
     var attempt = null;
 
     initFileDrop(dropEl, inputEl, collection, listEl, limits);
@@ -316,8 +313,8 @@
       hideResult(resultEl); // a new try must not show the last try's error
       if (progWrap) progWrap.style.display = '';
 
-      // One JSON field for the whole list: two form fields per file would hit
-      // the server's multipart part limit at 500 files.
+      // One JSON field for the whole list, so a long list stays under the
+      // server's multipart part limit.
       var data = new FormData(form);
       var fileList = JSON.stringify(uploads.map(function (u) { return { name: u.name, size: u.size }; }));
       data.set('files', fileList);
@@ -399,7 +396,7 @@
     var limits   = readLimits(document.body);
     var collection = new FileCollection();
     // Files that already reached the server. A new attempt after an error
-    // sends only the rest: they would otherwise show up twice in the request.
+    // sends only the rest.
     var uploaded = {};
 
     if (!startBtn) return;
@@ -451,15 +448,14 @@
 
   // ── TUS upload engine ────────────────────────────────────────────────────────
 
-  // RETRY_DELAYS: about 8.5 minutes in total. A deploy stops the app for up
-  // to a few minutes (graceful shutdown, then start); the upload must still be
-  // retrying when it is back.
+  // RETRY_DELAYS: about 8.5 minutes in total, longer than an app restart
+  // (graceful shutdown, then start) takes.
   var RETRY_DELAYS = [0, 3000, 5000, 10000, 20000, 30000, 60000, 60000, 60000, 120000, 120000];
 
   // uploadFingerprint is the key under which tus-js-client remembers an
-  // upload for resuming. It includes the transfer or request it belongs to:
-  // tus-js-client's own key is only name, type, size and date, so a new
-  // transfer with the same file would continue the old transfer's upload.
+  // upload for resuming. It includes the transfer or request it belongs to,
+  // so the same file in a new transfer is a new upload (tus-js-client's own
+  // key is only name, type, size and date).
   function uploadFingerprint(file, name, extraMeta) {
     var owner = extraMeta.transfer_id ? 't:' + extraMeta.transfer_id : 'r:' + (extraMeta.upload_request_token || '');
     return ['ferri', owner, name, file.size, file.lastModified || 0].join('/');
@@ -468,11 +464,8 @@
   // uploadKey identifies a file within one selection: its path and size.
   function uploadKey(u) { return u.name + '\u0000' + u.size; }
 
-  // UPLOAD_PARALLEL files go up at the same time. The share limits how fast
-  // one file is written (~2000-2300 Mbps), not how fast several are: separate
-  // files scale almost linearly. On a slow or distant line it also helps
-  // when one connection does not fill it. Each file keeps its own resumable
-  // TUS upload; browsers allow 6 connections per host over HTTP/1.1.
+  // UPLOAD_PARALLEL files go up at the same time, each as its own resumable
+  // TUS upload. Browsers allow 6 connections per host over HTTP/1.1.
   var UPLOAD_PARALLEL = 3;
 
   // uploadFiles sends the items (Files), UPLOAD_PARALLEL at a time. Progress
@@ -515,10 +508,7 @@
           endpoint: '/tus/',
           retryDelays: RETRY_DELAYS,
           // Each chunk ends with a pause: the server finishes the chunk's
-          // writes and answers before the next one starts. At 50 MB that
-          // cost ~15% of the speed on a fast LAN; at 200 MB ~4%. A slow
-          // uploader (~16 Mbps) still finishes a chunk in about 2 minutes,
-          // within the 5 minutes a restart waits for running requests.
+          // writes and answers before the next one starts.
           chunkSize: 200 * 1024 * 1024,
           // Resumable: after an error, a new attempt, or a reload of the
           // upload page it continues where the server stopped instead of
@@ -550,7 +540,7 @@
           },
 
           // tus-js-client's default, except that a full server (507) is
-          // not retried: it will not have room seconds later either.
+          // not retried.
           onShouldRetry: function (error) {
             var status = httpStatus(error);
             if (status === 507) return false;
@@ -683,8 +673,7 @@
   }
 
   // appendManageLink adds the sender's manage page under the result. /send
-  // only returns it for a link-only transfer: the sender gets no mail, so
-  // this is the only place they get it.
+  // only returns it for a link-only transfer, which sends no mail.
   function appendManageLink(el, url) {
     if (!el) return;
     var p = document.createElement('div');
@@ -708,7 +697,7 @@
   }
 
   // formatRate shows a speed in Mbps (megabits, 1 Mbps = 125,000 bytes per
-  // second), the unit line speeds and online speed tests use.
+  // second).
   function formatRate(bytesPerSec) {
     var mbps = bytesPerSec * 8 / 1e6;
     if (mbps < 1) return mbps.toFixed(2) + ' Mbps';

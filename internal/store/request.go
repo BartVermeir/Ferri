@@ -21,7 +21,8 @@ type UploadRequest struct {
 	RequesterEmail string
 	UploadToken    string
 	// ViewToken opens the requester's view of received files. NULL for
-	// requests from before migration 005; use ViewPathToken, not this field.
+	// requests created before the view_token column existed; use
+	// ViewPathToken, not this field.
 	ViewToken     sql.NullString
 	PasswordHash  sql.NullString
 	MaxFiles      sql.NullInt64
@@ -32,15 +33,15 @@ type UploadRequest struct {
 	ExpiredAt     sql.NullInt64
 	CreatedAt     time.Time
 	// ManageToken opens the requester's manage page (/manage/<token>). NULL
-	// for requests from before migration 006.
+	// for requests created before the manage_token column existed.
 	ManageToken sql.NullString
 	// RemindedAt: when the "nothing uploaded yet" reminder went out.
 	RemindedAt sql.NullInt64
 }
 
 // ViewPathToken is the token for the requester's routes (/ul/<token>/files).
-// Requests from before migration 005 have no view token; for those the upload
-// token still works there, so links in mails already sent stay valid.
+// A request without a view token (created before that column existed) uses
+// its upload token there.
 func (r UploadRequest) ViewPathToken() string {
 	if r.ViewToken.Valid && r.ViewToken.String != "" {
 		return r.ViewToken.String
@@ -208,13 +209,12 @@ func (s *RequestStore) GetLiveByUploadToken(tok string) (*UploadRequest, error) 
 
 // GetViewableByViewToken looks up the request behind a requester link
 // (/ul/<view_token>/files and friends): open or completed, and not past
-// expires_at — the mails promise the link stops working then, even while the
-// files still wait for the cleanup job's grace period.
+// expires_at: the mails say the link stops working then, while the files
+// still wait for the cleanup job's grace period.
 //
 // Only the view token matches, never the upload token: the upload link goes to
-// external parties and must not reveal what others uploaded.
-// Exception: requests from before migration 005 have no view token, and their
-// upload token keeps working here until they expire.
+// external parties. A request without a view token (created before that
+// column existed) matches on its upload token until it expires.
 func (s *RequestStore) GetViewableByViewToken(tok string) (*UploadRequest, error) {
 	var r UploadRequest
 	var expiresAt, createdAt int64
@@ -292,8 +292,8 @@ func (s *RequestStore) ExtendExpiry(requestID string, expiresAt time.Time) (bool
 
 // GetDueForReminder returns open requests that expire within the next
 // `before`, have not received a single complete file, were not reminded yet,
-// and are at least `minAge` old — a request created for one day would
-// otherwise get its reminder right after it was made.
+// and are at least `minAge` old, so a request created for one day gets no
+// reminder.
 func (s *RequestStore) GetDueForReminder(before, minAge time.Duration) ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
@@ -396,8 +396,8 @@ func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
 	return scanRequests(rows)
 }
 
-// GetForCleanup returns expired requests past the grace period.
-// GetForCleanup returns upload requests whose files still need physical deletion.
+// GetForCleanup returns upload requests whose files still need physical
+// deletion: deleted ones, and expired or completed ones past the grace period.
 func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
@@ -479,8 +479,6 @@ func (s *RequestStore) MarkFileDeleted(fileID string) error {
 	return err
 }
 
-// CreateFileRow inserts a new upload_request_files row from the TUS callback.
-
 // GetRequestFileByID returns a single upload request file by its ID, reading fresh from DB.
 func (s *RequestStore) GetRequestFileByID(fileID string) (*UploadRequestFile, error) {
 	var f UploadRequestFile
@@ -503,6 +501,7 @@ func (s *RequestStore) GetRequestFileByID(fileID string) (*UploadRequestFile, er
 	return &f, nil
 }
 
+// CreateFileRow inserts a new upload_request_files row from the TUS callback.
 func (s *RequestStore) CreateFileRow(fileID, requestID, originalName, storagePath string, sizeBytes int64) error {
 	_, err := s.db.Exec(`
 		INSERT INTO upload_request_files
@@ -557,10 +556,9 @@ func (s *RequestStore) UploadLabelByTUSID(tusUploadID string) (*UploadLabel, err
 
 // SetFileComplete marks an upload_request_files row as complete with final size.
 //
-// tus_upload_id is deliberately KEPT (mirrors TransferStore.SetFileComplete): on
-// the SMB backend the file lives flat at <base>/<tus_upload_id> and storage_path
-// (requests/<id>/<file_id>) does not exist, so the download and cleanup paths
-// need tus_upload_id to locate the actual file.
+// tus_upload_id is kept, as in TransferStore.SetFileComplete: the file lives
+// flat at <base>/<tus_upload_id> and storage_path (requests/<id>/<file_id>)
+// does not exist, so download and cleanup locate the file by tus_upload_id.
 func (s *RequestStore) SetFileComplete(fileID string, sizeBytes int64) error {
 	_, err := s.db.Exec(`
 		UPDATE upload_request_files

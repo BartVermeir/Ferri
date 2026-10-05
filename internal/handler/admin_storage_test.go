@@ -1,8 +1,7 @@
 package handler
 
 // The saved SMB password may only be reused (empty password field)
-// for the saved host, share, username and domain. Otherwise an admin session
-// could point Ferri at any server and capture the service account's login.
+// for the saved host, share, username and domain.
 
 import (
 	"encoding/json"
@@ -51,8 +50,8 @@ func postForm(h http.Handler, path string, form url.Values) *httptest.ResponseRe
 }
 
 // "Test connection" with another host and an empty password must not log in
-// there with the saved password. The host is an unusable address so that the
-// old code fails fast with a dial error instead of our refusal.
+// there with the saved password. The host is an unusable address, so a
+// missing refusal fails fast with a dial error.
 func TestAdminStorageTest_OtherHostNeedsPassword(t *testing.T) {
 	cfg := newTestConfig()
 	stores := savedSMBStores(t, cfg.Admin.Token)
@@ -70,8 +69,7 @@ func TestAdminStorageTest_OtherHostNeedsPassword(t *testing.T) {
 	}
 }
 
-// Saving another host with an empty password is refused and changes nothing:
-// saving reloads the backend, which would log in with the saved password.
+// Saving another host with an empty password is refused and changes nothing.
 func TestAdminStorageSave_OtherHostNeedsPassword(t *testing.T) {
 	cfg := newTestConfig()
 	stores := savedSMBStores(t, cfg.Admin.Token)

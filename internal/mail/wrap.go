@@ -15,8 +15,7 @@ import (
 // baseURL turns a site-relative logo path (/static/logo/logo.png) into an
 // absolute URL — a mail client has no page to resolve a relative src against.
 // preheader is the one-line preview most clients show next to the subject;
-// leaving it empty makes them show the first body text instead, which for a
-// logo-first layout is often just the company name.
+// when it is empty they show the first body text.
 func Wrap(settings *store.Settings, baseURL, preheader, bodyHTML string) string {
 	primary := "#1a1a1a"
 	company := "Ferri"

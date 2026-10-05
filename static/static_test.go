@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// TestVendoredAssetsPresent guards against the embedded static assets going
-// missing (e.g. a bad //go:embed change or an accidental file move). The TUS
-// client is vendored rather than loaded from a CDN — see the CSP in
-// internal/middleware/security.go.
+// TestVendoredAssetsPresent checks that the embedded static assets are present,
+// including the vendored TUS client (the CSP in internal/middleware/security.go
+// allows no external script host).
 func TestVendoredAssetsPresent(t *testing.T) {
 	for _, f := range []string{
 		"files/tus.min.js", "files/upload.js", "files/favicon.svg",
@@ -29,7 +28,7 @@ func TestVendoredAssetsPresent(t *testing.T) {
 		t.Error("files/tus.min.js does not look like the tus-js-client build")
 	}
 
-	// Folders go as loose files; nothing packs in the browser.
+	// client-zip.js is not embedded: folders upload as loose files.
 	if _, err := FS.ReadFile("files/client-zip.js"); err == nil {
 		t.Error("files/client-zip.js is back, but nothing uses it")
 	}

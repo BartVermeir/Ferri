@@ -4,7 +4,7 @@
 -- Conventions:
 --   - All IDs: base58-encoded 32-byte random strings (opaque tokens)
 --   - All timestamps: Unix epoch seconds (INTEGER), named *_at
---   - Soft deletes via status column, never physical DELETE on transfers/files
+--   - Deleting sets status = 'deleted'; the row is purged once its data is off storage
 --   - Foreign keys enforced (PRAGMA foreign_keys = ON at connection open)
 -- =============================================================
 
@@ -18,9 +18,7 @@ PRAGMA foreign_keys = ON;
 --
 -- activated_at: set when all files finish uploading (status → active).
 -- expired_at:   set when the expiry job processes this transfer.
--- Both are nullable — they are NULL until the relevant transition occurs.
--- They are more useful than a single updated_at because they answer
--- specific operational questions without ambiguity.
+-- Both are NULL until that transition occurs.
 -- -------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS transfers (
     id              TEXT    NOT NULL PRIMARY KEY,
@@ -50,35 +48,28 @@ CREATE INDEX IF NOT EXISTS idx_transfers_sender_email ON transfers (sender_email
 -- files
 -- One row per file within a transfer.
 --
--- Race condition note: when multiple files in a transfer finish
--- uploading concurrently, the TUS UploadFinisher for each file
--- must atomically check whether ALL sibling files are complete
--- before transitioning the transfer to 'active'. This is done
--- via a single UPDATE...WHERE with a subquery, not a separate
--- SELECT then UPDATE. See tus/handler.go for the exact query.
+-- Files of one transfer can finish uploading concurrently, so the
+-- transfer goes to 'active' in a single UPDATE...WHERE with a
+-- subquery (TransferStore.TryActivate), not a SELECT then UPDATE.
 --
 -- tus_last_activity_at: updated on every TUS PATCH request.
 -- Used by the stalled-upload cleanup job to detect abandoned uploads.
 -- Stalled uploads are cleaned up after stall_timeout_hours regardless
--- of the parent transfer's expiry date — but the transfer itself is
--- NOT marked expired, allowing the user to resume or re-upload.
+-- of the parent transfer's expiry date; the transfer itself is not
+-- marked expired.
 --
--- IMPORTANT: the cleanup query uses COALESCE(tus_last_activity_at, created_at)
--- to also catch uploads where the browser closed before the first chunk arrived.
--- In that case tus_last_activity_at is NULL and a bare comparison would
--- evaluate to NULL (treated as false), leaving the row undetected forever.
+-- The cleanup query uses COALESCE(tus_last_activity_at, created_at):
+-- tus_last_activity_at is NULL when no chunk ever arrived.
 -- -------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS files (
     id                   TEXT    NOT NULL PRIMARY KEY,
     transfer_id          TEXT    NOT NULL REFERENCES transfers (id) ON DELETE CASCADE,
     original_name        TEXT    NOT NULL,
-    storage_path         TEXT    NOT NULL,          -- relative path under STORAGE_PATH
-                                                    -- e.g. "transfers/<transfer_id>/<file_id>"
+    storage_path         TEXT    NOT NULL,          -- logical path, e.g. "transfers/<transfer_id>/<file_id>"
     size_bytes           INTEGER NOT NULL DEFAULT 0,
     mime_type            TEXT,                      -- detected server-side, not trusted from client
     tus_upload_id        TEXT    UNIQUE,            -- tusd upload id; retained after completion
-                                                    -- (the flat file lives at <storage_root>/<tus_upload_id>,
-                                                    --  which is the only way to locate it on the SMB backend)
+                                                    -- (the data lives at <storage_root>/<tus_upload_id>)
     tus_last_activity_at INTEGER,                   -- epoch of last TUS PATCH; NULL before first chunk
     status               TEXT    NOT NULL DEFAULT 'uploading'
                                  CHECK (status IN ('uploading','complete','deleted')),
@@ -117,25 +108,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uidx_recipient_per_transfer
 -- Append-only audit log of every file download.
 -- Used as the source for expiry summary mails.
 --
--- IMPORTANT: no CASCADE on file_id.
--- When the cleanup job deletes files from disk and marks them
--- as status='deleted', download_events must be preserved —
--- they are the audit trail used to generate the expiry summary
--- mail. If CASCADE were present and the cleanup job ran before
--- the expiry job, the download history would be silently lost.
+-- No CASCADE on file_id: the events outlive their files, the
+-- expiry summary mail is built from them. file_id is a nullable
+-- FK, set to NULL when the referenced file row is deleted.
 --
--- file_id is therefore a nullable FK. It is set to NULL by the
--- cleanup job when the referenced file is deleted, preserving
--- the event row and its timestamp.
---
--- original_name is stored here (denormalised) rather than only on files,
--- for two reasons:
--- 1. The expiry summary mail must show filenames after file deletion.
--- 2. The download handler uses original_name for the Content-Disposition
---    header. This value is percent-encoded per RFC 5987 in the handler
---    (filename* parameter) to correctly handle non-ASCII characters
---    such as accented letters and em-dashes common in media
---    filenames (e.g. "Café scene.mov", "Recording — day 1.mov").
+-- original_name is stored here as well as on files: the expiry
+-- summary mail shows file names after the files are deleted.
 -- -------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS download_events (
     id              TEXT    NOT NULL PRIMARY KEY,
@@ -185,9 +163,8 @@ CREATE INDEX IF NOT EXISTS idx_upload_requests_token   ON upload_requests (uploa
 -- upload_request_files
 -- Files received via an upload request link.
 --
--- Deliberate duplication of `files`: kept separate rather than
--- merged into one table with nullable FKs.
--- RULE: if a column is added to `files`, add it here too.
+-- Same columns as `files`: a column added to `files` is added
+-- here too.
 -- -------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS upload_request_files (
     id                   TEXT    NOT NULL PRIMARY KEY,
@@ -216,18 +193,15 @@ CREATE INDEX IF NOT EXISTS idx_urf_stalled    ON upload_request_files (tus_last_
 --                                  -> failed  (after max_attempts)
 --
 -- The 'sending' status prevents double-sends when the mail job
--- overlaps itself. However, if the process crashes while a row
--- is 'sending', it will never be retried automatically.
--- On startup, the application resets any rows stuck in 'sending'
--- for more than 10 minutes back to 'pending'. See db/db.go startup hook:
+-- overlaps itself. On startup, the application resets rows stuck
+-- in 'sending' for more than 10 minutes back to 'pending'
+-- (db/db.go startup hook):
 --   UPDATE mail_queue SET status='pending', next_attempt_at=unixepoch()
 --   WHERE status='sending'
 --   AND COALESCE(last_attempt_at, created_at) < (unixepoch() - 600)
 --
--- COALESCE is required: last_attempt_at is NULL until a send attempt
--- completes or fails. A row set to 'sending' that crashes on its very
--- first attempt has last_attempt_at=NULL, so NULL < X evaluates to NULL
--- (false in SQL) — the row would never be recovered without the COALESCE.
+-- COALESCE: last_attempt_at is NULL until a send attempt completes
+-- or fails.
 -- -------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mail_queue (
     id              TEXT    NOT NULL PRIMARY KEY,

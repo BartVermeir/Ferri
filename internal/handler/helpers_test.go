@@ -41,10 +41,8 @@ func TestValidateBranding(t *testing.T) {
 }
 
 func TestIsValidEmail(t *testing.T) {
-	// isValidEmail is deliberately minimal (see its doc comment): it only checks
-	// for one '@' with a non-empty local part and a dotted domain. Malformed
-	// addresses like "a@@b.com" pass here and are rejected by the SMTP relay
-	// at send time — that is by design, not a bug.
+	// isValidEmail only checks for one '@' with a non-empty local part and a
+	// dotted domain, so addresses like "a@@b.com" pass.
 	ok := []string{"a@b.co", "first.last@sub.example.com", "x+tag@example.org"}
 	bad := []string{"", "no-at", "@example.com", "user@", "user@localhost", "a@b"}
 	for _, e := range ok {

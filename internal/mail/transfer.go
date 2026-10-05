@@ -26,7 +26,7 @@ type Transfer struct {
 	Loc         *time.Location
 	BaseURL     string
 	Settings    *store.Settings
-	ManageURL   string // sender's manage page; empty for transfers from before migration 006
+	ManageURL   string // sender's manage page; empty for a transfer without a manage token
 }
 
 // NewTransfer fills a Transfer from the database. Only complete files are
@@ -76,9 +76,9 @@ func (m Transfer) SubjectTitle() string {
 }
 
 // EnqueueAvailable queues the "shared with you" mail for each recipient
-// that has not had it yet. Claiming the recipient first makes it safe when
-// the transfer goes live while the sender adds someone: whoever claims it
-// sends the one mail.
+// that has not had it yet. Each recipient is claimed first: when the
+// transfer goes live while the sender adds someone, whoever claims the
+// recipient sends the one mail.
 func EnqueueAvailable(stores *store.Stores, m Transfer, recipients []store.Recipient) {
 	subject := fmt.Sprintf("%s shared %s with you", m.Sender(), m.SubjectTitle())
 	for _, r := range recipients {

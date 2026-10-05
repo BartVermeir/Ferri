@@ -12,8 +12,7 @@ package mail
 //
 // The wneessen/go-mail library is used for MIME construction. It Q-encodes
 // headers (RFC 2047) and parses addresses via net/mail, so a Subject or
-// address containing CR/LF cannot break out into a raw header injection —
-// see mailer_test.go for a regression test of that property.
+// address containing CR/LF cannot break out into a raw header injection.
 
 import (
 	"context"
@@ -31,8 +30,7 @@ import (
 
 // Sender sends mail queue items over one SMTP connection, opened on the
 // first mail and reused for the rest of the batch. After a failed send the
-// connection is dropped and the next mail opens a fresh one, so one bad mail
-// cannot poison the others.
+// connection is dropped and the next mail opens a fresh one.
 // Not safe for concurrent use; Close when the batch is done.
 type Sender struct {
 	cfg         *config.Config
@@ -114,9 +112,8 @@ func buildMessage(fromName, fromAddress string, item store.MailItem) (*gomail.Ms
 		return nil, fmt.Errorf("to address: %w", err)
 	}
 
-	// go-mail's default Message-ID ends in os.Hostname(), which inside the
-	// container is a bare container ID — not a domain. Spam filters score a
-	// non-FQDN Message-ID, so use the From domain instead.
+	// Message-ID ends in the From domain. go-mail's default uses
+	// os.Hostname(), which inside the container is a bare container ID.
 	if at := strings.LastIndex(fromAddress, "@"); at >= 0 && at < len(fromAddress)-1 {
 		msg.SetMessageIDWithValue(token.Generate() + "@" + fromAddress[at+1:])
 	}

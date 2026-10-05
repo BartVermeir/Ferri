@@ -8,8 +8,7 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
-// A Message-ID ending in the container hostname is a spam signal; it must
-// end in the From domain instead.
+// The Message-ID ends in the From domain, not the hostname.
 func TestBuildMessage_MessageIDUsesFromDomain(t *testing.T) {
 	item := store.MailItem{ToAddress: "bob@example.com", Subject: "Hi", BodyHTML: "<p>hi</p>", BodyText: "hi"}
 	msg, err := buildMessage("Ferri", "ferri@example.com", item)

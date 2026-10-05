@@ -114,8 +114,8 @@ func postSendMultipart(t *testing.T, stores *store.Stores, fields func(w *multip
 	return rr.Code, resp.Error
 }
 
-// The file list travels as one JSON field, so the count of files no longer
-// runs into Go's limit of 1000 multipart parts.
+// The file list travels as one JSON field, so the count of files does not
+// run into Go's limit of 1000 multipart parts.
 func TestSendCreate_FileListAsJSON(t *testing.T) {
 	stores := newTestStores(t)
 	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {
@@ -126,8 +126,8 @@ func TestSendCreate_FileListAsJSON(t *testing.T) {
 	}
 }
 
-// A folder of 1600 files (what a colleague sent, 2026-09-25) goes as loose
-// files: accepted, with long folder paths. Past max_files_per_transfer the
+// A folder of 1600 files goes as loose files: accepted, with long folder
+// paths. Past max_files_per_transfer the
 // server says so, never "Sender name is required".
 func TestSendCreate_ManyFilesGetTheRealError(t *testing.T) {
 	stores := newTestStores(t)
@@ -152,7 +152,8 @@ func TestSendCreate_ManyFilesGetTheRealError(t *testing.T) {
 		t.Errorf("5001 files: status = %d, error = %q, want the file limit", code, msg)
 	}
 
-	// Old format, 3200 parts: Go refuses the form; say so.
+	// filenames[]/sizes[] with 3200 parts: Go refuses the form and the error
+	// says so.
 	code, msg = postSendMultipart(t, stores, func(w *multipart.Writer) {
 		for i := 0; i < 1600; i++ {
 			w.WriteField("filenames[]", fmt.Sprintf("img%d.jpg", i))
@@ -164,7 +165,7 @@ func TestSendCreate_ManyFilesGetTheRealError(t *testing.T) {
 	}
 }
 
-// A page that was open during the deploy still sends the old format.
+// The filenames[]/sizes[] fields are accepted as well as the files field.
 func TestSendCreate_OldFormatStillAccepted(t *testing.T) {
 	stores := newTestStores(t)
 	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {
@@ -210,7 +211,7 @@ func TestSendPage_AdditionalOptions(t *testing.T) {
 }
 
 // Bodies, names and addresses are bounded, and an address with a line break
-// is refused (a mail to it would fail for good later).
+// is refused.
 func TestSendCreate_Bounds(t *testing.T) {
 	stores := newTestStores(t)
 	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {

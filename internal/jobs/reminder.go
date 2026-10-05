@@ -12,8 +12,8 @@ import (
 )
 
 // Reminder timing: a request with nothing uploaded gets one reminder in its
-// last day, but only once it is at least a day old — a request made for one
-// day would otherwise be reminded right after it was created.
+// last day, but only once it is at least a day old: a request made for one
+// day gets none.
 const (
 	reminderBefore = 24 * time.Hour
 	reminderMinAge = 24 * time.Hour
@@ -80,7 +80,7 @@ func (m requestReminder) uploadURL() string {
 	return m.BaseURL + "/ul/" + m.Request.UploadToken
 }
 
-// manageURL is empty for a request from before migration 006.
+// manageURL is empty for a request without a manage token.
 func (m requestReminder) manageURL() string {
 	if !m.Request.ManageToken.Valid || m.Request.ManageToken.String == "" {
 		return ""

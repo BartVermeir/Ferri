@@ -2,7 +2,7 @@ package handler
 
 // HTTP-level tests for the admin auth gate: routes under /admin require a
 // valid signed session cookie; POST routes also go through CSRFProtect,
-// mirroring the middleware stack wired in cmd/server/main.go.
+// mirroring the middleware stack wired in cmd/server/routes.go.
 
 import (
 	"net/http"
@@ -23,11 +23,10 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
-// newAdminRouter mirrors the admin route group in cmd/server/main.go: login
+// newAdminRouter mirrors the admin route group in cmd/server/routes.go: login
 // routes are CSRF-protected but open, everything else additionally requires
-// AdminAuth. IP allowlisting is intentionally left out — it is covered by
-// internal/middleware/ipallow_test.go and is orthogonal to the session gate
-// under test here.
+// AdminAuth. IP allowlisting is left out; internal/middleware/ipallow_test.go
+// covers it.
 func newAdminRouter(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.Handler {
 	r := chi.NewRouter()
 	r.Use(appMiddleware.InjectSettings(stores.Settings))
@@ -401,10 +400,9 @@ func TestAdminDelete_SendsSummaryForLiveTransferOnly(t *testing.T) {
 	}
 }
 
-// A download through a recipient's own link counts as that
-// recipient and mails the sender. The dashboard links those links anyway (the
-// admin needs them to debug what a recipient sees); the admin's own file page
-// serves files without recording anything.
+// A download through a recipient's own link, also when opened from the
+// dashboard, counts as that recipient and mails the sender; the admin's own
+// file page serves files without recording anything.
 func TestAdminTransferFiles_DownloadIsNotARecipientDownload(t *testing.T) {
 	cfg := newTestConfig()
 	d := newTestDB(t)
@@ -487,8 +485,8 @@ func TestAdminTransferStats_ShowsUploadIP(t *testing.T) {
 	}
 }
 
-// Transfers and requests share one list on the dashboard, newest first: a
-// request must not sink below every transfer.
+// Transfers and requests share one list on the dashboard, newest first,
+// interleaved by creation time.
 func TestAdminDashboard_ListsTransfersAndRequestsByCreation(t *testing.T) {
 	cfg := newTestConfig()
 	d := newTestDB(t)

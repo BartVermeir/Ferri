@@ -250,8 +250,8 @@ func TestAlerts_FailedMailsReportedOnceSkippingAlerts(t *testing.T) {
 	}
 
 	// Next day: the same failure is not reported again, a new one is. The
-	// failure is moved before the alert: in the test both fell in the same
-	// second, which FailedSince reports twice on purpose.
+	// failure is dated before the alert, as FailedSince includes failures in
+	// the alert's own second.
 	exec(t, d, `UPDATE alert_state SET last_sent_at = last_sent_at - 90000 WHERE kind = ?`, alertMailFailed)
 	exec(t, d, `UPDATE mail_queue SET last_attempt_at = last_attempt_at - 90060 WHERE subject = 'Sent: report'`)
 	failedAlerts := func() int { return len(queued(t, d, alertSubjectPrefix+"My Organisation: ")) }

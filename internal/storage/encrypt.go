@@ -23,10 +23,7 @@ const (
 
 // deriveKey derives a 32-byte AES-256 key from the admin token and a per-ciphertext
 // salt using Argon2id (memory-hard KDF). A fresh random salt is generated for every
-// Encrypt call and stored alongside the ciphertext. This means a leaked ciphertext
-// blob cannot be brute-forced with a precomputed table, each guess costs a full
-// Argon2id derivation, and two deployments sharing the same admin token still derive
-// different keys.
+// Encrypt call and stored alongside the ciphertext.
 func deriveKey(adminToken string, salt []byte) []byte {
 	return argon2.IDKey([]byte(adminToken), salt, argonTime, argonMemory, argonThreads, keyLen)
 }

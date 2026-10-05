@@ -28,13 +28,13 @@ type DownloadedFile struct {
 	OriginalName string
 }
 
-// RecordDownload inserts a download event and updates the recipient's counters.
-// Runs in a single transaction. Returns the inserted event ID, and recent =
-// true when the recipient already downloaded something within window before
-// this one. A recipient row belongs to one transfer, so the sender gets at
-// most one download notification per recipient and transfer per window,
-// however many files it holds. Checking inside the same transaction (the pool
-// has one connection) means two simultaneous downloads cannot both mail.
+// RecordDownload inserts a download event and updates the recipient's counters,
+// in a single transaction. Returns the inserted event ID, and recent = true
+// when the recipient already downloaded something within window before this
+// one. A recipient row belongs to one transfer, so the sender gets at most one
+// download notification per recipient and transfer per window, however many
+// files it holds. The check runs in the same transaction (the pool has one
+// connection), so two simultaneous downloads cannot both mail.
 func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua string, window time.Duration) (eventID string, recent bool, err error) {
 	ids, recent, err := s.RecordDownloads(recipientID, []DownloadedFile{{ID: fileID, OriginalName: originalName}}, ip, ua, window)
 	if len(ids) == 1 {
@@ -45,9 +45,8 @@ func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua
 
 // RecordDownloads is RecordDownload for several files at once (a ZIP), in one
 // transaction: recent is decided before any of these events, and every file
-// counts once in download_count. One commit instead of one per file, so a ZIP
-// of thousands of files does not wait for thousands of fsyncs before its
-// first byte, holding the single DB connection all that time.
+// counts once in download_count. One commit for all files, so a ZIP of
+// thousands of files starts without thousands of commits first.
 func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFile, ip, ua string, window time.Duration) (eventIDs []string, recent bool, err error) {
 	if len(files) == 0 {
 		return nil, false, nil
@@ -76,8 +75,7 @@ func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFi
 		}
 		defer stmt.Close()
 		for i, f := range files {
-			// file_id is a nullable FK in the schema — convert empty string to
-			// nil so the DB receives NULL rather than an empty string foreign key.
+			// file_id is a nullable FK: an empty ID is stored as NULL.
 			var fileIDVal interface{}
 			if f.ID != "" {
 				fileIDVal = f.ID
@@ -106,10 +104,9 @@ func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFi
 	return eventIDs, recent, nil
 }
 
-// GetDownloadHistory returns all download events for a transfer,
-// grouped by recipient. Used for the expiry summary mail.
-// Note: uses download_events.original_name (not files.original_name)
-// so filenames are available even after file deletion.
+// RecipientHistory is one recipient's download events for a transfer, as
+// returned by GetHistoryForTransfer for the expiry summary mail. Event names
+// come from download_events.original_name, which outlives the file row.
 type RecipientHistory struct {
 	Email         string
 	DownloadCount int

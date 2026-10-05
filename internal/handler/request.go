@@ -6,7 +6,7 @@ package handler
 //   GET  /request — render upload request creation form (tab pre-selected)
 //   POST /request — create one or more upload requests, show their links
 //
-// Flow (architecture.md §5b step 1):
+// Flow:
 //   Internal user fills the form with title, message, optional password,
 //   expiry, and their own email for notification.
 //   POST /request creates the upload_request row and returns the upload link
@@ -169,8 +169,8 @@ func createRequest(cfg *config.Config, stores *store.Stores, input store.CreateR
 	if err != nil {
 		return requestLinks{}, err
 	}
-	// The view token is generated inside Create; read it back rather than
-	// widen Create's signature for this one caller.
+	// Create generates the view and manage tokens; they are read back from
+	// the stored request.
 	created, err := stores.Requests.GetByUploadToken(uploadToken)
 	if err != nil {
 		return requestLinks{}, fmt.Errorf("read back created request: %w", err)
@@ -190,7 +190,7 @@ func createRequest(cfg *config.Config, stores *store.Stores, input store.CreateR
 
 // renderRequestResult shows the links of each created request: the upload
 // link for the external party, and the requester's own view link and manage
-// link. The upload and view link differ on purpose.
+// link. The upload and view link use different tokens.
 func renderRequestResult(w http.ResponseWriter, links []requestLinks, errMsg string, settings *store.Settings) {
 	title := "Upload link created"
 	if len(links) > 1 {

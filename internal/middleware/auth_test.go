@@ -54,7 +54,7 @@ func TestSessionCookieMalformed(t *testing.T) {
 }
 
 // The session MAC key is derived from the admin token; a cookie
-// signed with the raw token (the old scheme) is not accepted.
+// signed with the raw token is not accepted.
 func TestSessionCookie_KeyIsDerived(t *testing.T) {
 	token := strings.Repeat("t", 32)
 	good := signedCookieValue(token, time.Hour)

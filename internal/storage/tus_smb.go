@@ -66,9 +66,9 @@ func (s *smbTUSStore) NewUpload(ctx context.Context, info tusd.FileInfo) (tusd.U
 		return nil, fmt.Errorf("smb tus: create data file %q: %w", binPath, err)
 	}
 
-	// Write .info file. A new upload keeps its offset in a .offset file (see
-	// resumeOffset); the .info file says so. Created after the .info file: a
-	// marked upload without a .offset file resumes at 0, which is safe.
+	// Write .info file, marked so the upload keeps its offset in a .offset
+	// file (see resumeOffset). The .offset file is created after it; a marked
+	// upload without a .offset file resumes at 0.
 	if info.Storage == nil {
 		info.Storage = map[string]string{}
 	}
@@ -86,7 +86,7 @@ func (s *smbTUSStore) NewUpload(ctx context.Context, info tusd.FileInfo) (tusd.U
 
 // GetUpload retrieves an existing TUS upload from the SMB share. Only a
 // missing .info file is ErrNotFound; any other error is returned as is, so
-// after a network hiccup the browser retries the upload instead of dropping it.
+// after a network error the browser retries the upload.
 func (s *smbTUSStore) GetUpload(ctx context.Context, id string) (tusd.Upload, error) {
 	infoPath := s.smbPath(id + ".info")
 	binPath := s.smbPath(id)
@@ -148,20 +148,16 @@ func (u *smbUpload) GetInfo(ctx context.Context) (tusd.FileInfo, error) {
 const writeBufSize = stripeBlock
 
 // writeDepth is how many blocks are written to the share at once. go-smb2
-// waits for each write's answer before the next one, so one block at a time
-// capped uploads far below what a fast LAN carries. The share also limits
-// each connection (~2000 Mbps written; one connection reached that with 4
-// blocks in flight, 8 added nothing), so the blocks are striped over
-// smbConnections connections, 4 in flight on each. Memory: writeDepth blocks
-// of 1MB per running upload chunk.
+// waits for each write's answer before sending the next one. The blocks are
+// striped over smbConnections connections, 4 in flight on each. Memory:
+// writeDepth blocks of 1MB per running upload chunk.
 const writeDepth = 4 * smbConnections
 
 // storageKeyTracked in the .info file marks an upload whose offset is kept in
 // <id>.offset, updated after every chunk. Its blocks are written in parallel,
-// so after a failed write the data file can be longer than what is complete:
-// its size is no longer a safe offset to resume from. Uploads created before
-// this lack the mark; they are written one block at a time, so for them the
-// size still is.
+// so after a failed write the data file can be longer than what is complete.
+// Uploads without the mark are written one block at a time and resume at the
+// data file's size.
 const storageKeyTracked = "ferri_offset_file"
 
 // resumeOffset is where an upload continues. A tracked upload resumes at its
@@ -186,8 +182,8 @@ func (s *smbTUSStore) offsetPath(id string) string {
 }
 
 // readOffset reads a tracked upload's offset. A missing or unreadable file
-// means 0: resending from the start is always safe, resuming past a gap is
-// not. Other errors (the share is gone) are returned, so tusd retries.
+// means 0, so the client resends from the start. Other errors (the share is
+// gone) are returned, so tusd retries.
 func (s *smbTUSStore) readOffset(id string) (int64, error) {
 	var data []byte
 	err := s.b.withShare(func(sh *smb2.Share) error {
@@ -214,9 +210,9 @@ func (s *smbTUSStore) readOffset(id string) (int64, error) {
 }
 
 // writeOffset records a tracked upload's offset. Fixed width, written over
-// the old value at position 0 and never truncated: the file is never empty or
-// half old, half new. Rewriting the same value is harmless, so a retry after
-// a reconnect is safe.
+// the previous value at position 0 and never truncated, so the file is never
+// empty or half old, half new. A retry after a reconnect rewrites the same
+// value.
 func (u *smbUpload) writeOffset(off int64) error {
 	p := u.store.offsetPath(u.info.ID)
 	return u.store.b.withShare(func(sh *smb2.Share) error {
@@ -233,15 +229,15 @@ func (u *smbUpload) writeOffset(off int64) error {
 }
 
 // WriteChunk writes src to the data file starting at offset and, for a
-// tracked upload, records the new offset. Only opening the file may reconnect
-// and retry: once bytes of src are consumed, a retry cannot get them back. A
-// failure returns the bytes written without a gap; the client then asks for
-// the offset (GetUpload) and resends from there, overwriting whatever a later
-// block may have written.
+// tracked upload, records the new offset. Only opening the file reconnects
+// and retries; bytes consumed from src cannot be read again. A failure
+// returns the bytes written without a gap; the client then asks for the
+// offset (GetUpload) and resends from there, overwriting any later blocks
+// already written.
 func (u *smbUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader) (int64, error) {
 	binPath := u.store.smbPath(u.info.ID)
-	// Not O_APPEND: go-smb2 then opens with append-only access, and the
-	// blocks are written each at its own offset.
+	// No O_APPEND: go-smb2 opens that with append-only access, and each
+	// block is written at its own offset.
 	open := func(sh *smb2.Share) (*smb2.File, error) { return sh.OpenFile(binPath, os.O_WRONLY, 0o644) }
 
 	// A tracked upload is written in parallel over all connections
@@ -273,8 +269,8 @@ func (u *smbUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader)
 	n, err := parallelWrite(w, offset, src, writeBufSize, depth)
 	u.info.Offset = offset + n
 	if tracked && n > 0 {
-		// Not an error for the chunk: the data is written. With the old
-		// offset on record the client resends from there, which is safe.
+		// Not an error for the chunk: the data is written. With the previous
+		// offset on record, the client resends from there.
 		if werr := u.writeOffset(u.info.Offset); werr != nil {
 			slog.Warn("smb tus: record upload offset", "id", u.info.ID, "offset", u.info.Offset, "error", werr)
 		}

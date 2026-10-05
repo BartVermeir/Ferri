@@ -103,7 +103,7 @@ func TestDiag_StoredBlockChangedIsReported(t *testing.T) {
 	if _, err := up.WriteChunk(ctx, 0, bytes.NewReader(data)); err != nil {
 		t.Fatal(err)
 	}
-	// What a faulty write path would leave behind: byte 5 changed on storage.
+	// Byte 5 changed on storage.
 	p := filepath.Join(root, info.ID)
 	stored, _ := os.ReadFile(p)
 	stored[5] = 'X'

@@ -30,7 +30,7 @@ type statsView struct {
 	UploadEnd   time.Time
 	Elapsed     string // start to last chunk, pauses included
 	ElapsedRate string
-	Net         string // time files were uploading, overlap once; "" = not known (files from before v1.9.0)
+	Net         string // time files were uploading, overlap once; "" = not known (a complete file without upload sessions)
 	NetRate     string
 	From        string // upload IPs, comma-separated; "" = not known
 

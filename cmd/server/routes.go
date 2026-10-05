@@ -16,9 +16,8 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
-// newRouter wires every route with its middleware. It lives outside main so
-// router_test.go can test the real wiring: a route that exists only in a
-// handler test's own router is how H3 (a missing POST route) slipped through.
+// newRouter wires every route with its middleware. router_test.go tests this
+// wiring.
 func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, storageMgr *storage.Manager, tusHandler http.Handler, scheduler *jobs.Scheduler) http.Handler {
 	r := chi.NewRouter()
 

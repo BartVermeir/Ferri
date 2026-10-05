@@ -10,14 +10,14 @@ server:
 
 storage:
   path: "/data/storage"                  # Inside the container. Mount your NFS share here.
-  # diag_upload_hashes: true             # Temporary: shows "Check upload integrity" on the send page; ticked uploads are hashed on receipt and after read-back, results on /admin/diag
+  # diag_upload_hashes: true             # Shows "Check upload integrity" on the send page; ticked uploads are hashed on receipt and after read-back, results on /admin/diag
 
 db:
   path: "/data/app.db"                   # SQLite database file inside the container.
 
 ip_allowlist:                            # Only these CIDR ranges can create transfers / requests.
-                                         # NEVER list a trusted proxy here: if trusted_proxies is wrong, every visitor
-                                         # is seen as the proxy's IP and would be let in. The app warns at startup.
+                                         # Never list a trusted proxy here: with a wrong trusted_proxies, every visitor
+                                         # is seen as the proxy's IP. The app warns at startup.
   - "10.0.0.0/8"                         # Adjust to your internal network ranges.
   - "192.168.0.0/16"
 

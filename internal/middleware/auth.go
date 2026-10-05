@@ -17,8 +17,7 @@ import (
 const adminCookieName = "ferri_admin"
 
 // AdminAuth returns middleware that validates the admin session cookie.
-// On failure, redirects to /admin/login rather than returning 403,
-// to avoid leaking the existence of the admin panel to external scanners.
+// On failure, redirects to /admin/login instead of returning 403.
 func AdminAuth(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,10 +87,10 @@ func validateSessionCookie(value, secret string) bool {
 	return hmac.Equal([]byte(expected), []byte(parts[2]))
 }
 
-// computeHMAC signs a session payload with a key derived from the admin token,
-// not the token itself: the login secret is then never used directly as a MAC
-// key, and the same token can safely derive other keys (the password cookies
-// use a different label). Existing sessions end when this changes.
+// computeHMAC signs a session payload with a key derived from the admin token
+// (sessionKey), not the token itself. The password cookies derive their key
+// from the same token with a different label. Changing the token or the label
+// ends existing sessions.
 func computeHMAC(payload, secret string) string {
 	mac := hmac.New(sha256.New, sessionKey(secret))
 	mac.Write([]byte(payload))

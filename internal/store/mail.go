@@ -181,7 +181,7 @@ func (s *MailStore) ListFailed(limit int) ([]MailItem, error) {
 }
 
 // ListRecent returns the newest mails in any status (pending, sent,
-// failed), for the admin mail queue. Sent mails stay until PruneSent.
+// failed), for the admin mail queue. Sent mails stay until Prune.
 func (s *MailStore) ListRecent(limit int) ([]MailItem, error) {
 	rows, err := s.db.Query(`
 		SELECT id, to_address, subject, body_html, body_text,
@@ -199,11 +199,9 @@ func (s *MailStore) ListRecent(limit int) ([]MailItem, error) {
 }
 
 // FailedSince returns mails that failed for good at or after the given time
-// (their last attempt, in whole seconds: "at" so a failure in the same
-// second as the previous alert is reported twice rather than never), oldest
-// first, skipping mails whose subject starts
-// with skipSubjectPrefix: the admin alerts use it to leave out their own
-// failed alert mails, which would otherwise report themselves every day.
+// (their last attempt, in whole seconds), oldest first, skipping mails whose
+// subject starts with skipSubjectPrefix. The admin alerts pass their own
+// subject prefix, so failed alert mails are not reported.
 func (s *MailStore) FailedSince(since time.Time, skipSubjectPrefix string) ([]MailItem, error) {
 	rows, err := s.db.Query(`
 		SELECT id, to_address, subject, body_html, body_text,

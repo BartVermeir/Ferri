@@ -197,8 +197,7 @@ func TestPreUploadCreate_MissingMetadataRejected(t *testing.T) {
 	}
 }
 
-// Once a transfer is live, recipients have been mailed its file list; the TUS
-// endpoint must not let anyone add files to it (403).
+// The TUS endpoint refuses new files for a live transfer (403).
 func TestPreUploadCreate_ActiveTransferRejected(t *testing.T) {
 	h, _, stores := newTestHandler(t)
 	transferID := mustCreatePendingTransfer(t, stores)
@@ -279,8 +278,7 @@ type noStatfsBackend struct{ *storage.LocalBackend }
 
 func (noStatfsBackend) FreeSpace() (uint64, error) { return 0, errors.New("statfs not supported") }
 
-// When the free space is unknown the upload goes ahead: refusing would stop
-// every upload on such a server.
+// When the free space is unknown the upload goes ahead.
 func TestPreUploadCreate_UnknownFreeSpaceAllowed(t *testing.T) {
 	h, cfg, stores := newTestHandler(t)
 	cfg.Limits.MinFreeBytes = 1 << 62
@@ -296,16 +294,15 @@ func TestPreUploadCreate_UnknownFreeSpaceAllowed(t *testing.T) {
 	}
 }
 
-// Through the real TUS endpoint a refusal must reach the browser with its own
-// status and text, not as a 500 that tus-js-client would retry and then show
-// as "unexpected response".
+// Through the real TUS endpoint a refusal reaches the browser with its own
+// status and text, not as a 500.
 func TestTUSPost_RefusalReachesClient(t *testing.T) {
 	h, cfg, stores := newTestHandler(t)
 	cfg.Limits.MinFreeBytes = 1 << 62
 	transferID := mustCreatePendingTransfer(t, stores)
 
 	b64 := func(v string) string { return base64.StdEncoding.EncodeToString([]byte(v)) }
-	// main.go mounts the handler behind http.StripPrefix("/tus").
+	// routes.go mounts the handler behind http.StripPrefix("/tus").
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.Header.Set("Tus-Resumable", "1.0.0")
 	req.Header.Set("Upload-Length", "10")
@@ -348,9 +345,7 @@ func TestPreUploadCreate_StoresCleanFolderPath(t *testing.T) {
 }
 
 // tusd sets read/write deadlines through http.ResponseController on every
-// body read. Through our responseRecorder that must reach the connection:
-// without Unwrap every call failed with "feature not supported", flooding the
-// log and leaving dead upload connections open.
+// body read. Through responseRecorder's Unwrap they reach the connection.
 func TestResponseRecorder_DeadlinesReachConnection(t *testing.T) {
 	var readErr, writeErr error
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

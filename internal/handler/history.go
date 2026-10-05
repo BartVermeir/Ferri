@@ -3,7 +3,7 @@ package handler
 // Transfer history on /admin/history: first what runs now (the "In progress"
 // table of the dashboard), then every download and upload of the transfers
 // and requests that are still live, newest first. Expired or deleted items
-// are gone from it. One line is one action: a person uploading or
+// are not in it. One line is one action: a person uploading or
 // downloading files of one item, all files together.
 
 import (

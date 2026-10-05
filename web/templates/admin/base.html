@@ -66,9 +66,8 @@
     table { width: 100%; border-collapse: collapse; }
     th { text-align: left; padding: 10px; font-size: 12px; font-weight: 500; color: #888; border-bottom: 1px solid #e8e8e4; background: #fafafa; }
     td { padding: 12px 10px; border-bottom: 1px solid #f0f0ec; font-size: 13px; }
-    /* Addresses and file names have no spaces: let them wrap anywhere, but keep
-       the column readable. Without the ::before, the table squeezes such a column
-       down to a few characters (min-width on a cell is ignored by some browsers). */
+    /* Addresses and file names have no spaces: they wrap anywhere. The ::before
+       gives the column a minimum width (some browsers ignore min-width on a cell). */
     td.wrap, td.wrap-wide { overflow-wrap: anywhere; }
     td.wrap::before, td.wrap-wide::before { content: ""; display: block; width: 110px; }
     td.wrap-wide::before { width: 180px; }

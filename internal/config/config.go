@@ -54,7 +54,7 @@ type ServerConfig struct {
 
 	// Location is Timezone parsed into a *time.Location, resolved once in validate().
 	// Used for all date formatting (web templates via handler.InitTemplates, and the
-	// expiry-summary mail) so the timezone is loaded in exactly one place.
+	// expiry-summary mail).
 	Location *time.Location `yaml:"-"`
 }
 
@@ -198,9 +198,8 @@ func Load(path string) (*Config, error) {
 }
 
 // unknownKeys decodes the config a second time with unknown fields refused,
-// and returns yaml's message for each one. A typo like "trusted_proxy:" was
-// silently dropped; this names it. Only a warning, not an error: refusing to
-// start would take Ferri down on a deploy over an old or misspelled key.
+// and returns yaml's message for each one. The caller logs them as a
+// warning; startup continues.
 func unknownKeys(data []byte) []string {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
@@ -218,9 +217,9 @@ func unknownKeys(data []byte) []string {
 }
 
 // ProxiesInAllowlist returns the trusted_proxies entries that overlap an
-// ip_allowlist range. Such an overlap is dangerous: when the proxy forwards a
-// request without X-Real-IP / X-Forwarded-For, the app sees the proxy's own IP,
-// which is then allowlisted — so every external visitor gets in.
+// ip_allowlist range. With such an overlap, a request the proxy forwards
+// without X-Real-IP / X-Forwarded-For carries the proxy's own IP and passes
+// the allowlist.
 func (c *Config) ProxiesInAllowlist() []string {
 	var out []string
 	for _, p := range c.TrustedProxies {
@@ -245,9 +244,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf("admin token is required (set ADMIN_TOKEN env var)")
 	}
 	// The admin token is the root secret: login credential, HMAC key for session
-	// cookies, and (via Argon2id) the key material for the SMB password. Enforce a
-	// minimum length so a weak token can't undermine all three. Generate with
-	// `openssl rand -base64 32`.
+	// cookies, and (via Argon2id) the key material for the SMB password. Minimum
+	// length 32. Generate with `openssl rand -base64 32`.
 	if len(c.Admin.Token) < 32 {
 		return fmt.Errorf("admin token must be at least 32 characters (got %d); generate with `openssl rand -base64 32`", len(c.Admin.Token))
 	}
@@ -257,8 +255,8 @@ func (c *Config) validate() error {
 	// Re-apply defaults for any job interval that ended up as zero.
 	d := Defaults()
 
-	// Resolve the display timezone once. An empty string means the config
-	// omitted it, so fall back to the compiled-in default rather than to UTC.
+	// Resolve the display timezone once. An empty string (key omitted) falls
+	// back to the compiled-in default, not to UTC.
 	if c.Server.Timezone == "" {
 		c.Server.Timezone = d.Server.Timezone
 	}

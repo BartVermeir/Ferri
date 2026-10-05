@@ -2,7 +2,7 @@ package tus
 
 // TUS handler for Ferri.
 //
-// Architecture summary (see architecture.md §4 for full spec):
+// Architecture summary:
 //
 //   PreUploadCreateCallback — fires before any bytes are written.
 //     Reads transfer_id or upload_request_token from TUS metadata.
@@ -86,7 +86,6 @@ func NewHandler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) 
 	// The managerTUSStore delegates to whatever backend is active at call time.
 	tusDataStore := mgr.TUSDataStore()
 	// memorylocker: in-memory locking, prevents concurrent writes to the same upload.
-	// For production with multiple instances, replace with filelocker or redislocker.
 	locker := memorylocker.New()
 
 	composer := tusd.NewStoreComposer()
@@ -98,7 +97,7 @@ func NewHandler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) 
 		StoreComposer:           composer,
 		MaxSize:                 cfg.Limits.MaxUploadBytes,
 		DisableDownload:         true,
-		DisableTermination:      true, // disable DELETE — not needed, cleanup job handles it
+		DisableTermination:      true, // no DELETE; the cleanup job removes uploads
 		NotifyCompleteUploads:   true,
 		NotifyCreatedUploads:    true,
 		RespectForwardedHeaders: true, // trust nginx's X-Forwarded-Proto so upload URLs are https://, not http://
@@ -279,10 +278,9 @@ func (h *Handler) preCreateRequestFile(
 }
 
 // maxTransferFileRows is how many file rows a transfer may get: twice what
-// /send announced. Not the exact count, because tus-js-client re-POSTs when a
-// create response is lost, leaving a dead 'uploading' row behind; an exact cap
-// would then refuse the transfer's last real file and it would never go live.
-// Pre-004 transfers (no expected_files) fall back to max_files_per_transfer.
+// /send announced. tus-js-client re-POSTs when a create response is lost,
+// which leaves a dead 'uploading' row behind. Transfers without
+// expected_files use max_files_per_transfer.
 func maxTransferFileRows(expected sql.NullInt64, maxFilesPerTransfer int) int {
 	n := maxFilesPerTransfer
 	if expected.Valid {
@@ -292,9 +290,8 @@ func maxTransferFileRows(expected sql.NullInt64, maxFilesPerTransfer int) int {
 }
 
 // freeSpaceShort reports whether an upload would leave less than
-// limits.min_free_bytes free on storage: a full share breaks every upload at
-// once. When the backend cannot report its free space the upload goes ahead
-// (logged): failing closed would stop all uploads on such a server.
+// limits.min_free_bytes free on storage. When the backend cannot report its
+// free space the upload goes ahead (logged).
 func (h *Handler) freeSpaceShort(uploadLength int64) bool {
 	free, err := h.mgr.FreeSpace()
 	if err != nil {
@@ -361,9 +358,9 @@ func (h *Handler) onUploadComplete(event tusd.HookEvent) error {
 
 	size := event.Upload.Size
 
-	// Store the tusd upload ID here as well — the handleCreated hook may have
-	// a timing issue. The completion event is guaranteed to fire after the upload
-	// is fully written, so this is the reliable place to store the tusd upload ID.
+	// Store the tusd upload ID here as well: handleCreated runs on its own
+	// goroutine and may not have stored it yet, while the completion event
+	// fires after the upload is fully written.
 	if ctx == metaContextTransfer {
 		if err := h.stores.Transfers.SetTUSUploadID(fileID, tusID); err != nil {
 			slog.Error("tus: set tus_upload_id on complete", "file_id", fileID, "tus_id", tusID, "error", err)
@@ -506,7 +503,7 @@ func (h *Handler) recordPatchActivity(r *http.Request) {
 
 // rejectWith refuses an upload from the pre-create hook. The error must be a
 // tusd.Error: for any other error tusd drops the returned response and answers
-// 500, which tus-js-client then retries and shows as "unexpected response".
+// 500, which tus-js-client retries.
 // The body is msg alone, so upload.js can show it to the user as is.
 func rejectWith(status int, msg string) (tusd.HTTPResponse, tusd.FileInfoChanges, error) {
 	resp := tusd.HTTPResponse{
@@ -534,9 +531,8 @@ func (r *responseRecorder) WriteHeader(status int) {
 }
 
 // Unwrap lets http.ResponseController reach the connection. tusd sets read
-// and write deadlines through it on every body read; without Unwrap each call
-// failed with "feature not supported" (two WARN lines per read) and tusd's
-// NetworkTimeout never closed a dead upload connection.
+// and write deadlines through it on every body read; its NetworkTimeout
+// depends on them.
 func (r *responseRecorder) Unwrap() http.ResponseWriter {
 	return r.ResponseWriter
 }
@@ -610,8 +606,8 @@ func buildConfirmText(m mail.Transfer, recipients []string, senderURL string) st
 	return b.String()
 }
 
-// confirmNote tells the sender which follow-up mails to expect, so they
-// match what is actually switched on in the admin settings.
+// confirmNote tells the sender which follow-up mails to expect, matching
+// what is switched on in the admin settings.
 func confirmNote(settings *store.Settings, hasSenderLink bool) string {
 	var parts []string
 	if hasSenderLink {

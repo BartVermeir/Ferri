@@ -10,8 +10,8 @@
 # main without a tag are never deployed. The checkout ends up on the tag
 # (detached HEAD), not on a branch.
 #
-# VERSION is the single source for both the build tag (ferri:$VERSION) and
-# the tag pinned in docker-compose.yml, so the two cannot drift apart.
+# VERSION is both the build tag (ferri:$VERSION) and the tag pinned in
+# docker-compose.yml.
 #
 # If the new version does not become healthy, the previous one is put back.
 # Exit codes: 0 deployed, 1 error (nothing changed), 3 still busy after
@@ -57,14 +57,12 @@ main() {
 	fi
 
 	echo "==> Deploying $VERSION (running: $PREV)"
-	# --pull: fetch the base images fresh, so security fixes in the runtime image
-	# arrive without a manual docker pull.
+	# --pull: always fetch the latest base images.
 	docker build --pull --build-arg VERSION="$VERSION" -t "ferri:$VERSION" -t ferri:latest .
 
 	wait_for_quiet
 
-	# Only the live compose file is pinned. The repo copy is never touched, so
-	# the checkout stays identical to GitHub.
+	# Only the live compose file is pinned; the repo copy is not changed.
 	echo "==> Pinning $LIVE_COMPOSE to ferri:$VERSION"
 	pin "$VERSION"
 
@@ -94,14 +92,11 @@ pin() {
 	rm -f "$LIVE_COMPOSE.bak"
 }
 
-# A restart breaks off running downloads and uploads. Waiting inside the
-# shutdown is no answer: a stopping app takes no new requests, so the site
-# would be down for as long as the slowest download. So wait here, while the
-# running version keeps serving, until nothing is in flight: no open
-# connection from the reverse proxy to the app at two checks in a row. The
-# restart then takes seconds; browsers retry uploads for about 8.5 minutes and
-# resume loose files. A proxy that keeps idle connections open
-# (upstream keepalive) holds the count up until it closes them.
+# A restart breaks off running downloads and uploads. wait_for_quiet waits,
+# while the running version keeps serving, until no connection from the
+# reverse proxy to the app is open at two checks in a row (30 s apart). A
+# proxy that keeps idle connections open (upstream keepalive) holds the
+# count up until it closes them.
 # WAIT_MAX caps the wait in minutes (default 180), FORCE=1 skips it,
 # APP_ADDR is where the proxy reaches the app (default 127.0.0.1:8080).
 wait_for_quiet() {
@@ -154,7 +149,7 @@ wait_healthy() {
 }
 
 # rollback puts the previous image back. Migrations only add, so the
-# previous version runs on the database the new one may have migrated.
+# previous version runs on a migrated database.
 rollback() {
 	echo "ERROR: ferri:$VERSION did not become healthy. Its last log lines:" >&2
 	docker compose logs --tail=40 app >&2 || true
