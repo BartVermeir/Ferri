@@ -20,6 +20,27 @@
   <p class="stats-empty">No complete files yet.</p>
   {{end}}
 
+  {{if .Integrity}}
+  <h3>Upload integrity</h3>
+  <p class="stats-sub">Per 8 MiB block: hash on receipt and after reading the stored file back.</p>
+  <table class="stats-list">
+    <thead><tr><th>File</th><th>Size</th><th>Blocks</th><th>Not measured</th><th>Differ</th><th>Result</th><th></th></tr></thead>
+    <tbody>
+      {{range .Integrity}}
+      <tr>
+        <td class="wrap-wide">{{.Name}}</td>
+        <td class="num">{{.Size}}</td>
+        <td class="num">{{.Blocks}}</td>
+        <td class="num">{{.NotMeasured}}</td>
+        <td class="num">{{.Differ}}</td>
+        <td>{{if .Identical}}<span class="badge badge-active">stored = received</span>{{else if .Differ}}<span class="badge badge-failed">{{.Differ}} block(s) differ</span>{{else}}<span class="badge badge-expired">{{.State}}</span>{{end}}</td>
+        <td class="num"><a href="/admin/diag/{{.TUSID}}">blocks</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{end}}
+
   <h3>Downloads</h3>
   {{if .Streams}}
   <p class="stats-sub">{{len .Streams}} download(s), {{.Complete}} complete · {{.BytesSent}} sent</p>

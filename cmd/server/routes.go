@@ -83,7 +83,7 @@ func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, stora
 			r.Get("/admin/transfers", handler.AdminTransfers(cfg, stores))
 			r.Get("/admin/transfers/{id}/files", handler.AdminTransferFiles(cfg, stores))
 			r.Get("/admin/transfers/{id}/file/{fileID}", handler.AdminTransferFile(cfg, stores, storageMgr))
-			r.Get("/admin/transfers/{id}/stats", handler.AdminTransferStats(cfg, stores))
+			r.Get("/admin/transfers/{id}/stats", handler.AdminTransferStats(cfg, stores, storageMgr))
 			r.Get("/admin/requests/{id}/stats", handler.AdminRequestStats(cfg, stores))
 			r.Get("/admin/requests/{id}/files", handler.AdminRequestFiles(cfg, stores))
 			r.Get("/admin/requests/{id}/file/{fileID}", handler.AdminRequestFile(cfg, stores, storageMgr))

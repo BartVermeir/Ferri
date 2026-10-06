@@ -5,6 +5,7 @@ package handler
 // mirroring the middleware stack wired in cmd/server/routes.go.
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	tusd "github.com/tus/tusd/v2/pkg/handler"
 
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/jobs"
@@ -38,7 +40,7 @@ func newAdminRouter(cfg *config.Config, stores *store.Stores, mgr *storage.Manag
 		r.Get("/admin", AdminDashboard(cfg, stores))
 		r.Get("/admin/transfers/{id}/files", AdminTransferFiles(cfg, stores))
 		r.Get("/admin/transfers/{id}/file/{fileID}", AdminTransferFile(cfg, stores, mgr))
-		r.Get("/admin/transfers/{id}/stats", AdminTransferStats(cfg, stores))
+		r.Get("/admin/transfers/{id}/stats", AdminTransferStats(cfg, stores, mgr))
 		r.Get("/admin/history", AdminHistory(cfg, stores))
 		r.Get("/admin/requests/{id}/stats", AdminRequestStats(cfg, stores))
 		r.Get("/admin/requests/{id}/files", AdminRequestFiles(cfg, stores))
@@ -482,6 +484,47 @@ func TestAdminTransferStats_ShowsUploadIP(t *testing.T) {
 	r.ServeHTTP(rr, req)
 	if body := rr.Body.String(); rr.Code != http.StatusOK || !strings.Contains(body, "<th>From</th><td>192.0.2.7</td>") {
 		t.Fatalf("stats dialog: status %d, no upload IP:\n%s", rr.Code, body)
+	}
+}
+
+// With diagnostics on, the statistics dialog lists the transfer's files that
+// have an integrity check record, with a link to their blocks.
+func TestAdminTransferStats_ShowsUploadIntegrity(t *testing.T) {
+	cfg := newTestConfig()
+	stores := store.New(newTestDB(t))
+	mgr, root := newTestManager(t)
+	mgr.EnableUploadDiag()
+	r := newAdminRouter(cfg, stores, mgr)
+	_, fileID, _, _ := mustCreateActiveTransfer(t, stores, root, "")
+	f, err := stores.Transfers.GetFileByID(fileID)
+	if err != nil || f == nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	up, err := mgr.TUSDataStore().NewUpload(ctx, tusd.FileInfo{Size: 4, MetaData: tusd.MetaData{
+		"ferri_file_id": fileID, "transfer_id": f.TransferID, "ferri_diag": "1",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, _ := up.GetInfo(ctx)
+	if _, err := up.WriteChunk(ctx, 0, strings.NewReader("da")); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Transfers.SetTUSUploadID(fileID, info.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/transfers/"+f.TransferID+"/stats", nil)
+	req.AddCookie(adminSessionCookie(t, cfg))
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	for _, want := range []string{"Upload integrity", f.OriginalName, "receiving", `href="/admin/diag/` + info.ID + `"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("stats dialog: status %d, no %q:\n%s", rr.Code, want, body)
+		}
 	}
 }
 

@@ -193,7 +193,8 @@ func (m *Manager) Remove(path string) error {
 //
 // Returns the joined errors of the removals that failed; nil means nothing of
 // this upload is left. All deletion code (cleanup, stalled uploads, admin
-// delete) goes through here.
+// delete) goes through here. The upload's integrity check record
+// (diag.go) is dropped too.
 func (m *Manager) RemoveUpload(storagePath, tusUploadID string) error {
 	var paths []string
 	if storagePath != "" {
@@ -209,6 +210,9 @@ func (m *Manager) RemoveUpload(storagePath, tusUploadID string) error {
 		if err := m.Remove(p); err != nil {
 			errs = append(errs, fmt.Errorf("remove %s: %w", p, err))
 		}
+	}
+	if m.diag != nil && tusUploadID != "" {
+		m.diag.forget(tusUploadID)
 	}
 	return errors.Join(errs...)
 }

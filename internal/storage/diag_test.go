@@ -88,7 +88,7 @@ func TestDiag_ReceivedMatchesStored(t *testing.T) {
 		t.Errorf("blocks:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	u := m.DiagUploads()[0]
-	if u.Differ != 0 || u.NotMeasured != 0 || u.State != diagStateVerified || u.FileID != "f1" {
+	if u.Differ != 0 || u.NotMeasured != 0 || u.State != DiagStateVerified || u.FileID != "f1" {
 		t.Errorf("summary = %+v", u)
 	}
 }
@@ -178,5 +178,23 @@ func TestDiag_OffDoesNothing(t *testing.T) {
 	m := NewManager(NewLocalBackend(t.TempDir()))
 	if m.DiagEnabled() || m.DiagUploads() != nil || m.WriteDiagBlocks("x", io.Discard) {
 		t.Fatal("diagnostics should be off")
+	}
+}
+
+// Removing an upload's data drops its integrity record.
+func TestDiag_RemoveUploadForgetsRecord(t *testing.T) {
+	m, _ := diagManager(t)
+	id := upload(t, m, []byte("0123456789"), 10)
+	if _, ok := m.DiagUploadByID(id); !ok {
+		t.Fatal("upload not known before removal")
+	}
+	if err := m.RemoveUpload("", id); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.DiagUploadByID(id); ok {
+		t.Error("record still known after RemoveUpload")
+	}
+	if n := len(m.DiagUploads()); n != 0 {
+		t.Errorf("DiagUploads lists %d uploads, want 0", n)
 	}
 }

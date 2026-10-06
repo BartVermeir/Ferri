@@ -21,17 +21,18 @@ import (
 // whose two hashes differ changed between receiving and storing it. The
 // received hashes, compared with the original file (same block size, same
 // offsets), show whether the client sent the right bytes. Memory only: a
-// restart forgets everything.
+// restart forgets everything; removing the upload's data (RemoveUpload)
+// forgets its record.
 
 // DiagBlockSize divides the upload chunk size (200 MiB, upload.js), so a
 // chunk that starts on a chunk boundary also starts on a block boundary.
 const DiagBlockSize = 8 << 20
 
 const (
-	diagMaxUploads    = 50  // older uploads are forgotten
-	diagVerifyQueue   = 100 // finished uploads waiting to be read back; more are skipped
-	diagReadParallel  = 4   // blocks read back at once
-	diagStateVerified = "verified"
+	diagMaxUploads    = 50         // older uploads are forgotten
+	diagVerifyQueue   = 100        // finished uploads waiting to be read back; more are skipped
+	diagReadParallel  = 4          // blocks read back at once
+	DiagStateVerified = "verified" // read back and compared with what was received
 )
 
 // diagFileIDKey: the upload's file row, set by the TUS pre-create hook.
@@ -278,7 +279,7 @@ func (d *diagRecorder) verifyOne(id string) {
 			diffs = append(diffs, diff{i, r.String(), s.String()})
 		}
 	}
-	u.state = diagStateVerified
+	u.state = DiagStateVerified
 	mismatches := u.mismatches
 	d.mu.Unlock()
 
@@ -386,20 +387,55 @@ func (m *Manager) DiagUploads() []DiagUpload {
 	defer d.mu.Unlock()
 	out := make([]DiagUpload, 0, len(d.order))
 	for i := len(d.order) - 1; i >= 0; i-- {
-		u := d.uploads[d.order[i]]
-		blocks := (u.size + d.blockSize - 1) / d.blockSize
-		notMeasured := 0
-		for b := int64(0); b < blocks; b++ {
-			if b >= int64(len(u.received)) || !u.received[b].ok {
-				notMeasured++
-			}
-		}
-		out = append(out, DiagUpload{
-			ID: u.id, FileID: u.fileID, State: u.state, Size: u.size, StoredSize: u.storedSize,
-			Started: u.started, Blocks: blocks, NotMeasured: notMeasured, Differ: u.mismatches,
-		})
+		out = append(out, d.summary(d.uploads[d.order[i]]))
 	}
 	return out
+}
+
+// DiagUploadByID returns one measured upload; false when it is not known.
+func (m *Manager) DiagUploadByID(id string) (DiagUpload, bool) {
+	d := m.diag
+	if d == nil {
+		return DiagUpload{}, false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	u := d.uploads[id]
+	if u == nil {
+		return DiagUpload{}, false
+	}
+	return d.summary(u), true
+}
+
+// summary: d.mu must be held.
+func (d *diagRecorder) summary(u *diagUpload) DiagUpload {
+	blocks := (u.size + d.blockSize - 1) / d.blockSize
+	notMeasured := 0
+	for b := int64(0); b < blocks; b++ {
+		if b >= int64(len(u.received)) || !u.received[b].ok {
+			notMeasured++
+		}
+	}
+	return DiagUpload{
+		ID: u.id, FileID: u.fileID, State: u.state, Size: u.size, StoredSize: u.storedSize,
+		Started: u.started, Blocks: blocks, NotMeasured: notMeasured, Differ: u.mismatches,
+	}
+}
+
+// forget drops an upload's record.
+func (d *diagRecorder) forget(id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.uploads[id] == nil {
+		return
+	}
+	delete(d.uploads, id)
+	for i, o := range d.order {
+		if o == id {
+			d.order = append(d.order[:i], d.order[i+1:]...)
+			break
+		}
+	}
 }
 
 // WriteDiagBlocks writes one line per block: "<offset> <received> <stored>",

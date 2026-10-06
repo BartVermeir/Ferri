@@ -14,6 +14,7 @@ import (
 
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
+	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
@@ -37,6 +38,20 @@ type statsView struct {
 	Streams   []streamRow
 	Complete  int // streams that reached the end
 	BytesSent string
+
+	Integrity []integrityRow // files of a transfer sent with "Check upload integrity"
+}
+
+// integrityRow is one file's upload integrity check (storage/diag.go).
+type integrityRow struct {
+	Name        string
+	Size        string
+	TUSID       string // /admin/diag/{TUSID} gives the blocks
+	State       string
+	Blocks      int64
+	NotMeasured int
+	Differ      int
+	Identical   bool // verified, every block measured, none differs, stored size equal
 }
 
 type streamRow struct {
@@ -51,7 +66,7 @@ type streamRow struct {
 }
 
 // AdminTransferStats handles GET /admin/transfers/{id}/stats.
-func AdminTransferStats(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
+func AdminTransferStats(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t, err := stores.Transfers.GetByID(chi.URLParam(r, "id"))
 		if err != nil || t == nil {
@@ -68,6 +83,13 @@ func AdminTransferStats(cfg *config.Config, stores *store.Stores) http.HandlerFu
 		}
 		v := buildStatsView(up, streams)
 		v.Kind, v.Title, v.Status, v.CreatedAt, v.ExpiresAt = "transfer", t.Title, t.Status, t.CreatedAt, t.ExpiresAt
+		if mgr.DiagEnabled() {
+			files, err := stores.Transfers.GetFilesByTransferID(t.ID)
+			if err != nil {
+				slog.Error("admin stats: files", "transfer_id", t.ID, "error", err)
+			}
+			v.Integrity = buildIntegrity(mgr, files)
+		}
 		renderPage(w, "admin/stats.html", v)
 	}
 }
@@ -127,6 +149,27 @@ func buildStatsView(up store.UploadStats, streams []store.DownloadStream) statsV
 	}
 	v.BytesSent = mail.FormatSize(sent)
 	return v
+}
+
+// buildIntegrity lists the files that have an integrity check record, in the
+// order of files.
+func buildIntegrity(mgr *storage.Manager, files []store.File) []integrityRow {
+	var rows []integrityRow
+	for _, f := range files {
+		if !f.TUSUploadID.Valid {
+			continue
+		}
+		d, ok := mgr.DiagUploadByID(f.TUSUploadID.String)
+		if !ok {
+			continue
+		}
+		rows = append(rows, integrityRow{
+			Name: f.OriginalName, Size: mail.FormatSize(d.Size), TUSID: d.ID, State: d.State,
+			Blocks: d.Blocks, NotMeasured: d.NotMeasured, Differ: d.Differ,
+			Identical: d.State == storage.DiagStateVerified && d.NotMeasured == 0 && d.Differ == 0 && d.StoredSize == d.Size,
+		})
+	}
+	return rows
 }
 
 // bytesPerSec is 0 under a second: too short to say anything.
