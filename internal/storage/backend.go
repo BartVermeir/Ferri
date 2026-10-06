@@ -402,7 +402,7 @@ func (u *trackedUpload) WriteChunk(ctx context.Context, offset int64, src io.Rea
 	defer release()
 	if d := u.m.diag; d != nil {
 		if info, err := u.Upload.GetInfo(ctx); err == nil && diagWanted(info) {
-			r := d.begin(info.ID, info.MetaData[diagFileIDKey], info.Size, offset, src)
+			r := d.begin(info.ID, info.MetaData, info.Size, offset, src)
 			n, err := u.Upload.WriteChunk(ctx, offset, r)
 			r.done(n, err)
 			return n, err
@@ -422,7 +422,7 @@ func (u *trackedUpload) FinishUpload(ctx context.Context) error {
 	}
 	if d := u.m.diag; d != nil {
 		if info, err := u.Upload.GetInfo(ctx); err == nil && diagWanted(info) {
-			d.finish(info.ID, info.MetaData[diagFileIDKey], info.Size)
+			d.finish(info.ID, info.MetaData, info.Size)
 		}
 	}
 	return nil

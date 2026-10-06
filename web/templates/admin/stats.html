@@ -28,7 +28,7 @@
     <tbody>
       {{range .Integrity}}
       <tr>
-        <td class="wrap-wide">{{.Name}}</td>
+        <td class="wrap-wide">{{.Name}}{{if .Browser}}<br><span class="stats-note">{{.Browser}}</span>{{end}}</td>
         <td class="num">{{.Size}}</td>
         <td class="num">{{.Blocks}}</td>
         <td class="num">{{.NotMeasured}}</td>

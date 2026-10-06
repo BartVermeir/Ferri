@@ -108,12 +108,23 @@ func TestPreUploadCreate_KeepsIntegrityCheck(t *testing.T) {
 		if tick != "" {
 			meta["ferri_diag"] = tick
 		}
-		_, changes, err := h.preUploadCreate(tusd.HookEvent{Upload: tusd.FileInfo{Size: 10, MetaData: meta}})
+		const ua = "Mozilla/5.0 (Macintosh) Test/1.0"
+		_, changes, err := h.preUploadCreate(tusd.HookEvent{
+			Upload:      tusd.FileInfo{Size: 10, MetaData: meta},
+			HTTPRequest: tusd.HTTPRequest{Header: http.Header{"User-Agent": {ua}}},
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got := changes.MetaData["ferri_diag"]; got != tick {
 			t.Errorf("ticked %q: ferri_diag = %q", tick, got)
+		}
+		wantUA := ""
+		if tick != "" {
+			wantUA = ua
+		}
+		if got := changes.MetaData[storage.DiagUserAgentKey]; got != wantUA {
+			t.Errorf("ticked %q: user agent = %q, want %q", tick, got, wantUA)
 		}
 	}
 }

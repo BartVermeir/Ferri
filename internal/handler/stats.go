@@ -45,6 +45,7 @@ type statsView struct {
 // integrityRow is one file's upload integrity check (storage/diag.go).
 type integrityRow struct {
 	Name        string
+	Browser     string // User-Agent that created the upload; "" = not known
 	Size        string
 	TUSID       string // /admin/diag/{TUSID} gives the blocks
 	State       string
@@ -164,7 +165,7 @@ func buildIntegrity(mgr *storage.Manager, files []store.File) []integrityRow {
 			continue
 		}
 		rows = append(rows, integrityRow{
-			Name: f.OriginalName, Size: mail.FormatSize(d.Size), TUSID: d.ID, State: d.State,
+			Name: f.OriginalName, Browser: d.UserAgent, Size: mail.FormatSize(d.Size), TUSID: d.ID, State: d.State,
 			Blocks: d.Blocks, NotMeasured: d.NotMeasured, Differ: d.Differ,
 			Identical: d.State == storage.DiagStateVerified && d.NotMeasured == 0 && d.Differ == 0 && d.StoredSize == d.Size,
 		})

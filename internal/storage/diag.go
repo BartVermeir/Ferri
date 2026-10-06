@@ -38,6 +38,10 @@ const (
 // diagFileIDKey: the upload's file row, set by the TUS pre-create hook.
 const diagFileIDKey = "ferri_file_id"
 
+// DiagUserAgentKey: the User-Agent of the browser that created the upload,
+// set by the TUS pre-create hook on uploads with "Check upload integrity".
+const DiagUserAgentKey = "ferri_user_agent"
+
 // diagWanted: the sender ticked "Check upload integrity". Only for transfers:
 // those are created on the internal network, while /tus itself is public.
 func diagWanted(info tusd.FileInfo) bool {
@@ -58,6 +62,7 @@ func (s diagSum) String() string {
 
 type diagUpload struct {
 	id, fileID string
+	userAgent  string
 	size       int64
 	started    time.Time
 	state      string
@@ -99,7 +104,7 @@ func (d *diagRecorder) run() {
 }
 
 // get returns the upload's record, creating it; d.mu must be held.
-func (d *diagRecorder) get(id, fileID string, size int64) *diagUpload {
+func (d *diagRecorder) get(id string, meta tusd.MetaData, size int64) *diagUpload {
 	u := d.uploads[id]
 	if u == nil {
 		u = &diagUpload{id: id, started: time.Now(), state: "receiving", next: -1}
@@ -110,8 +115,11 @@ func (d *diagRecorder) get(id, fileID string, size int64) *diagUpload {
 			d.order = d.order[1:]
 		}
 	}
-	if fileID != "" {
-		u.fileID = fileID
+	if v := meta[diagFileIDKey]; v != "" {
+		u.fileID = v
+	}
+	if v := meta[DiagUserAgentKey]; v != "" {
+		u.userAgent = v
 	}
 	if size > 0 {
 		u.size = size
@@ -121,10 +129,10 @@ func (d *diagRecorder) get(id, fileID string, size int64) *diagUpload {
 
 // begin wraps one chunk's body. The caller passes the bytes the store wrote
 // to done.
-func (d *diagRecorder) begin(id, fileID string, size, offset int64, src io.Reader) *diagReader {
+func (d *diagRecorder) begin(id string, meta tusd.MetaData, size, offset int64, src io.Reader) *diagReader {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	u := d.get(id, fileID, size)
+	u := d.get(id, meta, size)
 	r := &diagReader{d: d, u: u, src: src, start: offset, pos: offset}
 	switch {
 	case u.block != nil && u.next == offset:
@@ -204,9 +212,9 @@ func (r *diagReader) done(written int64, err error) {
 }
 
 // finish closes the last, short block and queues the read-back.
-func (d *diagRecorder) finish(id, fileID string, size int64) {
+func (d *diagRecorder) finish(id string, meta tusd.MetaData, size int64) {
 	d.mu.Lock()
-	u := d.get(id, fileID, size)
+	u := d.get(id, meta, size)
 	u.size = size
 	if u.block != nil && u.next == size && size%d.blockSize != 0 {
 		i := size / d.blockSize
@@ -359,6 +367,7 @@ func (d *diagRecorder) readBack(id string, size int64) ([]diagSum, int64, error)
 // DiagUpload is one measured upload, as listed on /admin/diag.
 type DiagUpload struct {
 	ID, FileID, State string
+	UserAgent         string // "" = not known
 	Size              int64
 	StoredSize        int64
 	Started           time.Time
@@ -417,7 +426,7 @@ func (d *diagRecorder) summary(u *diagUpload) DiagUpload {
 		}
 	}
 	return DiagUpload{
-		ID: u.id, FileID: u.fileID, State: u.state, Size: u.size, StoredSize: u.storedSize,
+		ID: u.id, FileID: u.fileID, UserAgent: u.userAgent, State: u.state, Size: u.size, StoredSize: u.storedSize,
 		Started: u.started, Blocks: blocks, NotMeasured: notMeasured, Differ: u.mismatches,
 	}
 }

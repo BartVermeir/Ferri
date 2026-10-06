@@ -32,7 +32,7 @@ func diagManager(t *testing.T) (*Manager, string) {
 
 // ticked: the metadata of a transfer upload sent with "Check upload integrity".
 func ticked() tusd.MetaData {
-	return tusd.MetaData{"ferri_file_id": "f1", "transfer_id": "t1", "ferri_diag": "1"}
+	return tusd.MetaData{"ferri_file_id": "f1", "transfer_id": "t1", "ferri_diag": "1", DiagUserAgentKey: "TestBrowser/1.0"}
 }
 
 // upload sends data through the Manager's TUS store in the given chunks.
@@ -88,7 +88,7 @@ func TestDiag_ReceivedMatchesStored(t *testing.T) {
 		t.Errorf("blocks:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	u := m.DiagUploads()[0]
-	if u.Differ != 0 || u.NotMeasured != 0 || u.State != DiagStateVerified || u.FileID != "f1" {
+	if u.Differ != 0 || u.NotMeasured != 0 || u.State != DiagStateVerified || u.FileID != "f1" || u.UserAgent != "TestBrowser/1.0" {
 		t.Errorf("summary = %+v", u)
 	}
 }
@@ -130,14 +130,14 @@ func TestDiag_FailedChunkAndUnalignedResume(t *testing.T) {
 	d := newDiagRecorder(4, nil)
 	data := []byte("0123456789")
 
-	r := d.begin("id", "", 10, 0, bytes.NewReader(data[0:8]))
+	r := d.begin("id", nil, 10, 0, bytes.NewReader(data[0:8]))
 	io.Copy(io.Discard, r) // read 8 bytes (blocks 0 and 1 complete)
 	r.done(5, errors.New("write failed"))
 
-	r = d.begin("id", "", 10, 5, bytes.NewReader(data[5:10]))
+	r = d.begin("id", nil, 10, 5, bytes.NewReader(data[5:10]))
 	io.Copy(io.Discard, r)
 	r.done(5, nil)
-	d.finish("id", "", 10)
+	d.finish("id", nil, 10)
 
 	got := d.uploads["id"].received
 	if len(got) != 3 || !got[0].ok || got[1].ok || !got[2].ok {

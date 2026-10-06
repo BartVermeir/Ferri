@@ -61,6 +61,9 @@ const (
 
 	metaContextTransfer = "transfer"
 	metaContextRequest  = "request"
+
+	// maxUserAgentLen caps the User-Agent kept in an upload's metadata.
+	maxUserAgentLen = 512
 )
 
 // Handler wraps tusd and wires Ferri's token validation and DB callbacks.
@@ -150,7 +153,7 @@ func (h *Handler) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 	size := hook.Upload.Size
 
 	if transferID, ok := meta["transfer_id"]; ok {
-		return h.preCreateTransferFile(transferID, meta, size)
+		return h.preCreateTransferFile(transferID, meta, size, hook.HTTPRequest.Header.Get("User-Agent"))
 	}
 	if reqToken, ok := meta["upload_request_token"]; ok {
 		return h.preCreateRequestFile(reqToken, meta, size)
@@ -164,6 +167,7 @@ func (h *Handler) preCreateTransferFile(
 	transferID string,
 	meta tusd.MetaData,
 	uploadLength int64,
+	userAgent string,
 ) (tusd.HTTPResponse, tusd.FileInfoChanges, error) {
 	valid, err := h.stores.Transfers.ValidateForTUS(transferID)
 	if err != nil {
@@ -221,6 +225,9 @@ func (h *Handler) preCreateTransferFile(
 	// "Check upload integrity" on the send page, read by storage's upload diagnostics.
 	if meta["ferri_diag"] == "1" {
 		changes["ferri_diag"] = "1"
+		if userAgent != "" {
+			changes[storage.DiagUserAgentKey] = truncate(userAgent, maxUserAgentLen)
+		}
 	}
 	return tusd.HTTPResponse{}, tusd.FileInfoChanges{MetaData: changes}, nil
 }
@@ -517,6 +524,14 @@ func rejectWith(status int, msg string) (tusd.HTTPResponse, tusd.FileInfoChanges
 func stringMeta(meta tusd.MetaData, key string) string {
 	v, _ := meta[key]
 	return v
+}
+
+// truncate cuts s to at most n bytes, dropping a split UTF-8 character.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return strings.ToValidUTF8(s[:n], "")
 }
 
 // responseRecorder captures the status code set by tusd for the post-PATCH hook.

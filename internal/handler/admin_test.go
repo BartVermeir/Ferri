@@ -504,6 +504,7 @@ func TestAdminTransferStats_ShowsUploadIntegrity(t *testing.T) {
 	ctx := context.Background()
 	up, err := mgr.TUSDataStore().NewUpload(ctx, tusd.FileInfo{Size: 4, MetaData: tusd.MetaData{
 		"ferri_file_id": fileID, "transfer_id": f.TransferID, "ferri_diag": "1",
+		storage.DiagUserAgentKey: "TestBrowser/1.0",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -521,7 +522,7 @@ func TestAdminTransferStats_ShowsUploadIntegrity(t *testing.T) {
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 	body := rr.Body.String()
-	for _, want := range []string{"Upload integrity", f.OriginalName, "receiving", `href="/admin/diag/` + info.ID + `"`} {
+	for _, want := range []string{"Upload integrity", f.OriginalName, "TestBrowser/1.0", "receiving", `href="/admin/diag/` + info.ID + `"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("stats dialog: status %d, no %q:\n%s", rr.Code, want, body)
 		}
