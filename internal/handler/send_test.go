@@ -210,8 +210,9 @@ func TestSendPage_DefaultExpiry(t *testing.T) {
 	}
 }
 
-// Title, expiry, number of links and password sit under "Additional
-// options"; "Check upload integrity" only shows when upload diagnostics are on.
+// Expiry, password, name and message sit under "Additional options" (on the
+// request panel also the number of links); email and title stay visible.
+// "Check upload integrity" only shows when upload diagnostics are on.
 func TestSendPage_AdditionalOptions(t *testing.T) {
 	stores := newTestStores(t)
 	for _, on := range []bool{false, true} {
@@ -226,18 +227,22 @@ func TestSendPage_AdditionalOptions(t *testing.T) {
 		}
 		send := blocks[1][:strings.Index(blocks[1], "</details>")]
 		request := blocks[2][:strings.Index(blocks[2], "</details>")]
-		for _, want := range []string{`name="title"`, `name="expiry_hours"`, `name="password"`} {
+		for _, want := range []string{`name="expiry_hours"`, `name="password"`, `name="sender_name"`, `name="message"`} {
 			if !strings.Contains(send, want) {
 				t.Errorf("diag %v: send panel lacks %s under Additional options", on, want)
 			}
 		}
-		for _, want := range []string{`name="expiry_hours"`, `name="link_count"`, `name="password"`} {
+		for _, want := range []string{`name="expiry_hours"`, `name="password"`, `name="requester_name"`, `name="message"`, `name="link_count"`} {
 			if !strings.Contains(request, want) {
 				t.Errorf("diag %v: request panel lacks %s under Additional options", on, want)
 			}
 		}
-		if strings.Contains(request, `name="title"`) {
-			t.Errorf("diag %v: request title is under Additional options, want it visible", on)
+		for _, hidden := range []string{send, request} {
+			for _, visible := range []string{`name="title"`, `_email"`, `name="recipients"`} {
+				if strings.Contains(hidden, visible) {
+					t.Errorf("diag %v: %s is under Additional options, want it visible", on, visible)
+				}
+			}
 		}
 		if got := strings.Contains(send, `id="diag-upload"`); got != on {
 			t.Errorf("diag %v: integrity checkbox shown = %v", on, got)

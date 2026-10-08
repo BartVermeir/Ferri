@@ -38,9 +38,6 @@
     .delivery-tab { flex:1; padding:5px 10px; border:none; border-radius:4px; background:transparent; font-size:12px; font-weight:500; cursor:pointer; color:#666; font-family:var(--font); }
     .delivery-tab.active { background:#fff; color:#1a1a1a; box-shadow:0 1px 2px rgba(0,0,0,0.1); }
     textarea.grow { min-height: 0; resize: none; overflow: hidden; }
-    .from-line { margin-top: 12px; font-size: 13px; color: #555; }
-    .from-who { font-weight: 500; color: #1a1a1a; word-break: break-word; }
-    .link-btn { background: none; border: none; padding: 0; font: inherit; color: #555; text-decoration: underline; cursor: pointer; }
     .options-summary { font-weight: 400; color: #888; }
   </style>
 </head>
@@ -69,6 +66,10 @@
             <input type="file" id="folder-input" webkitdirectory multiple hidden>
             <p class="text-muted mt-8" id="file-note" hidden></p>
             <ul class="file-list" id="file-list"></ul>
+            <label>Your email</label>
+            <input type="email" name="sender_email" autocomplete="email" required>
+            <label>Title <span class="text-muted">(optional)</span></label>
+            <input type="text" name="title">
             <div class="delivery-tabs">
               <button class="delivery-tab active" data-delivery="email" type="button">Notify by email</button>
               <button class="delivery-tab" data-delivery="link" type="button">Get a link</button>
@@ -78,21 +79,8 @@
               <label>Recipients <span class="text-muted">(one per line or comma-separated)</span></label>
               <textarea name="recipients" id="recipients" rows="2" required></textarea>
             </div>
-            <label>Message <span class="text-muted">(optional)</span></label>
-            <textarea name="message" rows="1" class="grow"></textarea>
-            <div class="from">
-              <p class="from-line" hidden>From <strong class="from-who"></strong> · <button type="button" class="link-btn from-change">change</button></p>
-              <div class="from-fields">
-                <label>Your name <span class="text-muted">(optional)</span></label>
-                <input type="text" name="sender_name" autocomplete="name">
-                <label>Your email</label>
-                <input type="email" name="sender_email" autocomplete="email" required>
-              </div>
-            </div>
             <details class="more-options">
               <summary>Additional options <span class="options-summary"></span></summary>
-              <label>Title <span class="text-muted">(optional)</span></label>
-              <input type="text" name="title">
               <label>Expires after</label>
               <select name="expiry_hours">
                 {{range .ExpiryOptions}}
@@ -101,6 +89,10 @@
               </select>
               <label>Password <span class="text-muted">(optional)</span></label>
               <input type="password" name="password" autocomplete="new-password">
+              <label>Your name <span class="text-muted">(optional)</span></label>
+              <input type="text" name="sender_name" autocomplete="name">
+              <label>Message <span class="text-muted">(optional)</span></label>
+              <textarea name="message" rows="1" class="grow"></textarea>
               {{if .DiagUpload}}
               <label class="check"><input type="checkbox" id="diag-upload"> Check upload integrity</label>
               <p class="text-muted">Slower. Only when asked to, for troubleshooting.</p>
@@ -121,19 +113,10 @@
         <div class="mode-panel" id="panel-request">
           {{if .Error}}<div class="alert alert-error" style="margin-bottom:16px;">{{.Error}}</div>{{end}}
           <form method="POST" action="/request">
+            <label>Your email</label>
+            <input type="email" name="requester_email" autocomplete="email" required>
             <label>Title</label>
             <input type="text" name="title" required>
-            <label>Message <span class="text-muted">(instructions for the uploader)</span></label>
-            <textarea name="message" rows="3"></textarea>
-            <div class="from">
-              <p class="from-line" hidden>From <strong class="from-who"></strong> · <button type="button" class="link-btn from-change">change</button></p>
-              <div class="from-fields">
-                <label>Your name <span class="text-muted">(optional)</span></label>
-                <input type="text" name="requester_name" autocomplete="name">
-                <label>Your email</label>
-                <input type="email" name="requester_email" autocomplete="email" required>
-              </div>
-            </div>
             <details class="more-options">
               <summary>Additional options <span class="options-summary"></span></summary>
               <label>Link expires after</label>
@@ -143,11 +126,15 @@
                 {{end}}
               </select>
               <p class="text-muted" style="font-size:13px; margin-top:4px;">This is a single timer — it covers both the upload window and the time to download the received files.</p>
+              <label>Password <span class="text-muted">(optional)</span></label>
+              <input type="password" name="password" autocomplete="new-password">
+              <label>Your name <span class="text-muted">(optional)</span></label>
+              <input type="text" name="requester_name" autocomplete="name">
+              <label>Message <span class="text-muted">(instructions for the uploader)</span></label>
+              <textarea name="message" rows="3"></textarea>
               <label>Number of links</label>
               <input type="number" name="link_count" value="1" min="1" max="{{.MaxRequestLinks}}" required>
               <p class="text-muted" style="font-size:13px; margin-top:4px;">One link per person you ask. More than one: each gets the title with #1, #2, … and its own mail when files come in.</p>
-              <label>Password <span class="text-muted">(optional)</span></label>
-              <input type="password" name="password" autocomplete="new-password">
             </details>
             <div class="mt-24">
               <button type="submit" class="btn btn-primary">Create upload link</button>

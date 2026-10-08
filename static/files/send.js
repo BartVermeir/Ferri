@@ -1,6 +1,6 @@
 /**
- * send.js — send.html: mode tabs (send/request), delivery toggle, "From" line,
- * "Additional options" summary and growing message field
+ * send.js — send.html: mode tabs (send/request), delivery toggle, remembered
+ * name and email, "Additional options" summary and growing message field
  */
 
 (function () {
@@ -61,82 +61,42 @@
   });
 })();
 
-// "From" line: name and email are kept in this browser after a submit and
-// shown as one line; "change" shows the fields again.
+// Name and email are kept in this browser after a submit and filled in on
+// both forms next time.
 (function () {
   'use strict';
 
   var KEY = 'ferri.from';
+  var stored = null;
+  try {
+    stored = JSON.parse(window.localStorage.getItem(KEY) || 'null');
+  } catch (e) { /* storage unavailable: the fields start empty */ }
 
-  function load() {
-    try {
-      var v = JSON.parse(window.localStorage.getItem(KEY) || 'null');
-      return v && typeof v.email === 'string' ? v : null;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function save(name, email) {
-    try {
-      window.localStorage.setItem(KEY, JSON.stringify({ name: name, email: email }));
-    } catch (e) { /* storage unavailable: the fields stay visible next time */ }
-  }
-
-  var stored = load();
-
-  document.querySelectorAll('.from').forEach(function (block) {
-    var line = block.querySelector('.from-line');
-    var who = block.querySelector('.from-who');
-    var fields = block.querySelector('.from-fields');
-    var nameInput = block.querySelector('input[autocomplete="name"]');
-    var emailInput = block.querySelector('input[type="email"]');
-    var form = block.closest('form');
-
-    function showFields() {
-      line.hidden = true;
-      fields.hidden = false;
-    }
+  document.querySelectorAll('.mode-panel form').forEach(function (form) {
+    var nameInput = form.querySelector('input[autocomplete="name"]');
+    var emailInput = form.querySelector('input[autocomplete="email"]');
+    if (!nameInput || !emailInput) return;
 
     // defaultValue keeps the values after form.reset().
-    if (stored && stored.email) {
-      nameInput.defaultValue = nameInput.value = stored.name || '';
+    if (stored && typeof stored.email === 'string') {
       emailInput.defaultValue = emailInput.value = stored.email;
-      if (emailInput.checkValidity()) {
-        who.textContent = stored.name ? stored.name + ' <' + stored.email + '>' : stored.email;
-        line.hidden = false;
-        fields.hidden = true;
-      }
+      nameInput.defaultValue = nameInput.value = typeof stored.name === 'string' ? stored.name : '';
     }
-
-    block.querySelector('.from-change').addEventListener('click', function () {
-      showFields();
-      emailInput.focus();
-    });
 
     // Fires only when the browser's own checks pass.
     form.addEventListener('submit', function () {
       nameInput.defaultValue = nameInput.value;
       emailInput.defaultValue = emailInput.value;
-      save(nameInput.value.trim(), emailInput.value.trim());
+      try {
+        window.localStorage.setItem(KEY, JSON.stringify({ name: nameInput.value.trim(), email: emailInput.value.trim() }));
+      } catch (e) { /* storage unavailable */ }
     });
-  });
-})();
 
-// Hidden fields that fail the browser's checks are shown, so the browser can
-// point at them.
-(function () {
-  'use strict';
-
-  document.querySelectorAll('.mode-panel form').forEach(function (form) {
+    // A field in a closed "Additional options" that fails the browser's
+    // checks opens the block, so the browser can point at it.
     form.addEventListener('invalid', function (e) {
       var details = e.target.closest('details');
       if (details) details.open = true;
-      var fields = e.target.closest('.from-fields');
-      if (fields && fields.hidden) {
-        fields.hidden = false;
-        fields.parentNode.querySelector('.from-line').hidden = true;
-      }
     }, true);
   });
 })();
@@ -185,6 +145,6 @@
       ta.style.height = (ta.scrollHeight + ta.offsetHeight - ta.clientHeight) + 'px';
     }
     ta.addEventListener('input', fit);
-    ta.form.addEventListener('reset', function () { setTimeout(fit, 0); });
+    ta.form.addEventListener('reset', function () { ta.style.height = ''; });
   });
 })();
