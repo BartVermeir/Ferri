@@ -210,8 +210,8 @@ func TestSendPage_DefaultExpiry(t *testing.T) {
 	}
 }
 
-// The password sits under "Additional options" on both panels; "Check upload
-// integrity" only shows when upload diagnostics are on.
+// Title, expiry, number of links and password sit under "Additional
+// options"; "Check upload integrity" only shows when upload diagnostics are on.
 func TestSendPage_AdditionalOptions(t *testing.T) {
 	stores := newTestStores(t)
 	for _, on := range []bool{false, true} {
@@ -220,10 +220,26 @@ func TestSendPage_AdditionalOptions(t *testing.T) {
 		rr := httptest.NewRecorder()
 		SendPage(cfg, stores).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
 		body := rr.Body.String()
-		if n := strings.Count(body, "<summary>Additional options</summary>\n              <label>Password"); n != 2 {
-			t.Errorf("diag %v: password under Additional options %d times, want 2", on, n)
+		blocks := strings.Split(body, `<details class="more-options">`)
+		if len(blocks) != 3 {
+			t.Fatalf("diag %v: %d Additional options blocks, want 2", on, len(blocks)-1)
 		}
-		if got := strings.Contains(body, `id="diag-upload"`); got != on {
+		send := blocks[1][:strings.Index(blocks[1], "</details>")]
+		request := blocks[2][:strings.Index(blocks[2], "</details>")]
+		for _, want := range []string{`name="title"`, `name="expiry_hours"`, `name="password"`} {
+			if !strings.Contains(send, want) {
+				t.Errorf("diag %v: send panel lacks %s under Additional options", on, want)
+			}
+		}
+		for _, want := range []string{`name="expiry_hours"`, `name="link_count"`, `name="password"`} {
+			if !strings.Contains(request, want) {
+				t.Errorf("diag %v: request panel lacks %s under Additional options", on, want)
+			}
+		}
+		if strings.Contains(request, `name="title"`) {
+			t.Errorf("diag %v: request title is under Additional options, want it visible", on)
+		}
+		if got := strings.Contains(send, `id="diag-upload"`); got != on {
 			t.Errorf("diag %v: integrity checkbox shown = %v", on, got)
 		}
 	}
