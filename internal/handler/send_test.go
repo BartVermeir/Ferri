@@ -191,6 +191,25 @@ func TestSendPage_CarriesLimits(t *testing.T) {
 	}
 }
 
+// Both panels preselect "1 week"; the other options stay available.
+func TestSendPage_DefaultExpiry(t *testing.T) {
+	stores := newTestStores(t)
+	rr := httptest.NewRecorder()
+	SendPage(newTestConfig(), stores).ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := rr.Body.String()
+	if n := strings.Count(body, `<option value="168" selected>1 week</option>`); n != 2 {
+		t.Errorf("1 week selected %d times, want 2", n)
+	}
+	if n := strings.Count(body, " selected>"); n != 2 {
+		t.Errorf("%d selected options, want 2", n)
+	}
+	for _, want := range []string{`<option value="24">1 day</option>`, `<option value="72">3 days</option>`} {
+		if strings.Count(body, want) != 2 {
+			t.Errorf("send page lacks %s on both panels", want)
+		}
+	}
+}
+
 // The password sits under "Additional options" on both panels; "Check upload
 // integrity" only shows when upload diagnostics are on.
 func TestSendPage_AdditionalOptions(t *testing.T) {

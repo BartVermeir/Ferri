@@ -44,6 +44,9 @@ const (
 	maxNameLen    = 200
 	// maxRequestLinks: one POST /request creates at most this many requests.
 	maxRequestLinks = 50
+	// defaultExpiryHours is the expiry option selected on the send and request
+	// forms; without a matching option the browser selects the first one.
+	defaultExpiryHours = 168
 	// maxFormBytes caps a /request body, maxSendBytes a /send body. /send
 	// carries the file list: up to max_files_per_transfer (5000) paths in
 	// folders, a few hundred bytes each at most. Without a cap, a multipart
@@ -70,6 +73,8 @@ type homePageData struct {
 	MaxRequestLinks int
 	// DiagUpload shows "Check upload integrity" (storage.diag_upload_hashes).
 	DiagUpload bool
+	// DefaultExpiryHours is the preselected expiry option.
+	DefaultExpiryHours int
 }
 
 // renderHomePage renders the combined send/request page (send.html).
@@ -82,15 +87,16 @@ func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.S
 		pageTitle = "Send files"
 	}
 	renderPage(w, "send.html", homePageData{
-		baseData:        baseData{PageTitle: pageTitle, Settings: settings},
-		ExpiryOptions:   cfg.ExpiryOptions,
-		WelcomeMessage:  settings.WelcomeMessage,
-		Mode:            mode,
-		Error:           errMsg,
-		MaxFiles:        cfg.Limits.MaxFilesPerTransfer,
-		MaxUploadBytes:  cfg.Limits.MaxUploadBytes,
-		MaxRequestLinks: maxRequestLinks,
-		DiagUpload:      cfg.Storage.DiagUploadHashes,
+		baseData:           baseData{PageTitle: pageTitle, Settings: settings},
+		ExpiryOptions:      cfg.ExpiryOptions,
+		WelcomeMessage:     settings.WelcomeMessage,
+		Mode:               mode,
+		Error:              errMsg,
+		MaxFiles:           cfg.Limits.MaxFilesPerTransfer,
+		MaxUploadBytes:     cfg.Limits.MaxUploadBytes,
+		MaxRequestLinks:    maxRequestLinks,
+		DiagUpload:         cfg.Storage.DiagUploadHashes,
+		DefaultExpiryHours: defaultExpiryHours,
 	})
 }
 

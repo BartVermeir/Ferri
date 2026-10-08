@@ -84,7 +84,7 @@
             <label>Expires after</label>
             <select name="expiry_hours">
               {{range .ExpiryOptions}}
-              <option value="{{.Hours}}">{{.Label}}</option>
+              <option value="{{.Hours}}"{{if eq .Hours $.DefaultExpiryHours}} selected{{end}}>{{.Label}}</option>
               {{end}}
             </select>
             <details class="more-options">
@@ -122,7 +122,7 @@
             <label>Link expires after</label>
             <select name="expiry_hours">
               {{range .ExpiryOptions}}
-              <option value="{{.Hours}}">{{.Label}}</option>
+              <option value="{{.Hours}}"{{if eq .Hours $.DefaultExpiryHours}} selected{{end}}>{{.Label}}</option>
               {{end}}
             </select>
             <p class="text-muted" style="font-size:13px; margin-top:4px;">This is a single timer — it covers both the upload window and the time to download the received files.</p>
