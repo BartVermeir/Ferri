@@ -24,14 +24,17 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/BartVermeir/Ferri/internal/config"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
@@ -237,6 +240,10 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			})
 		}
 
+		if title == "" {
+			title = defaultTitle(files)
+		}
+
 		// ── Password hashing ──────────────────────────────────────────────────
 
 		var passwordHash string
@@ -338,6 +345,34 @@ func parseAnnouncedFiles(r *http.Request) ([]announcedFile, error) {
 		list = append(list, announcedFile{Name: name, Size: size})
 	}
 	return list, nil
+}
+
+// defaultTitle names a transfer whose sender left the title empty: the first
+// file without its extension, or the folder it sits in, plus "+ N more" for
+// the other files and folders at the top of the selection
+// ("Series + 2 more").
+func defaultTitle(files []store.CreateFileInput) string {
+	var first string
+	seen := map[string]bool{}
+	for i, f := range files {
+		top, _, inFolder := strings.Cut(relpath.Clean(f.OriginalName), "/")
+		seen[top] = true
+		if i == 0 {
+			first = top
+			if stem := strings.TrimSuffix(top, path.Ext(top)); !inFolder && stem != "" {
+				first = stem
+			}
+		}
+	}
+	suffix := ""
+	if len(seen) > 1 {
+		suffix = fmt.Sprintf(" + %d more", len(seen)-1)
+	}
+	first = first[:min(len(first), maxTitleLen-len(suffix))]
+	for !utf8.ValidString(first) {
+		first = first[:len(first)-1]
+	}
+	return first + suffix
 }
 
 // isValidEmail is a minimal email validator. It checks for the presence of

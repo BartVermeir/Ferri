@@ -386,3 +386,53 @@ func TestRequestCreate_MultipleLinks(t *testing.T) {
 		}
 	}
 }
+
+// An empty title becomes the first file without its extension, or its
+// folder, plus the number of other files and folders at the top.
+func TestDefaultTitle(t *testing.T) {
+	files := func(names ...string) []store.CreateFileInput {
+		var list []store.CreateFileInput
+		for _, n := range names {
+			list = append(list, store.CreateFileInput{OriginalName: n})
+		}
+		return list
+	}
+	long := strings.Repeat("é", 150) + ".mov"
+	for _, tc := range []struct {
+		files []store.CreateFileInput
+		want  string
+	}{
+		{files("clip.final.mov"), "clip.final"},
+		{files(".env"), ".env"},
+		{files("a.jpg", "a.mov", "b.jpg"), "a + 2 more"},
+		{files("Series/day1/a.jpg", "Series/day2/b.jpg"), "Series"},
+		{files("Series/a.jpg", "Series/b.jpg", "notes.txt", "Other/c.jpg"), "Series + 2 more"},
+		{files(long, "b.mov"), strings.Repeat("é", 95) + " + 1 more"},
+	} {
+		if got := defaultTitle(tc.files); got != tc.want {
+			t.Errorf("defaultTitle(%v) = %q, want %q", tc.files[0].OriginalName, got, tc.want)
+		}
+		if got := defaultTitle(tc.files); len(got) > maxTitleLen {
+			t.Errorf("defaultTitle(%v) is %d bytes", tc.files[0].OriginalName, len(got))
+		}
+	}
+}
+
+// POST /send without a title stores the default title.
+func TestSendCreate_EmptyTitleGetsFileName(t *testing.T) {
+	d := newTestDB(t)
+	stores := store.New(d)
+	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {
+		w.WriteField("files", `[{"name":"interview.mov","size":1},{"name":"broll.mov","size":2}]`)
+	})
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, error = %q", code, msg)
+	}
+	var title string
+	if err := d.QueryRow(`SELECT title FROM transfers`).Scan(&title); err != nil {
+		t.Fatal(err)
+	}
+	if title != "interview + 1 more" {
+		t.Fatalf("title = %q", title)
+	}
+}
