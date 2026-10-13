@@ -66,6 +66,10 @@ func main() {
 		slog.Warn("trusted_proxies overlap ip_allowlist: a request forwarded without X-Real-IP would be treated as internal — remove the proxy IP from ip_allowlist",
 			"proxies", overlap)
 	}
+	if cfg.RemoteLoginEnabled() {
+		slog.Info("remote login on: addresses on these domains can sign in from outside ip_allowlist to send and request",
+			"domains", cfg.RemoteLogin.Domains, "session_hours", cfg.RemoteLogin.SessionHours)
+	}
 
 	// ── Database ───────────────────────────────────────────────────────────
 	database, err := db.Open(cfg.DB.Path)

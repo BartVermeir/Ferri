@@ -2,7 +2,7 @@ package handler
 
 // Request handler — internal user side.
 //
-// Routes (IP-restricted — internal network only):
+// Routes (internal network, or signed in with remote_login):
 //   GET  /request — render upload request creation form (tab pre-selected)
 //   POST /request — create one or more upload requests, show their links
 //
@@ -34,8 +34,7 @@ import (
 // Renders the combined send/request page with the request tab pre-selected.
 func RequestPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		settings := appMiddleware.GetSettings(r)
-		renderHomePage(w, cfg, settings, "request", "")
+		renderHomePage(w, r, cfg, "request", "")
 	}
 }
 
@@ -50,7 +49,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 		if err := r.ParseForm(); err != nil {
-			renderHomePage(w, cfg, settings, "request", "Invalid form data.")
+			renderHomePage(w, r, cfg, "request", "Invalid form data.")
 			return
 		}
 
@@ -62,27 +61,30 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		message := strings.TrimSpace(r.FormValue("message"))
 		password := r.FormValue("password")
 		expiryStr := r.FormValue("expiry_hours")
+		if email := appMiddleware.RemoteEmail(r); email != "" {
+			requesterEmail = email
+		}
 
 		if len(requesterName) > maxNameLen {
-			renderHomePage(w, cfg, settings, "request", "Your name is too long.")
+			renderHomePage(w, r, cfg, "request", "Your name is too long.")
 			return
 		}
 		if !isValidEmail(requesterEmail) {
-			renderHomePage(w, cfg, settings, "request", "Valid email address is required.")
+			renderHomePage(w, r, cfg, "request", "Valid email address is required.")
 			return
 		}
 		if len(title) > maxTitleLen {
-			renderHomePage(w, cfg, settings, "request", "Title is too long.")
+			renderHomePage(w, r, cfg, "request", "Title is too long.")
 			return
 		}
 		if len(message) > maxMessageLen {
-			renderHomePage(w, cfg, settings, "request", "Message is too long.")
+			renderHomePage(w, r, cfg, "request", "Message is too long.")
 			return
 		}
 
 		expiryHours, err := strconv.Atoi(expiryStr)
 		if err != nil || !isValidExpiryOption(expiryHours, cfg.ExpiryOptions) {
-			renderHomePage(w, cfg, settings, "request", "Invalid expiry option.")
+			renderHomePage(w, r, cfg, "request", "Invalid expiry option.")
 			return
 		}
 
@@ -91,7 +93,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		if v := strings.TrimSpace(r.FormValue("link_count")); v != "" {
 			count, err = strconv.Atoi(v)
 			if err != nil || count < 1 || count > maxRequestLinks {
-				renderHomePage(w, cfg, settings, "request", fmt.Sprintf("Number of links must be between 1 and %d.", maxRequestLinks))
+				renderHomePage(w, r, cfg, "request", fmt.Sprintf("Number of links must be between 1 and %d.", maxRequestLinks))
 				return
 			}
 		}
@@ -103,7 +105,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 			if err != nil {
 				slog.Error("request: bcrypt hash", "error", err)
-				renderHomePage(w, cfg, settings, "request", "Internal server error.")
+				renderHomePage(w, r, cfg, "request", "Internal server error.")
 				return
 			}
 			passwordHash = string(hash)
@@ -136,7 +138,7 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			links = append(links, l)
 		}
 		if len(links) == 0 {
-			renderHomePage(w, cfg, settings, "request", "Internal server error.")
+			renderHomePage(w, r, cfg, "request", "Internal server error.")
 			return
 		}
 

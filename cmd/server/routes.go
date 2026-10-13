@@ -53,15 +53,31 @@ func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, stora
 	// TUS: use http.StripPrefix so tusd sees the path without /tus prefix
 	r.Mount("/tus", http.StripPrefix("/tus", tusHandler))
 
-	// IP-restricted routes (internal network only)
-	forbidden := handler.Forbidden()
+	// Sign-in from outside the internal network (remote_login); 404 while off.
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies, forbidden))
+		r.Use(middleware.CSRFProtect(cfg.Server.BaseURL))
+		r.With(authLimiter.Middleware).Post("/login", handler.LoginRequest(cfg, stores, scheduler))
+		r.Get("/login/{token}", handler.LoginPage(cfg, stores))
+		r.With(authLimiter.Middleware).Post("/login/{token}", handler.LoginConfirm(cfg, stores))
+		r.Post("/logout", handler.Logout(cfg))
+	})
+
+	forbidden := handler.Forbidden(cfg)
+
+	// Send and request: internal network, or signed in.
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.IPAllowOrRemote(cfg, forbidden))
 		r.Use(middleware.CSRFProtect(cfg.Server.BaseURL))
 		r.Get("/", handler.SendPage(cfg, stores))
 		r.Post("/send", handler.SendCreate(cfg, stores))
 		r.Get("/request", handler.RequestPage(cfg, stores))
 		r.Post("/request", handler.RequestCreate(cfg, stores))
+	})
+
+	// IP-restricted routes (internal network only)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.IPAllow(cfg.IPAllowlist, cfg.TrustedProxies, forbidden))
+		r.Use(middleware.CSRFProtect(cfg.Server.BaseURL))
 		// Manage links: the token alone opens them, so internal only.
 		r.Get("/manage/{token}", handler.ManagePage(cfg, stores))
 		r.Post("/manage/{token}/extend", handler.ManageExtend(cfg, stores))

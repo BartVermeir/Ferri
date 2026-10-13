@@ -160,3 +160,45 @@ func TestExampleConfigHasNoUnknownKeys(t *testing.T) {
 		t.Fatalf("config.example.yaml has keys Ferri does not know: %q", keys)
 	}
 }
+
+func TestValidateRemoteLoginDomains(t *testing.T) {
+	c := validConfig()
+	c.RemoteLogin.Domains = []string{" @Example.COM "}
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RemoteLogin.Domains[0]; got != "example.com" {
+		t.Fatalf("domain = %q, want example.com", got)
+	}
+	if !c.RemoteLoginEnabled() || c.RemoteSessionTTL().Hours() != 24 {
+		t.Fatalf("enabled = %v, ttl = %v", c.RemoteLoginEnabled(), c.RemoteSessionTTL())
+	}
+	for _, bad := range []string{"", "localhost", "a@example.com", "example.com,example.org"} {
+		c := validConfig()
+		c.RemoteLogin.Domains = []string{bad}
+		if err := c.validate(); err == nil || !strings.Contains(err.Error(), "remote_login.domains") {
+			t.Errorf("domain %q: error = %v", bad, err)
+		}
+	}
+}
+
+func TestRemoteLoginAllows(t *testing.T) {
+	c := validConfig()
+	if c.RemoteLoginEnabled() {
+		t.Fatal("remote login on without domains")
+	}
+	c.RemoteLogin.Domains = []string{"example.com"}
+	for email, want := range map[string]bool{
+		"alice@example.com":          true,
+		"Alice@EXAMPLE.com":          true,
+		"alice@mail.example.com":     false,
+		"alice@example.com.evil.net": false,
+		"alice@notexample.com":       false,
+		"example.com":                false,
+		"@example.com":               false,
+	} {
+		if got := c.RemoteLoginAllows(email); got != want {
+			t.Errorf("RemoteLoginAllows(%q) = %v, want %v", email, got, want)
+		}
+	}
+}

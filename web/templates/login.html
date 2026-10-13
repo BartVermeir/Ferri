@@ -1,0 +1,53 @@
+{{define "login.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
+  {{template "base-css" .}}
+</head>
+<body>
+  {{template "base-header" .}}
+  <main>
+    <div class="page-wrap">
+      <div class="card">
+        {{if eq .State "sent"}}
+        <h1>Check your mail</h1>
+        <p class="text-muted mt-8">If <strong>{{.Email}}</strong> can sign in, a sign-in link is on its way. It works once, within {{.Minutes}} minutes.</p>
+        <p class="text-muted mt-8">Nothing after a few minutes? Look in your spam folder, or ask a new link from the start page.</p>
+        {{else if eq .State "confirm"}}
+        <h1>Sign in</h1>
+        <p class="text-muted mt-8">Sign in as <strong>{{.Email}}</strong> to send and request files from outside the office.</p>
+        <form method="POST">
+          <div class="mt-24">
+            <button type="submit" class="btn btn-primary">Sign in</button>
+          </div>
+        </form>
+        {{else}}
+        {{if eq .State "invalid"}}
+        <h1>This link no longer works</h1>
+        <p class="text-muted mt-8">A sign-in link works once, within {{.Minutes}} minutes. Ask a new one below.</p>
+        {{else}}
+        <h1>Sign in</h1>
+        {{end}}
+        {{if .Error}}<div class="alert alert-error mt-16">{{.Error}}</div>{{end}}
+        {{template "login-form" .}}
+        {{end}}
+      </div>
+    </div>
+  </main>
+
+  {{template "primary-text-script" .}}
+</body>
+</html>{{end}}
+
+{{define "login-form"}}
+<form method="POST" action="/login">
+  <label>Your work email</label>
+  <input type="email" name="email" value="{{.Email}}" autocomplete="email" required>
+  <div class="mt-24">
+    <button type="submit" class="btn btn-primary">Email me a sign-in link</button>
+  </div>
+</form>
+{{end}}

@@ -13,7 +13,7 @@ import (
 // client's IP back.
 func TestForbiddenPage(t *testing.T) {
 	stores := newTestStores(t)
-	h := appMiddleware.InjectSettings(stores.Settings)(Forbidden())
+	h := appMiddleware.InjectSettings(stores.Settings)(Forbidden(newTestConfig()))
 
 	r := httptest.NewRequest("GET", "/admin/login", nil)
 	r.RemoteAddr = "203.0.113.9:5555"

@@ -2,7 +2,7 @@ package handler
 
 // Send handler for Ferri.
 //
-// Routes (IP-restricted — internal network only):
+// Routes (internal network, or signed in with remote_login):
 //   GET  /        — render send form
 //   POST /send    — create transfer, return JSON {transfer_id}
 //
@@ -78,10 +78,15 @@ type homePageData struct {
 	DiagUpload bool
 	// DefaultExpiryHours is the preselected expiry option.
 	DefaultExpiryHours int
+	// RemoteEmail is the signed-in address of a colleague outside the
+	// internal network (remote_login), "" otherwise. It is the sender's
+	// address on both forms.
+	RemoteEmail string
 }
 
 // renderHomePage renders the combined send/request page (send.html).
-func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.Settings, mode, errMsg string) {
+func renderHomePage(w http.ResponseWriter, r *http.Request, cfg *config.Config, mode, errMsg string) {
+	settings := appMiddleware.GetSettings(r)
 	if mode != "request" {
 		mode = "send"
 	}
@@ -100,6 +105,7 @@ func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.S
 		MaxRequestLinks:    maxRequestLinks,
 		DiagUpload:         cfg.Storage.DiagUploadHashes,
 		DefaultExpiryHours: defaultExpiryHours,
+		RemoteEmail:        appMiddleware.RemoteEmail(r),
 	})
 }
 
@@ -107,9 +113,8 @@ func renderHomePage(w http.ResponseWriter, cfg *config.Config, settings *store.S
 // Renders the combined send/request page. ?mode=request pre-selects the request tab.
 func SendPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		settings := appMiddleware.GetSettings(r)
 		mode := r.URL.Query().Get("mode")
-		renderHomePage(w, cfg, settings, mode, "")
+		renderHomePage(w, r, cfg, mode, "")
 	}
 }
 
@@ -147,6 +152,9 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		expiryStr := r.FormValue("expiry_hours")
 		recipientsRaw := r.FormValue("recipients") // comma or newline separated
 		linkOnly := r.FormValue("link_only") == "1"
+		if email := appMiddleware.RemoteEmail(r); email != "" {
+			senderEmail = email
+		}
 
 		if len(senderName) > maxNameLen {
 			jsonError(w, fmt.Sprintf("Name is too long (max %d characters)", maxNameLen), http.StatusBadRequest)

@@ -13,6 +13,7 @@ type Stores struct {
 	Files     *FilesStore
 	Alerts    *AlertStore
 	Stats     *StatsStore
+	Logins    *LoginStore
 }
 
 // New creates a Stores from a single shared *sql.DB.
@@ -26,5 +27,6 @@ func New(db *sql.DB) *Stores {
 		Files:     &FilesStore{db: db},
 		Alerts:    &AlertStore{db: db},
 		Stats:     &StatsStore{db: db},
+		Logins:    &LoginStore{db: db},
 	}
 }

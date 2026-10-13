@@ -77,9 +77,10 @@
     var emailInput = form.querySelector('input[autocomplete="email"]');
     if (!nameInput || !emailInput) return;
 
-    // defaultValue keeps the values after form.reset().
+    // defaultValue keeps the values after form.reset(). A read-only email
+    // field holds the signed-in address and keeps it.
     if (stored && typeof stored.email === 'string') {
-      emailInput.defaultValue = emailInput.value = stored.email;
+      if (!emailInput.readOnly) emailInput.defaultValue = emailInput.value = stored.email;
       nameInput.defaultValue = nameInput.value = typeof stored.name === 'string' ? stored.name : '';
     }
 

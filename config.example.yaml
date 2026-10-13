@@ -21,6 +21,11 @@ ip_allowlist:                            # Only these CIDR ranges can create tra
   - "10.0.0.0/8"                         # Adjust to your internal network ranges.
   - "192.168.0.0/16"
 
+remote_login:                            # Colleagues outside ip_allowlist sign in with a link mailed to their work address.
+  domains: []                            # Mail domains that may sign in, e.g. ["example.com"]. Empty = off.
+                                         # Signed in, they can send and request files; manage links and /admin stay internal.
+  session_hours: 24                      # How long a sign-in lasts. A new ADMIN_TOKEN ends every sign-in.
+
 smtp:
   host: "smtp.example.com"              # SMTP relay hostname.
   port: 587                              # 587 = STARTTLS, 465 = TLS, 25 = plain

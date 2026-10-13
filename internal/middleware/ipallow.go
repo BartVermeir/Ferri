@@ -22,25 +22,30 @@ var untrustedForwardWarn sync.Once
 func IPAllow(allowlist []*net.IPNet, trustedProxies []*net.IPNet, denied http.Handler) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := ClientIP(r, trustedProxies)
-			parsed := net.ParseIP(ip)
-			if parsed == nil {
-				slog.Warn("ip allowlist: could not parse client IP", "raw", ip)
-				denied.ServeHTTP(w, r)
+			ip, ok := allowedIP(r, allowlist, trustedProxies)
+			if ok {
+				next.ServeHTTP(w, r)
 				return
 			}
-
-			for _, network := range allowlist {
-				if network.Contains(parsed) {
-					next.ServeHTTP(w, r)
-					return
-				}
-			}
-
-			slog.Warn("ip allowlist: blocked", "ip", ip, "path", r.URL.Path)
+			logBlocked(ip, r)
 			denied.ServeHTTP(w, r)
 		})
 	}
+}
+
+// allowedIP returns the client IP and whether it is in allowlist.
+func allowedIP(r *http.Request, allowlist, trustedProxies []*net.IPNet) (string, bool) {
+	ip := ClientIP(r, trustedProxies)
+	parsed := net.ParseIP(ip)
+	return ip, parsed != nil && containsIP(parsed, allowlist)
+}
+
+func logBlocked(ip string, r *http.Request) {
+	if net.ParseIP(ip) == nil {
+		slog.Warn("ip allowlist: could not parse client IP", "raw", ip)
+		return
+	}
+	slog.Warn("ip allowlist: blocked", "ip", ip, "path", r.URL.Path)
 }
 
 // forwardedClient picks the visitor from an X-Forwarded-For chain: the

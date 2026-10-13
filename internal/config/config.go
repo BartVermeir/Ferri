@@ -41,6 +41,8 @@ type Config struct {
 
 	Limits LimitsConfig `yaml:"limits"`
 	Jobs   JobsConfig   `yaml:"jobs"`
+
+	RemoteLogin RemoteLoginConfig `yaml:"remote_login"`
 }
 
 type ServerConfig struct {
@@ -84,6 +86,16 @@ type AdminConfig struct {
 	SessionTTLHours int    `yaml:"session_ttl_hours"`
 }
 
+// RemoteLoginConfig lets colleagues outside ip_allowlist sign in with a link
+// mailed to their work address, for the send and request pages.
+type RemoteLoginConfig struct {
+	// Domains: mail domains whose addresses may sign in ("example.com").
+	// Empty = off.
+	Domains []string `yaml:"domains"`
+	// SessionHours: how long a sign-in lasts.
+	SessionHours int `yaml:"session_hours"`
+}
+
 type ExpiryOption struct {
 	Label string `yaml:"label"`
 	Hours int    `yaml:"hours"`
@@ -125,6 +137,9 @@ func Defaults() *Config {
 		},
 		Admin: AdminConfig{
 			SessionTTLHours: 8,
+		},
+		RemoteLogin: RemoteLoginConfig{
+			SessionHours: 24,
 		},
 		ExpiryOptions: []ExpiryOption{
 			{Label: "1 day", Hours: 24},
@@ -302,6 +317,16 @@ func (c *Config) validate() error {
 	if c.SMTP.Port <= 0 {
 		c.SMTP.Port = d.SMTP.Port
 	}
+	if c.RemoteLogin.SessionHours <= 0 {
+		c.RemoteLogin.SessionHours = d.RemoteLogin.SessionHours
+	}
+	for i, dom := range c.RemoteLogin.Domains {
+		dom = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(dom), "@"))
+		if dom == "" || !strings.Contains(dom, ".") || strings.ContainsAny(dom, "@ ,") {
+			return fmt.Errorf("invalid remote_login.domains entry %q: use a mail domain such as example.com", c.RemoteLogin.Domains[i])
+		}
+		c.RemoteLogin.Domains[i] = dom
+	}
 
 	return nil
 }
@@ -311,6 +336,37 @@ func (c *Config) SessionTTL() time.Duration {
 	hours := c.Admin.SessionTTLHours
 	if hours <= 0 {
 		hours = 8
+	}
+	return time.Duration(hours) * time.Hour
+}
+
+// RemoteLoginEnabled reports whether colleagues outside ip_allowlist can sign
+// in (remote_login.domains is not empty).
+func (c *Config) RemoteLoginEnabled() bool {
+	return len(c.RemoteLogin.Domains) > 0
+}
+
+// RemoteLoginAllows reports whether email is on one of remote_login.domains.
+// The domain must match exactly; a subdomain is not included.
+func (c *Config) RemoteLoginAllows(email string) bool {
+	at := strings.LastIndexByte(email, '@')
+	if at < 1 {
+		return false
+	}
+	domain := strings.ToLower(email[at+1:])
+	for _, d := range c.RemoteLogin.Domains {
+		if domain == d {
+			return true
+		}
+	}
+	return false
+}
+
+// RemoteSessionTTL returns remote_login.session_hours as a time.Duration.
+func (c *Config) RemoteSessionTTL() time.Duration {
+	hours := c.RemoteLogin.SessionHours
+	if hours <= 0 {
+		hours = 24
 	}
 	return time.Duration(hours) * time.Hour
 }

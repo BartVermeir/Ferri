@@ -15,6 +15,12 @@
         <h1>This door only opens from the inside</h1>
         <p class="text-muted mt-8">This page is only available from the {{.Settings.CompanyName}} network. Hotspots, café Wi-Fi and the kitchen table at home don't count.</p>
         <p class="text-muted mt-8">Got a download or upload link? Good news: that one works from anywhere.</p>
+        {{if .RemoteLogin}}
+        <div style="text-align:left; max-width:360px; margin:28px auto 0;">
+          <p class="text-muted">Work here, but not at the office? Sign in with your work email.</p>
+          {{template "login-form" .}}
+        </div>
+        {{end}}
       </div>
     </div>
   </main>

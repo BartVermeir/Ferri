@@ -18,6 +18,7 @@ Self-hosted file transfer tool. Send large files to external recipients, or requ
 - **Transfer history** — the admin sees every upload and download of live transfers and requests, newest first, with address and speed
 - **Admin alerts** — mail when the storage is almost full or unreachable, deleted files stay on it, or mails fail for good
 - **IP restriction** — only internal network users can create transfers; download links are publicly accessible
+- **Sign-in from outside** — optional: colleagues away from the internal network sign in with a link mailed to their work address, to send and request files
 - **Automatic cleanup** — expired transfers are removed from storage on a configurable schedule
 
 ---

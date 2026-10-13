@@ -39,6 +39,9 @@
     .delivery-tab.active { background:#fff; color:#1a1a1a; box-shadow:0 1px 2px rgba(0,0,0,0.1); }
     textarea.grow { min-height: 0; resize: none; overflow: hidden; }
     .options-summary { font-weight: 400; color: #888; }
+    .signed-in { font-size: 13px; margin: -4px 0 16px; }
+    .link-btn { border: none; background: none; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
+    input[readonly] { background: #f7f7f5; color: #555; }
   </style>
 </head>
 <body data-mode="{{.Mode}}">
@@ -46,6 +49,12 @@
   <main>
     <div class="page-wrap">
       <div class="card">
+
+        {{if .RemoteEmail}}
+        <form method="POST" action="/logout" class="signed-in text-muted">
+          Signed in as <strong>{{.RemoteEmail}}</strong> · <button type="submit" class="link-btn">Sign out</button>
+        </form>
+        {{end}}
 
         <div class="mode-tabs">
           <button class="mode-tab" data-mode="send" type="button">Send files</button>
@@ -67,7 +76,7 @@
             <p class="text-muted mt-8" id="file-note" hidden></p>
             <ul class="file-list" id="file-list"></ul>
             <label>Your email</label>
-            <input type="email" name="sender_email" autocomplete="email" required>
+            <input type="email" name="sender_email" autocomplete="email" required{{if .RemoteEmail}} value="{{.RemoteEmail}}" readonly{{end}}>
             <label>Title <span class="text-muted">(optional)</span></label>
             <input type="text" name="title">
             <div class="delivery-tabs">
@@ -114,7 +123,7 @@
           {{if .Error}}<div class="alert alert-error" style="margin-bottom:16px;">{{.Error}}</div>{{end}}
           <form method="POST" action="/request">
             <label>Your email</label>
-            <input type="email" name="requester_email" autocomplete="email" required>
+            <input type="email" name="requester_email" autocomplete="email" required{{if .RemoteEmail}} value="{{.RemoteEmail}}" readonly{{end}}>
             <label>Title</label>
             <input type="text" name="title" required>
             <details class="more-options">

@@ -26,15 +26,18 @@ type Scheduler struct {
 	// cleanupMu keeps one cleanup run at a time, scheduled or "Force cleanup"
 	// in the admin.
 	cleanupMu sync.Mutex
+	// mailKick starts a mail run before the next tick (KickMail).
+	mailKick chan struct{}
 }
 
 // NewScheduler creates a Scheduler. Call Start() to begin running jobs.
 func NewScheduler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) *Scheduler {
 	return &Scheduler{
-		cfg:    cfg,
-		stores: stores,
-		mgr:    mgr,
-		stop:   make(chan struct{}),
+		cfg:      cfg,
+		stores:   stores,
+		mgr:      mgr,
+		stop:     make(chan struct{}),
+		mailKick: make(chan struct{}, 1),
 	}
 }
 
@@ -43,13 +46,13 @@ func NewScheduler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 func (s *Scheduler) Start() {
 	s.startOnce.Do(func() {
 		s.wg.Add(4)
-		go s.runLoop("mail", time.Duration(s.cfg.Jobs.MailIntervalMinutes)*time.Minute, s.runMailJob)
-		go s.runLoop("expiry", time.Duration(s.cfg.Jobs.ExpiryIntervalMinutes)*time.Minute, func() {
+		go s.runLoop("mail", time.Duration(s.cfg.Jobs.MailIntervalMinutes)*time.Minute, s.mailKick, s.runMailJob)
+		go s.runLoop("expiry", time.Duration(s.cfg.Jobs.ExpiryIntervalMinutes)*time.Minute, nil, func() {
 			s.runExpiryJob()
 			s.sendRequestReminders()
 		})
-		go s.runLoop("cleanup", time.Duration(s.cfg.Jobs.CleanupIntervalHours)*time.Hour, func() { s.runCleanupJob() })
-		go s.runLoop("alerts", alertInterval, s.runAlertJob)
+		go s.runLoop("cleanup", time.Duration(s.cfg.Jobs.CleanupIntervalHours)*time.Hour, nil, func() { s.runCleanupJob() })
+		go s.runLoop("alerts", alertInterval, nil, s.runAlertJob)
 	})
 }
 
@@ -60,7 +63,9 @@ func (s *Scheduler) Stop() {
 	s.wg.Wait()
 }
 
-func (s *Scheduler) runLoop(name string, interval time.Duration, fn func()) {
+// runLoop runs fn every interval, and also when kick receives (a nil kick
+// never does).
+func (s *Scheduler) runLoop(name string, interval time.Duration, kick <-chan struct{}, fn func()) {
 	defer s.wg.Done()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -70,7 +75,18 @@ func (s *Scheduler) runLoop(name string, interval time.Duration, fn func()) {
 			return
 		case <-ticker.C:
 			runJob(name, fn)
+		case <-kick:
+			runJob(name, fn)
 		}
+	}
+}
+
+// KickMail starts a mail run now instead of at the next tick. A run already
+// asked for and not started yet covers this call too.
+func (s *Scheduler) KickMail() {
+	select {
+	case s.mailKick <- struct{}{}:
+	default:
 	}
 }
 
@@ -380,6 +396,7 @@ func (s *Scheduler) runCleanupJob(graceHours ...int) {
 // purgeDeleted removes deleted transfers and requests from the database,
 // with everything that hangs on them (statistics and mails included). Items
 // with data possibly still on storage stay until purgeLeftovers has removed it.
+// Expired sign-in links go too.
 func (s *Scheduler) purgeDeleted() {
 	t, err := s.stores.Transfers.PurgeDeleted()
 	if err != nil {
@@ -391,6 +408,9 @@ func (s *Scheduler) purgeDeleted() {
 	}
 	if t > 0 || r > 0 {
 		slog.Info("cleanup job: purged deleted items from the database", "transfers", t, "requests", r)
+	}
+	if _, err := s.stores.Logins.DeleteExpired(); err != nil {
+		slog.Error("cleanup job: delete expired sign-in links", "error", err)
 	}
 }
 
