@@ -247,3 +247,13 @@ func TestForbiddenPage_NoSignInUnderAdmin(t *testing.T) {
 		}
 	}
 }
+
+// With a no-referrer policy the browser sends "Origin: null" on a form POST,
+// which CSRFProtect refuses. No page may set one.
+func TestTemplates_NoReferrerPolicy(t *testing.T) {
+	for _, tpl := range templates.Templates() {
+		if tpl.Tree != nil && strings.Contains(tpl.Tree.Root.String(), "no-referrer") {
+			t.Errorf("template %s sets a no-referrer policy", tpl.Name())
+		}
+	}
+}

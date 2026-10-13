@@ -50,12 +50,14 @@ type loginPageData struct {
 	State   string
 	Email   string
 	Error   string
-	Minutes int
+	Minutes int // how long a link works
+	Hours   int // how long a sign-in lasts
 }
 
-func renderLogin(w http.ResponseWriter, r *http.Request, status int, data loginPageData) {
+func renderLogin(w http.ResponseWriter, r *http.Request, cfg *config.Config, status int, data loginPageData) {
 	data.baseData = baseData{PageTitle: "Sign in", Settings: appMiddleware.GetSettings(r)}
 	data.Minutes = int(loginLinkTTL.Minutes())
+	data.Hours = int(cfg.RemoteSessionTTL().Hours())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	renderPage(w, "login.html", data)
@@ -71,23 +73,23 @@ func LoginRequest(cfg *config.Config, stores *store.Stores, kicker MailKicker) h
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 		if err := r.ParseForm(); err != nil {
-			renderLogin(w, r, http.StatusBadRequest, loginPageData{State: "ask", Error: "Could not read the form. Please try again."})
+			renderLogin(w, r, cfg, http.StatusBadRequest, loginPageData{State: "ask", Error: "Could not read the form. Please try again."})
 			return
 		}
 		email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 		if !isValidEmail(email) {
-			renderLogin(w, r, http.StatusBadRequest, loginPageData{State: "ask", Email: email, Error: "Enter a valid email address."})
+			renderLogin(w, r, cfg, http.StatusBadRequest, loginPageData{State: "ask", Email: email, Error: "Enter a valid email address."})
 			return
 		}
 		if !cfg.RemoteLoginAllows(email) {
-			renderLogin(w, r, http.StatusBadRequest, loginPageData{State: "ask", Email: email, Error: "This address cannot sign in. Use your work email address."})
+			renderLogin(w, r, cfg, http.StatusBadRequest, loginPageData{State: "ask", Email: email, Error: "Only work email addresses can sign in."})
 			return
 		}
 
 		tok, err := stores.Logins.Create(email, loginLinkTTL, loginLinkTTL, loginLinksPerAddress)
 		if err != nil {
 			slog.Error("login: create link", "error", err)
-			renderLogin(w, r, http.StatusInternalServerError, loginPageData{State: "ask", Email: email, Error: "Something went wrong on our side. Please try again later."})
+			renderLogin(w, r, cfg, http.StatusInternalServerError, loginPageData{State: "ask", Email: email, Error: "Something went wrong on our side. Please try again later."})
 			return
 		}
 		if tok == "" {
@@ -104,7 +106,7 @@ func LoginRequest(cfg *config.Config, stores *store.Stores, kicker MailKicker) h
 			if err := stores.Mail.Enqueue(nil, store.MailAbout{}, email, subject,
 				mail.Wrap(settings, cfg.Server.BaseURL, m.preheader(), buildLoginHTML(m, settings)), buildLoginText(m)); err != nil {
 				slog.Error("login: enqueue mail", "error", err)
-				renderLogin(w, r, http.StatusInternalServerError, loginPageData{State: "ask", Email: email, Error: "Something went wrong on our side. Please try again later."})
+				renderLogin(w, r, cfg, http.StatusInternalServerError, loginPageData{State: "ask", Email: email, Error: "Something went wrong on our side. Please try again later."})
 				return
 			}
 			if kicker != nil {
@@ -112,7 +114,7 @@ func LoginRequest(cfg *config.Config, stores *store.Stores, kicker MailKicker) h
 			}
 			slog.Info("login: link mailed")
 		}
-		renderLogin(w, r, http.StatusOK, loginPageData{State: "sent", Email: email})
+		renderLogin(w, r, cfg, http.StatusOK, loginPageData{State: "sent", Email: email})
 	}
 }
 
@@ -129,10 +131,10 @@ func LoginPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			slog.Error("login: read link", "error", err)
 		}
 		if !ok {
-			renderLogin(w, r, http.StatusNotFound, loginPageData{State: "invalid"})
+			renderLogin(w, r, cfg, http.StatusNotFound, loginPageData{State: "invalid"})
 			return
 		}
-		renderLogin(w, r, http.StatusOK, loginPageData{State: "confirm", Email: email})
+		renderLogin(w, r, cfg, http.StatusOK, loginPageData{State: "confirm", Email: email})
 	}
 }
 
@@ -149,7 +151,7 @@ func LoginConfirm(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			slog.Error("login: use link", "error", err)
 		}
 		if !ok || !cfg.RemoteLoginAllows(email) {
-			renderLogin(w, r, http.StatusNotFound, loginPageData{State: "invalid"})
+			renderLogin(w, r, cfg, http.StatusNotFound, loginPageData{State: "invalid"})
 			return
 		}
 		appMiddleware.SetRemoteCookie(w, cfg, email)

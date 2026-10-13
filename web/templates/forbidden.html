@@ -16,8 +16,9 @@
         <p class="text-muted mt-8">This page is only available from the {{.Settings.CompanyName}} network. Hotspots, café Wi-Fi and the kitchen table at home don't count.</p>
         <p class="text-muted mt-8">Got a download or upload link? Good news: that one works from anywhere.</p>
         {{if .RemoteLogin}}
-        <div style="text-align:left; max-width:360px; margin:28px auto 0;">
-          <p class="text-muted">Work here, but not at the office? Sign in with your work email.</p>
+        <div class="signin narrow">
+          <h2>Working away from the office?</h2>
+          <p class="text-muted">Sign in with your work email to send and request files from anywhere.</p>
           {{template "login-form" .}}
         </div>
         {{end}}

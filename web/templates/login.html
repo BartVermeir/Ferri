@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="referrer" content="no-referrer">
   <title>{{.PageTitle}} — {{.Settings.CompanyName}}</title>
   {{template "base-css" .}}
 </head>
@@ -11,28 +10,34 @@
   {{template "base-header" .}}
   <main>
     <div class="page-wrap">
-      <div class="card">
+      <div class="card card-centered">
         {{if eq .State "sent"}}
+        <div class="display-icon">✉️</div>
         <h1>Check your mail</h1>
-        <p class="text-muted mt-8">If <strong>{{.Email}}</strong> can sign in, a sign-in link is on its way. It works once, within {{.Minutes}} minutes.</p>
-        <p class="text-muted mt-8">Nothing after a few minutes? Look in your spam folder, or ask a new link from the start page.</p>
+        <p class="lead">A sign-in link is on its way to <strong>{{.Email}}</strong>.<br>It works once, within {{.Minutes}} minutes.</p>
+        <p class="text-muted mt-16">Nothing after a few minutes? Look in your spam folder, or <a href="/">ask a new link</a>.</p>
         {{else if eq .State "confirm"}}
+        <div class="display-icon">🔑</div>
         <h1>Sign in</h1>
-        <p class="text-muted mt-8">Sign in as <strong>{{.Email}}</strong> to send and request files from outside the office.</p>
-        <form method="POST">
-          <div class="mt-24">
-            <button type="submit" class="btn btn-primary">Sign in</button>
-          </div>
+        <p class="lead">You are signing in as <strong>{{.Email}}</strong>.</p>
+        <form method="POST" class="narrow">
+          <button type="submit" class="btn btn-primary btn-block">Sign in</button>
         </form>
+        <p class="text-muted mt-16">You stay signed in for {{.Hours}} hours on this device.</p>
         {{else}}
         {{if eq .State "invalid"}}
+        <div class="display-icon">⌛</div>
         <h1>This link no longer works</h1>
-        <p class="text-muted mt-8">A sign-in link works once, within {{.Minutes}} minutes. Ask a new one below.</p>
+        <p class="lead">A sign-in link works once, within {{.Minutes}} minutes.<br>Ask a new one below.</p>
         {{else}}
+        <div class="display-icon">🔑</div>
         <h1>Sign in</h1>
+        <p class="lead">Sign in with your work email to send and request files from anywhere.</p>
         {{end}}
-        {{if .Error}}<div class="alert alert-error mt-16">{{.Error}}</div>{{end}}
-        {{template "login-form" .}}
+        <div class="narrow">
+          {{if .Error}}<div class="alert alert-error" style="margin:0 0 16px;">{{.Error}}</div>{{end}}
+          {{template "login-form" .}}
+        </div>
         {{end}}
       </div>
     </div>
@@ -43,11 +48,9 @@
 </html>{{end}}
 
 {{define "login-form"}}
-<form method="POST" action="/login">
-  <label>Your work email</label>
-  <input type="email" name="email" value="{{.Email}}" autocomplete="email" required>
-  <div class="mt-24">
-    <button type="submit" class="btn btn-primary">Email me a sign-in link</button>
-  </div>
+<form method="POST" action="/login" class="signin-form">
+  <label for="signin-email">Your work email</label>
+  <input type="email" id="signin-email" name="email" value="{{.Email}}" autocomplete="email" required>
+  <button type="submit" class="btn btn-primary">Email me a sign-in link</button>
 </form>
 {{end}}
