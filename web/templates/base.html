@@ -4,7 +4,7 @@
       --primary: {{.Settings.PrimaryColor}};
       --accent: {{if .Settings.AccentColor}}{{.Settings.AccentColor}}{{else}}{{.Settings.PrimaryColor}}{{end}};
       --bg: {{if .Settings.BgColor}}{{.Settings.BgColor}}{{else}}#f8f8f6{{end}};
-      --font: {{if .Settings.FontFamily}}{{.Settings.FontFamily}}{{else}}'Inter', system-ui, sans-serif{{end}};
+      --font: {{fontFamily .Settings.FontFamily}};
       --primary-text: #fff;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

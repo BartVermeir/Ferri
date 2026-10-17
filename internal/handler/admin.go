@@ -24,6 +24,7 @@ package handler
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -347,6 +348,9 @@ func AdminTransfers(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 
 // ── Delete (transfer or upload request) ──────────────────────────────────────
 
+// errItemNotFound: the transfer or request to delete does not exist.
+var errItemNotFound = errors.New("not found")
+
 // AdminTransferDelete handles POST /admin/transfers/:id/delete.
 // Hard-deletes: removes all files from storage, marks records deleted in DB.
 func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.Manager, summaries deletionSummarizer) http.HandlerFunc {
@@ -357,7 +361,10 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 			return
 		}
 
-		if err := deleteTransferNow(stores, mgr, summaries, id, false); err != nil {
+		if err := deleteTransferNow(stores, mgr, summaries, id, false); errors.Is(err, errItemNotFound) {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		} else if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -373,6 +380,11 @@ func AdminTransferDelete(cfg *config.Config, stores *store.Stores, mgr *storage.
 // files off storage, then the rows. A failed removal keeps the file's
 // tus_upload_id, so the cleanup job retries it on its next run.
 func deleteTransferNow(stores *store.Stores, mgr *storage.Manager, summaries deletionSummarizer, id string, bySender bool) error {
+	if t, err := stores.Transfers.GetByID(id); err != nil {
+		return err
+	} else if t == nil {
+		return errItemNotFound
+	}
 	if sent, err := summaries.EnqueueDeletionSummary(id, bySender); err != nil {
 		slog.Error("delete: enqueue deletion summary", "id", id, "error", err)
 	} else if sent {
@@ -402,6 +414,9 @@ func deleteTransferNow(stores *store.Stores, mgr *storage.Manager, summaries del
 	// cleanup job needs the row to retry, and purges it after that.
 	if _, err := stores.Transfers.PurgeDeleted(); err != nil {
 		slog.Error("delete: purge transfer", "id", id, "error", err)
+	}
+	if err := stores.CheckpointWAL(); err != nil {
+		slog.Warn("delete: checkpoint database log", "error", err)
 	}
 	return nil
 }
@@ -489,6 +504,7 @@ func AdminRequestFiles(cfg *config.Config, stores *store.Stores) http.HandlerFun
 // one file of a request to the admin, as AdminTransferFile does.
 func AdminRequestFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		singleRange(r)
 		f, err := stores.Requests.GetRequestFileByID(chi.URLParam(r, "fileID"))
 		if err != nil || f == nil || f.UploadRequestID != chi.URLParam(r, "id") || f.Status != "complete" {
 			http.NotFound(w, r)
@@ -511,6 +527,7 @@ func AdminRequestFile(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		}
 		act := activity.Default.Start(info)
 		defer act.Done()
+		setFileHeaders(w)
 		ra := newReadAhead(src)
 		defer ra.Close() // runs before src.Close: waits for reads still running
 		http.ServeContent(act.Writer(w), r, f.OriginalName, time.Time{}, ra)
@@ -521,6 +538,7 @@ func AdminRequestFile(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 // one file without recording a download or notifying anyone.
 func AdminTransferFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		singleRange(r)
 		f, err := stores.Transfers.GetFileByID(chi.URLParam(r, "fileID"))
 		if err != nil || f == nil || f.TransferID != chi.URLParam(r, "id") || f.Status != "complete" {
 			http.NotFound(w, r)
@@ -543,6 +561,7 @@ func AdminTransferFile(cfg *config.Config, stores *store.Stores, mgr *storage.Ma
 		}
 		act := activity.Default.Start(info)
 		defer act.Done()
+		setFileHeaders(w)
 		ra := newReadAhead(src)
 		defer ra.Close() // runs before src.Close: waits for reads still running
 		http.ServeContent(act.Writer(w), r, f.OriginalName, time.Time{}, ra)
@@ -564,7 +583,10 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 			return
 		}
 
-		if err := deleteRequestNow(stores, mgr, id); err != nil {
+		if err := deleteRequestNow(stores, mgr, id); errors.Is(err, errItemNotFound) {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		} else if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -577,6 +599,11 @@ func AdminRequestDelete(cfg *config.Config, stores *store.Stores, mgr *storage.M
 // admin and for the requester's manage page. Same as transfers: a failed
 // removal is retried by the cleanup job.
 func deleteRequestNow(stores *store.Stores, mgr *storage.Manager, id string) error {
+	if req, err := stores.Requests.GetByID(id); err != nil {
+		return err
+	} else if req == nil {
+		return errItemNotFound
+	}
 	files, err := stores.Requests.GetFiles(id)
 	if err != nil {
 		slog.Error("delete: get request files", "id", id, "error", err)
@@ -598,6 +625,9 @@ func deleteRequestNow(stores *store.Stores, mgr *storage.Manager, id string) err
 	}
 	if _, err := stores.Requests.PurgeDeleted(); err != nil {
 		slog.Error("delete: purge request", "id", id, "error", err)
+	}
+	if err := stores.CheckpointWAL(); err != nil {
+		slog.Warn("delete: checkpoint database log", "error", err)
 	}
 	return nil
 }
@@ -876,6 +906,10 @@ func AdminMailSettingsSave(cfg *config.Config, stores *store.Stores) http.Handle
 			renderSettingsError(w, r, cfg, mailSettings, msg)
 			return
 		}
+		if from := strings.TrimSpace(r.FormValue("mail.from_address")); from != "" && !isValidEmail(from) {
+			renderSettingsError(w, r, cfg, mailSettings, "Enter a valid sender address.")
+			return
+		}
 		saveSettings(w, r, cfg, stores, mailSettings, map[string]string{
 			"mail.from_name":          r.FormValue("mail.from_name"),
 			"mail.from_address":       r.FormValue("mail.from_address"),
@@ -902,13 +936,17 @@ func saveSettings(w http.ResponseWriter, r *http.Request, cfg *config.Config, st
 
 // ── Logo and rendering ────────────────────────────────────────────────────────
 
+// maxLogoBytes is the largest logo upload, form included.
+const maxLogoBytes = 2 << 20
+
 // AdminLogoUpload handles POST /admin/settings/logo.
 //
 // The logo is written to <storage.path>/logo on the local filesystem via os.*,
 // not through the storage.Manager, and served by handler.LogoFileServer.
 func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseMultipartForm(5 << 20); err != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, maxLogoBytes)
+		if err := r.ParseMultipartForm(maxLogoBytes); err != nil {
 			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
@@ -923,6 +961,17 @@ func AdminLogoUpload(cfg *config.Config, stores *store.Stores) http.HandlerFunc 
 		ext := strings.ToLower(filepath.Ext(header.Filename))
 		// SVG is excluded: browsers run scripts inside an SVG.
 		if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".webp" {
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
+			return
+		}
+		// The content must be an image of that kind too.
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(file, head)
+		if want := map[string]string{".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}[ext]; http.DetectContentType(head[:n]) != want {
+			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			http.Redirect(w, r, brandingSettings.path, http.StatusSeeOther)
 			return
 		}
@@ -1058,11 +1107,15 @@ func AdminStorageSave(cfg *config.Config, stores *store.Stores, mgr *storage.Man
 		}
 
 		// Empty password = keep the saved one, only for the same server and
-		// account (mayReuseSMBPassword).
+		// account (mayReuseSMBPassword). Saved as local with other SMB fields,
+		// the saved password is dropped: it belongs to the old ones.
 		newPassword := r.FormValue("storage.smb_password")
-		if newPassword == "" && storageType == "smb" && !mayReuseSMBPassword(stores.Settings.Get(), r) {
-			http.Redirect(w, r, "/admin/settings/storage?storage_error="+url.QueryEscape(msgSMBPasswordAgain), http.StatusSeeOther)
-			return
+		if newPassword == "" && !mayReuseSMBPassword(stores.Settings.Get(), r) {
+			if storageType == "smb" {
+				http.Redirect(w, r, "/admin/settings/storage?storage_error="+url.QueryEscape(msgSMBPasswordAgain), http.StatusSeeOther)
+				return
+			}
+			saves["storage.smb_password_encrypted"] = ""
 		}
 		if newPassword != "" {
 			encrypted, err := storage.Encrypt(cfg.Admin.Token, newPassword)

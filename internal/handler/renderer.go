@@ -64,6 +64,7 @@ func buildTemplates() {
 	}
 
 	funcMap := template.FuncMap{
+		"fontFamily": fontFamilyCSS,
 		"formatDate": func(t time.Time) string {
 			return t.In(displayLocation).Format("2 Jan 2006 15:04")
 		},
@@ -122,4 +123,17 @@ type adminData struct {
 	PageTitle string
 	ActiveNav string
 	Settings  *store.Settings
+}
+
+// defaultFontFamily is the font of a site without a chosen one.
+const defaultFontFamily = "'Inter', system-ui, sans-serif"
+
+// fontFamilyCSS returns the font-family for the page CSS: the chosen font when
+// it is one of allowedFonts, else the default. Only those fixed values are
+// marked safe CSS (html/template rejects their quotes otherwise).
+func fontFamilyCSS(v string) template.CSS {
+	if v == "" || !allowedFonts[v] {
+		return template.CSS(defaultFontFamily)
+	}
+	return template.CSS(v)
 }

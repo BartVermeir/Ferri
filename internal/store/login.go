@@ -21,9 +21,9 @@ func loginTokenHash(tok string) string {
 }
 
 // Create stores a new sign-in token for email, valid for ttl, and returns it.
-// It returns "" when email already got maxPerWindow tokens within window.
-// Expired tokens are removed first.
-func (s *LoginStore) Create(email string, ttl, window time.Duration, maxPerWindow int) (string, error) {
+// It returns "" when email already got maxPerWindow tokens within window, or
+// all addresses together got maxAll. Expired tokens are removed first.
+func (s *LoginStore) Create(email string, ttl, window time.Duration, maxPerWindow, maxAll int) (string, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", err
@@ -33,12 +33,13 @@ func (s *LoginStore) Create(email string, ttl, window time.Duration, maxPerWindo
 	if _, err := tx.Exec(`DELETE FROM login_tokens WHERE expires_at <= unixepoch()`); err != nil {
 		return "", err
 	}
-	var recent int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM login_tokens WHERE email = ? AND created_at > ?`,
-		email, time.Now().Add(-window).Unix()).Scan(&recent); err != nil {
+	var recent, all int
+	since := time.Now().Add(-window).Unix()
+	if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(email = ?), 0) FROM login_tokens WHERE created_at > ?`,
+		email, since).Scan(&all, &recent); err != nil {
 		return "", err
 	}
-	if recent >= maxPerWindow {
+	if recent >= maxPerWindow || all >= maxAll {
 		return "", nil
 	}
 	tok := token.Generate()

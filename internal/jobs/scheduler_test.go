@@ -73,7 +73,7 @@ func TestCleanupJob_RemovesExpiredTransferFilesAndRows(t *testing.T) {
 	if _, err := stores.Transfers.TryActivate(result.TransferID); err != nil {
 		t.Fatalf("try activate: %v", err)
 	}
-	if err := stores.Transfers.SetExpired(result.TransferID); err != nil {
+	if _, err := stores.Transfers.SetExpired(result.TransferID); err != nil {
 		t.Fatalf("set expired: %v", err)
 	}
 
@@ -526,5 +526,63 @@ func TestExpirySummary_CapsLongLists(t *testing.T) {
 	}
 	if !strings.Contains(text, "30 of 60 files") || !strings.Contains(text, ", … and 10 more\n") {
 		t.Errorf("status or not-downloaded list wrong:\n%s", text)
+	}
+}
+
+// An expired transfer or request without any file (upload abandoned, request
+// never used) leaves the database after the grace period too.
+func TestCleanupJob_RemovesExpiredItemsWithoutFiles(t *testing.T) {
+	d, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	if err := db.Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+	stores := store.New(d)
+	mgr := storage.NewManager(storage.NewLocalBackend(t.TempDir()))
+
+	res, err := stores.Transfers.Create(store.CreateTransferInput{
+		SenderEmail: "alice@example.com", ExpiresAt: time.Now().Add(time.Hour), Recipients: []string{"bob@example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reqID, _, err := stores.Requests.Create(store.CreateRequestInput{RequesterEmail: "alice@example.com", ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stores.Transfers.SetExpired(res.TransferID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stores.Requests.SetExpired(reqID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE transfers SET expired_at = unixepoch() - 1000000`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE upload_requests SET expired_at = unixepoch() - 1000000`); err != nil {
+		t.Fatal(err)
+	}
+
+	NewScheduler(newCleanupTestConfig(), stores, mgr).runCleanupJob()
+
+	if tr, _ := stores.Transfers.GetByID(res.TransferID); tr != nil {
+		t.Errorf("transfer without files still in the database: status %s", tr.Status)
+	}
+	if r, _ := stores.Requests.GetByID(reqID); r != nil {
+		t.Errorf("request without files still in the database: status %s", r.Status)
+	}
+}
+
+func TestWithoutAddresses(t *testing.T) {
+	in := `550 5.1.1 <bob@example.com>: Recipient address rejected; from alice.x+y@mail.example.org (code 550)`
+	got := withoutAddresses(in)
+	if strings.Contains(got, "@") {
+		t.Fatalf("address left in %q", got)
+	}
+	if !strings.Contains(got, "Recipient address rejected") {
+		t.Fatalf("message lost: %q", got)
 	}
 }

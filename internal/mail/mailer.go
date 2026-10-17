@@ -17,6 +17,7 @@ package mail
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -53,8 +54,13 @@ func NewSender(cfg *config.Config, settings *store.Settings) *Sender {
 	return s
 }
 
+// ErrConnect: no connection to the SMTP server; the next mails would fail
+// the same way.
+var ErrConnect = errors.New("mail: connect")
+
 // Send sends one item. Returns an error if the send fails — the caller
-// records the failure and schedules a retry with exponential backoff.
+// records the failure and schedules a retry with exponential backoff. An
+// error wrapping ErrConnect means the server could not be reached.
 func (s *Sender) Send(item store.MailItem) error {
 	if s.fromAddress == "" {
 		return fmt.Errorf("mail: from_address not configured")
@@ -66,13 +72,13 @@ func (s *Sender) Send(item store.MailItem) error {
 	if s.client == nil {
 		client, err := newClient(s.cfg)
 		if err != nil {
-			return fmt.Errorf("mail: create client: %w", err)
+			return fmt.Errorf("%w: create client: %v", ErrConnect, err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err = client.DialWithContext(ctx)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("mail: connect: %w", err)
+			return fmt.Errorf("%w: %v", ErrConnect, err)
 		}
 		s.client = client
 		s.dials++

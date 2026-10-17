@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 
 	tusd "github.com/tus/tusd/v2/pkg/handler"
@@ -362,7 +363,22 @@ type managerTUSStore struct {
 	m *Manager
 }
 
+// errRemoveRoot: RemoveAll was asked to remove the storage root.
+var errRemoveRoot = errors.New("refusing to remove the storage root")
+
+// tusIDPattern matches the upload IDs the stores create: 32 hex characters
+// (tusd's filestore) or a lowercase UUID (smbTUSStore).
+var tusIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$`)
+
+// ValidTUSID reports whether id has the form of an upload ID a store creates.
+func ValidTUSID(id string) bool {
+	return tusIDPattern.MatchString(id)
+}
+
 func (d *managerTUSStore) NewUpload(ctx context.Context, info tusd.FileInfo) (tusd.Upload, error) {
+	if info.ID != "" && !ValidTUSID(info.ID) {
+		return nil, fmt.Errorf("invalid upload id %q", info.ID)
+	}
 	b, release := d.m.use()
 	defer release()
 	u, err := b.TUSStore().NewUpload(ctx, info)
@@ -372,7 +388,12 @@ func (d *managerTUSStore) NewUpload(ctx context.Context, info tusd.FileInfo) (tu
 	return &trackedUpload{Upload: u, m: d.m, b: b}, nil
 }
 
+// GetUpload returns ErrNotFound for an id that is not in the form of an
+// upload ID, before it reaches the storage.
 func (d *managerTUSStore) GetUpload(ctx context.Context, id string) (tusd.Upload, error) {
+	if !ValidTUSID(id) {
+		return nil, tusd.ErrNotFound
+	}
 	b, release := d.m.use()
 	defer release()
 	u, err := b.TUSStore().GetUpload(ctx, id)

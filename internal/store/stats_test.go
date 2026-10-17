@@ -224,7 +224,7 @@ func TestHistory_OnlyLiveNewestFirst(t *testing.T) {
 	s := newRaceTestStores(t)
 	live := newExpectedTransfer(t, s, 1)
 	gone := newExpectedTransfer(t, s, 1)
-	if err := s.Transfers.SetExpired(gone); err != nil {
+	if _, err := s.Transfers.SetExpired(gone); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().Truncate(time.Second)

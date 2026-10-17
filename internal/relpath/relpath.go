@@ -6,6 +6,7 @@ package relpath
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -15,7 +16,8 @@ const (
 )
 
 // Clean returns name as a safe relative path: backslashes become slashes;
-// empty, "." and ".." segments and control characters are dropped; each
+// empty, "." and ".." segments, control characters and characters that change
+// how the rest displays (bidi controls, zero-width space) are dropped; each
 // segment and the whole path are cut to a sane length. What is left of
 // "../../etc/passwd" is "etc/passwd", of "C:\Users\x.mov" it is "C:/Users/x.mov"
 // ("C:" is an ordinary folder name inside a ZIP). An empty result is "unnamed".
@@ -24,7 +26,7 @@ func Clean(name string) string {
 	var segs []string
 	for _, seg := range strings.Split(name, "/") {
 		seg = strings.TrimSpace(strings.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f {
+			if dropped(r) {
 				return -1
 			}
 			return r
@@ -40,6 +42,21 @@ func Clean(name string) string {
 		return "unnamed"
 	}
 	return out
+}
+
+// dropped reports whether Clean removes r: C0 and C1 control characters, bidi
+// controls ("invoice\u202Efdp.exe" displays as "invoiceexe.pdf"), zero-width
+// space, word joiner and byte order mark.
+func dropped(r rune) bool {
+	switch {
+	case r < 0x20 || (r >= 0x7f && r <= 0x9f):
+		return true
+	case unicode.Is(unicode.Bidi_Control, r):
+		return true
+	case r == 0x200B || r == 0x2060 || r == 0xFEFF:
+		return true
+	}
+	return false
 }
 
 // Base returns the last segment of a cleaned path: the file name.

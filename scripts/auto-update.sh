@@ -26,7 +26,7 @@ main() {
 
 	cd "$repo_dir"
 	git fetch --quiet --tags --force origin
-	latest="$(git tag --list 'v[0-9]*' --sort=-v:refname | sed -n 1p)"
+	latest="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
 	running="$(sed -nE 's#^[[:space:]]*image:[[:space:]]*ferri:([^[:space:]]+).*#\1#p' "$deploy_dir/docker-compose.yml" | sed -n 1p)"
 	if [[ -z "$latest" ]]; then
 		echo "ERROR: no release tag on GitHub" >&2

@@ -260,13 +260,24 @@ var sessionGoneCodes = map[uint32]bool{
 
 // isConnectionError reports whether err looks like a network/connection
 // error, or an SMB session the server ended: both are fixed by reconnecting.
+// Any other NT status means the server answered, so the connection works. The
+// keyword check reads the error without its path: a path is not an error.
 func isConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
 	var re *smb2.ResponseError
-	if errors.As(err, &re) && sessionGoneCodes[re.Code] {
+	if errors.As(err, &re) {
+		return sessionGoneCodes[re.Code]
+	}
+	var te *smb2.TransportError
+	var ne net.Error
+	if errors.As(err, &te) || errors.As(err, &ne) || errors.Is(err, net.ErrClosed) {
 		return true
+	}
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		err = pe.Err
 	}
 	msg := strings.ToLower(err.Error())
 	for _, kw := range []string{"connection", "reset", "broken", "eof", "closed", "refused", "timeout"} {
@@ -327,8 +338,12 @@ func (b *SMBBackend) Remove(relPath string) error {
 	})
 }
 
-// RemoveAll deletes a directory and all its contents.
+// RemoveAll deletes a directory and all its contents. It refuses the base
+// path itself.
 func (b *SMBBackend) RemoveAll(relPath string) error {
+	if path.Clean("/"+strings.TrimPrefix(relPath, "/")) == "/" {
+		return errRemoveRoot
+	}
 	return b.withShare(func(s *smb2.Share) error {
 		err := s.RemoveAll(b.smbPath(relPath))
 		if isNotExist(err) {

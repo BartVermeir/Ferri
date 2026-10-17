@@ -3,7 +3,7 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --primary: {{.Settings.PrimaryColor}};
-      --font: {{if .Settings.FontFamily}}{{.Settings.FontFamily}}{{else}}'Inter', system-ui, sans-serif{{end}};
+      --font: {{fontFamily .Settings.FontFamily}};
     }
     body { font-family: var(--font); background: #f8f8f6; color: #1a1a1a; font-size: 14px; line-height: 1.5; }
     a { color: var(--primary); text-decoration: none; }

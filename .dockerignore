@@ -1,0 +1,13 @@
+# Local builds: only what the image needs. scripts/deploy.sh builds from
+# git archive and does not read this.
+.git
+.github
+*.md
+docs/
+scripts/
+server
+ferri
+.env
+.env.*
+config.yaml
+docker-compose*.yml

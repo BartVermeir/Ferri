@@ -46,8 +46,10 @@ type block struct {
 // first 512 bytes and seeks back to 0), any other seek only takes effect on
 // the next read.
 //
-// When src is an io.ReaderAt (local files and SMB files both are), up to
-// fileReadAheadDepth blocks ahead of the reader are read in parallel. Call
+// When src is an io.ReaderAt (local files and SMB files both are), blocks
+// ahead of the reader are read in parallel: one after a start or a seek,
+// doubling with every block read, up to fileReadAheadDepth. A short Range
+// request so reads little more than it asks. Call
 // Close before closing src: it waits for reads still running.
 type readAhead struct {
 	src io.ReadSeeker
@@ -64,13 +66,14 @@ type readAhead struct {
 	cur   *block   // block being served
 	queue []*block // requested blocks at consecutive offsets after cur
 	next  int64    // offset of the next block to request
+	depth int      // blocks to keep requested: 1 after a (re)start, doubling per block read up to fileReadAheadDepth
 	size  int64    // file size, -1 until a SeekEnd or a short block tells
 	free  [][]byte
 	wg    sync.WaitGroup
 }
 
 func newReadAhead(src io.ReadSeeker) *readAhead {
-	r := &readAhead{src: src, size: -1}
+	r := &readAhead{src: src, size: -1, depth: 1}
 	if at, ok := src.(io.ReaderAt); ok {
 		r.at = at
 	} else {
@@ -124,6 +127,9 @@ func (r *readAhead) readParallel(p []byte) (int, error) {
 		r.queue = r.queue[1:]
 		<-nb.done
 		if r.cur != nil {
+			if nb.off == r.cur.off+int64(len(r.cur.buf)) {
+				r.depth = min(2*r.depth, fileReadAheadDepth) // read on into the next block
+			}
 			r.free = append(r.free, r.cur.buf)
 		}
 		r.cur = nb
@@ -144,10 +150,10 @@ func (r *readAhead) readParallel(p []byte) (int, error) {
 	return c, nil
 }
 
-// fill requests blocks until fileReadAheadDepth are in flight or the end of
-// the file is reached.
+// fill requests blocks until depth are in flight or the end of the file is
+// reached.
 func (r *readAhead) fill() {
-	for len(r.queue) < fileReadAheadDepth && (r.size < 0 || r.next < r.size) {
+	for len(r.queue) < r.depth && (r.size < 0 || r.next < r.size) {
 		var buf []byte
 		if n := len(r.free); n > 0 {
 			buf, r.free = r.free[n-1], r.free[:n-1]
@@ -175,6 +181,7 @@ func (r *readAhead) restartAt(off int64) {
 	}
 	r.queue = nil
 	r.next = off
+	r.depth = 1
 }
 
 // Close waits for reads from storage that are still running, so src can be

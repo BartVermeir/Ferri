@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -78,3 +79,21 @@ type statusRecorder struct {
 func (s *statusRecorder) Header() http.Header         { return http.Header{} }
 func (s *statusRecorder) Write(b []byte) (int, error) { return len(b), nil }
 func (s *statusRecorder) WriteHeader(code int)        { s.code = code }
+
+// Only the host of base_url counts, not whatever Host the request names.
+func TestCSRFProtect_OnlyBaseURLHost(t *testing.T) {
+	h := CSRFProtect("https://send.example.com")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	for origin, want := range map[string]int{
+		"https://send.example.com": http.StatusOK,
+		"https://evil.example.net": http.StatusForbidden,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/send", nil)
+		req.Host = "evil.example.net"
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("Origin %s with Host evil.example.net: %d, want %d", origin, rec.Code, want)
+		}
+	}
+}

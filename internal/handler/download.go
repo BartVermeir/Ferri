@@ -36,6 +36,7 @@ import (
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/passcookie"
 	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
@@ -46,8 +47,8 @@ import (
 const zipCopyBufSize = fileReadAheadSize
 
 // downloadPasswordCookie unlocks a password-protected download page for the
-// browser session, at most passwordCookieTTL. Its value is signed, see
-// passcookie.go. HttpOnly, and Secure when server.secure_cookies is set.
+// browser session, at most passcookie.TTL. Its value is signed, see
+// package passcookie. HttpOnly, and Secure when server.secure_cookies is set.
 const downloadPasswordCookie = "ferri_dl_auth"
 
 // downloadNotifyWindow: at most one download notification per recipient and
@@ -62,7 +63,35 @@ const downloadNotifyWindow = time.Hour
 // download sends many such requests for one download.
 func countsAsDownload(r *http.Request) bool {
 	h := strings.TrimSpace(r.Header.Get("Range"))
-	return h == "" || strings.HasPrefix(h, "bytes=0-")
+	if h == "" {
+		return true
+	}
+	spec, ok := strings.CutPrefix(h, "bytes=")
+	if !ok {
+		return false // ServeContent answers 416
+	}
+	start, _, _ := strings.Cut(spec, "-")
+	n, err := strconv.ParseInt(strings.TrimSpace(start), 10, 64)
+	return err == nil && n == 0
+}
+
+// fileContentSecurityPolicy is the policy of a served file: nothing in it
+// runs or loads, should a browser render it anyway.
+const fileContentSecurityPolicy = "default-src 'none'; sandbox"
+
+// setFileHeaders makes a served file plain bytes to the browser: never a
+// script, stylesheet or page of this site, whatever its extension.
+func setFileHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Security-Policy", fileContentSecurityPolicy)
+}
+
+// singleRange drops a Range header that asks for more than one range: the
+// file is then sent whole, and counted like any whole download.
+func singleRange(r *http.Request) {
+	if strings.Contains(r.Header.Get("Range"), ",") {
+		r.Header.Del("Range")
+	}
 }
 
 // rangeStart is the first byte a Range request asks for ("bytes=N-..."), 0
@@ -159,11 +188,11 @@ func DownloadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 			return
 		}
 
-		// A signed session cookie (passcookie.go); the server rejects it
-		// after passwordCookieTTL even if the browser keeps it.
+		// A signed session cookie (package passcookie); the server rejects it
+		// after passcookie.TTL even if the browser keeps it.
 		http.SetCookie(w, &http.Cookie{
 			Name:     downloadPasswordCookie + "_" + tok,
-			Value:    passwordCookieValue(cfg, "dl", tok, transfer.PasswordHash.String, time.Now()),
+			Value:    passcookie.Value(cfg, "dl", tok, transfer.PasswordHash.String, time.Now()),
 			Path:     "/dl/" + tok,
 			HttpOnly: true,
 			Secure:   cfg.Server.SecureCookies,
@@ -180,6 +209,7 @@ func DownloadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc
 // Validates token + file ownership, records the download event, streams the file.
 func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		singleRange(r)
 		tok := chi.URLParam(r, "token")
 		fileID := chi.URLParam(r, "fileID")
 		settings := appMiddleware.GetSettings(r)
@@ -278,6 +308,7 @@ func DownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager
 			Offset: rangeStart(r), Total: targetFile.SizeBytes,
 		})
 		defer act.Done()
+		setFileHeaders(w)
 		ra := newReadAhead(f)
 		defer ra.Close() // runs before f.Close: waits for reads still running
 		http.ServeContent(act.Writer(w), r, targetFile.OriginalName, modTime, ra)
@@ -353,7 +384,7 @@ func downloadPasswordValid(cfg *config.Config, r *http.Request, bcryptHash strin
 	if err != nil {
 		return false
 	}
-	return passwordCookieValid(cfg, "dl", tok, bcryptHash, cookie.Value, time.Now())
+	return passcookie.Valid(cfg, "dl", tok, bcryptHash, cookie.Value, time.Now())
 }
 
 // ── Template rendering ────────────────────────────────────────────────────────

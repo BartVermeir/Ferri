@@ -1,10 +1,14 @@
 package storage
 
 import (
+	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	tusd "github.com/tus/tusd/v2/pkg/handler"
 )
 
 func writeFiles(t *testing.T, root string, rel ...string) {
@@ -124,5 +128,44 @@ func TestSwap_ClosesOldBackendAfterLastUse(t *testing.T) {
 	m.Swap(&closeCounter{LocalBackend: NewLocalBackend(t.TempDir())})
 	if next.closed != 1 {
 		t.Fatalf("idle backend closed %d times on swap, want 1 (right away)", next.closed)
+	}
+}
+
+// Upload IDs come from the URL of a public route. Only the forms the stores
+// create reach the storage; a path outside the root is not found even when a
+// valid .info file lies there.
+func TestTUSDataStore_RejectsForeignIDs(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	info := `{"ID":"../outside","Size":4,"Offset":0,"MetaData":{},"Storage":{"Type":"filestore","Path":"` + filepath.Join(parent, "outside") + `"}}`
+	if err := os.WriteFile(filepath.Join(parent, "outside.info"), []byte(info), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(NewLocalBackend(root))
+	store := m.TUSDataStore()
+	ctx := context.Background()
+
+	for _, id := range []string{"../outside", "..%2Foutside", "connection", "", "ABCDEF0123456789ABCDEF0123456789", "0123456789abcdef0123456789abcdef/x"} {
+		if _, err := store.GetUpload(ctx, id); !errors.Is(err, tusd.ErrNotFound) {
+			t.Errorf("GetUpload(%q) = %v, want ErrNotFound", id, err)
+		}
+	}
+	if _, err := store.NewUpload(ctx, tusd.FileInfo{ID: "../x", Size: 1}); err == nil {
+		t.Error("NewUpload accepted the id ../x")
+	}
+
+	up, err := store.NewUpload(ctx, tusd.FileInfo{Size: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _ := up.GetInfo(ctx)
+	if _, err := store.GetUpload(ctx, created.ID); err != nil {
+		t.Errorf("GetUpload of a created upload (%q): %v", created.ID, err)
+	}
+	if !ValidTUSID("123e4567-e89b-12d3-a456-426614174000") {
+		t.Error("a UUID (the SMB store's form) is not accepted")
 	}
 }

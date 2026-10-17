@@ -77,6 +77,9 @@ func (b *LocalBackend) RemoveAll(path string) error {
 	if err != nil {
 		return err
 	}
+	if abs == b.root {
+		return errRemoveRoot
+	}
 	if err := os.RemoveAll(abs); err != nil && !os.IsNotExist(err) {
 		return err
 	}

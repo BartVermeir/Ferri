@@ -43,9 +43,14 @@ main() {
 	cd "$REPO_DIR"
 	git fetch --quiet --tags --force origin
 	VERSION="${1:-$(latest_tag)}"
-	if [[ -z "$VERSION" ]] || ! git rev-parse -q --verify "refs/tags/$VERSION^{commit}" >/dev/null; then
-		echo "ERROR: no release tag '${VERSION}'. Tag it on your dev machine:" >&2
+	if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || ! git rev-parse -q --verify "refs/tags/$VERSION^{commit}" >/dev/null; then
+		echo "ERROR: no release tag '${VERSION}' (vX.Y.Z). Tag it on your dev machine:" >&2
 		echo "  git tag vX.Y.Z && git push origin vX.Y.Z" >&2
+		exit 1
+	fi
+	# A release is a tag on main; CI ran on it when main was pushed.
+	if ! git merge-base --is-ancestor "refs/tags/$VERSION^{commit}" origin/main; then
+		echo "ERROR: tag $VERSION is not on origin/main. Nothing changed." >&2
 		exit 1
 	fi
 	git -c advice.detachedHead=false checkout --quiet "refs/tags/$VERSION"
@@ -57,8 +62,11 @@ main() {
 	fi
 
 	echo "==> Deploying $VERSION (running: $PREV)"
-	# --pull: always fetch the latest base images.
-	docker build --pull --build-arg VERSION="$VERSION" -t "ferri:$VERSION" -t ferri:latest .
+	# --pull: always fetch the latest base images. The build context is the
+	# tag's content (git archive), not the working tree: files changed or
+	# left behind in this checkout do not end up in the image.
+	git archive --format=tar "refs/tags/$VERSION" |
+		docker build --pull --build-arg VERSION="$VERSION" -t "ferri:$VERSION" -t ferri:latest -
 
 	wait_for_quiet
 
@@ -77,9 +85,10 @@ main() {
 	rollback
 }
 
-# latest_tag is the highest vX.Y.Z tag, by version number.
+# latest_tag is the highest vX.Y.Z tag, by version number. Other tag names
+# (v1.2.0-rc1, v2) are never a release.
 latest_tag() {
-	git tag --list 'v[0-9]*' --sort=-v:refname | sed -n 1p
+	git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true
 }
 
 # running_version is the tag pinned in the live compose file.

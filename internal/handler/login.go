@@ -34,6 +34,9 @@ const (
 	// loginLinksPerAddress links at most per address within loginLinkTTL;
 	// more requests get the same answer but no mail.
 	loginLinksPerAddress = 3
+	// loginLinksAll links at most for all addresses together within
+	// loginLinkTTL; past it, the same answer and no mail.
+	loginLinksAll = 20
 )
 
 // MailKicker starts sending queued mail right away (jobs.Scheduler).
@@ -76,7 +79,7 @@ func LoginRequest(cfg *config.Config, stores *store.Stores, kicker MailKicker) h
 			renderLogin(w, r, cfg, http.StatusBadRequest, loginPageData{State: "ask", Error: "Could not read the form. Please try again."})
 			return
 		}
-		email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+		email := withoutPlusTag(strings.ToLower(strings.TrimSpace(r.FormValue("email"))))
 		if !isValidEmail(email) {
 			renderLogin(w, r, cfg, http.StatusBadRequest, loginPageData{State: "ask", Email: email, Error: "Enter a valid email address."})
 			return
@@ -86,14 +89,14 @@ func LoginRequest(cfg *config.Config, stores *store.Stores, kicker MailKicker) h
 			return
 		}
 
-		tok, err := stores.Logins.Create(email, loginLinkTTL, loginLinkTTL, loginLinksPerAddress)
+		tok, err := stores.Logins.Create(email, loginLinkTTL, loginLinkTTL, loginLinksPerAddress, loginLinksAll)
 		if err != nil {
 			slog.Error("login: create link", "error", err)
 			renderLogin(w, r, cfg, http.StatusInternalServerError, loginPageData{State: "ask", Email: email, Error: "Something went wrong on our side. Please try again later."})
 			return
 		}
 		if tok == "" {
-			slog.Warn("login: link limit reached for an address")
+			slog.Warn("login: link limit reached")
 		} else {
 			settings := appMiddleware.GetSettings(r)
 			m := loginMail{
@@ -116,6 +119,16 @@ func LoginRequest(cfg *config.Config, stores *store.Stores, kicker MailKicker) h
 		}
 		renderLogin(w, r, cfg, http.StatusOK, loginPageData{State: "sent", Email: email})
 	}
+}
+
+// withoutPlusTag removes a "+tag" from the local part of an address
+// ("ann+x@example.com" → "ann@example.com"): the same mailbox, one address.
+func withoutPlusTag(email string) string {
+	at := strings.LastIndexByte(email, '@')
+	if plus := strings.IndexByte(email, '+'); plus >= 0 && plus < at {
+		return email[:plus] + email[at:]
+	}
+	return email
 }
 
 // LoginPage handles GET /login/{token}: a valid link shows a button that

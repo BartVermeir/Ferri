@@ -1,6 +1,6 @@
 # ── Stage 1: build ────────────────────────────────────────────────────────────
 # Pinned patch release: must match the toolchain line in go.mod.
-FROM golang:1.26.8-alpine AS builder
+FROM golang:1.26.9-alpine AS builder
 
 WORKDIR /app
 

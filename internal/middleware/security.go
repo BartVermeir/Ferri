@@ -1,6 +1,9 @@
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 // contentSecurityPolicy allows 'unsafe-inline' for styles only — every page
 // ships inline <style> blocks. All scripts are files under static/files/
@@ -15,6 +18,7 @@ const contentSecurityPolicy = "default-src 'self'; " +
 	"connect-src 'self'; " +
 	"object-src 'none'; " +
 	"base-uri 'none'; " +
+	"form-action 'self'; " +
 	"frame-ancestors 'none'"
 
 // SecurityHeaders adds standard defensive HTTP headers to every response.
@@ -27,6 +31,11 @@ func SecurityHeaders(secure bool) func(http.Handler) http.Handler {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
+			// Pages and files are private: no browser or proxy keeps a copy.
+			// Static assets (logo, scripts, styles) may be cached.
+			if !strings.HasPrefix(r.URL.Path, "/static/") && r.URL.Path != "/favicon.ico" {
+				w.Header().Set("Cache-Control", "no-store")
+			}
 			if secure {
 				w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 			}

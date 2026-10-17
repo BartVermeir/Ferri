@@ -113,3 +113,22 @@ func TestMayReuseSMBPassword(t *testing.T) {
 		}
 	}
 }
+
+// Saving as local with other SMB fields drops the saved password, so a later
+// test or save for that host cannot reuse it. The same fields keep it.
+func TestAdminStorageSave_LocalWithOtherHostDropsPassword(t *testing.T) {
+	cfg := newTestConfig()
+	for host, keep := range map[string]bool{"nas.example.test": true, "127.0.0.1:1": false} {
+		stores := savedSMBStores(t, cfg.Admin.Token)
+		form := smbForm(host)
+		form.Set("storage.type", "local")
+		form.Set("storage.local_path", t.TempDir())
+		rr := postForm(AdminStorageSave(cfg, stores, mustManager(t)), "/admin/settings/storage", form)
+		if loc := rr.Header().Get("Location"); !strings.Contains(loc, "storage_saved=1") {
+			t.Fatalf("%s: location = %q, want storage_saved", host, loc)
+		}
+		if got := stores.Settings.Get().SMBPasswordEncrypted != ""; got != keep {
+			t.Errorf("%s: saved password kept = %v, want %v", host, got, keep)
+		}
+	}
+}

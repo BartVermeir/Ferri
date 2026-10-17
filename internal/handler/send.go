@@ -56,6 +56,8 @@ const (
 	// body goes to /tmp, which is RAM in the container.
 	maxFormBytes = 1 << 20
 	maxSendBytes = 4 << 20
+	// maxPasswordBytes is the longest link password: bcrypt uses at most 72 bytes.
+	maxPasswordBytes = 72
 )
 
 // ── Send form ─────────────────────────────────────────────────────────────────
@@ -255,6 +257,10 @@ func SendCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// ── Password hashing ──────────────────────────────────────────────────
 
 		var passwordHash string
+		if len(password) > maxPasswordBytes {
+			jsonError(w, msgPasswordTooLong, http.StatusBadRequest)
+			return
+		}
 		if password != "" {
 			hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 			if err != nil {
@@ -383,6 +389,9 @@ func defaultTitle(files []store.CreateFileInput) string {
 	return first + suffix
 }
 
+// msgPasswordTooLong answers a link password over maxPasswordBytes.
+const msgPasswordTooLong = "The password is too long (at most 72 characters)."
+
 // isValidEmail is a minimal email validator. It checks for the presence of
 // exactly one '@' with non-empty local and domain parts. It is not a full
 // RFC 5322 check; the SMTP relay rejects invalid addresses at send time.
@@ -392,7 +401,11 @@ func isValidEmail(email string) bool {
 	if len(email) > 254 || strings.IndexFunc(email, func(r rune) bool { return r <= ' ' || r == 0x7f }) >= 0 {
 		return false
 	}
-	parts := strings.SplitN(email, "@", 2)
+	// One @, and none of the characters that separate or quote addresses.
+	if strings.ContainsAny(email, `,;:<>()[]"\`) {
+		return false
+	}
+	parts := strings.Split(email, "@")
 	if len(parts) != 2 {
 		return false
 	}

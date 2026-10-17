@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +30,35 @@ func TestLogoFileServerNoDirectoryListing(t *testing.T) {
 		srv.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
 		if rec.Code == http.StatusOK {
 			t.Fatalf("GET %s returned 200 (directory listing leaked): %q", p, rec.Body.String())
+		}
+	}
+}
+
+// A logo must be an image of the kind its extension says.
+func TestAdminLogoUpload_ChecksContent(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89")
+	for name, tc := range map[string]struct {
+		file    string
+		content []byte
+		saved   bool
+	}{
+		"png":         {"logo.png", png, true},
+		"html as png": {"logo.png", []byte("<html><script>alert(1)</script></html>"), false},
+		"png as jpg":  {"logo.jpg", png, false},
+	} {
+		cfg := newTestConfig()
+		cfg.Storage.Path = t.TempDir()
+		stores := newTestStores(t)
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		part, _ := w.CreateFormFile("logo", tc.file)
+		part.Write(tc.content)
+		w.Close()
+		req := httptest.NewRequest(http.MethodPost, "/admin/settings/logo", &body)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		AdminLogoUpload(cfg, stores).ServeHTTP(httptest.NewRecorder(), req)
+		if got := stores.Settings.Get().LogoURL != ""; got != tc.saved {
+			t.Errorf("%s: logo saved = %v, want %v", name, got, tc.saved)
 		}
 	}
 }

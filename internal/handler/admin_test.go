@@ -367,7 +367,7 @@ func TestAdminDelete_SendsSummaryForLiveTransferOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired, _, _ := mk("expired", true)
-	if err := stores.Transfers.SetExpired(expired); err != nil {
+	if _, err := stores.Transfers.SetExpired(expired); err != nil {
 		t.Fatal(err)
 	}
 	pending, _, _ := mk("pending", false)
@@ -737,7 +737,7 @@ func TestAdminDashboard_ExpiredNotCleanedUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	transferID := tf.TransferID
-	if err := stores.Transfers.SetExpired(transferID); err != nil {
+	if _, err := stores.Transfers.SetExpired(transferID); err != nil {
 		t.Fatal(err)
 	}
 	uploadTok, fileID, content := mustCreateUploadRequestWithFile(t, stores, root, "")
@@ -745,7 +745,7 @@ func TestAdminDashboard_ExpiredNotCleanedUp(t *testing.T) {
 	if err != nil || ur == nil {
 		t.Fatal(err)
 	}
-	if err := stores.Requests.SetExpired(ur.ID); err != nil {
+	if _, err := stores.Requests.SetExpired(ur.ID); err != nil {
 		t.Fatal(err)
 	}
 	// Past expiry but the hourly expiry job has not run yet: listed too.
@@ -901,5 +901,41 @@ func TestAdminSettings_PagesRender(t *testing.T) {
 	}
 	if body := get("/admin/settings/storage?orphans=3").Body.String(); !strings.Contains(body, "3 file(s) removed") {
 		t.Error("storage page does not report the orphan cleanup")
+	}
+}
+
+// An ID that is not a transfer or request deletes nothing on storage, also
+// when it would resolve to the storage root.
+func TestAdminDelete_UnknownIDLeavesStorage(t *testing.T) {
+	cfg := newTestConfig()
+	stores := newTestStores(t)
+	mgr, root := newTestManager(t)
+	r := newAdminRouter(cfg, stores, mgr)
+	cookie := adminSessionCookie(t, cfg)
+	writeStorageFile(t, root, "keep-me", []byte("data"))
+
+	form := url.Values{"transfer": {".."}, "request": {"..", "nope"}}
+	req := withOrigin(httptest.NewRequest(http.MethodPost, "/admin/delete", strings.NewReader(form.Encode())), cfg)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if loc := rr.Header().Get("Location"); loc != "/admin?deleted=0&failed=3" {
+		t.Errorf("Location = %q, want /admin?deleted=0&failed=3", loc)
+	}
+
+	one := withOrigin(httptest.NewRequest(http.MethodPost, "/admin/transfers/nope/delete", nil), cfg)
+	one.AddCookie(cookie)
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, one)
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("unknown transfer: status %d, want 404", rr.Code)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "keep-me")); err != nil {
+		t.Fatalf("storage file gone: %v", err)
+	}
+	if err := mgr.RemoveAll("transfers/.."); err == nil {
+		t.Error("RemoveAll of the storage root was not refused")
 	}
 }

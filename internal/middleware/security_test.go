@@ -32,7 +32,7 @@ func TestSecurityHeadersCSP(t *testing.T) {
 			t.Errorf("CSP still references external host %q: %q", host, csp)
 		}
 	}
-	for _, want := range []string{"object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'"} {
+	for _, want := range []string{"object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP missing %q", want)
 		}
@@ -52,5 +52,17 @@ func TestSecurityHeadersHSTSOnlyWhenSecure(t *testing.T) {
 		ServeHTTP(secure, httptest.NewRequest("GET", "/", nil))
 	if secure.Header().Get("Strict-Transport-Security") == "" {
 		t.Error("HSTS not set when secure_cookies is true")
+	}
+}
+
+// Pages are not cached; static assets may be.
+func TestSecurityHeadersNoStore(t *testing.T) {
+	h := SecurityHeaders(false)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	for path, want := range map[string]string{"/": "no-store", "/admin": "no-store", "/dl/x/file/y": "no-store", "/static/upload.js": "", "/favicon.ico": ""} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if got := rec.Header().Get("Cache-Control"); got != want {
+			t.Errorf("%s: Cache-Control = %q, want %q", path, got, want)
+		}
 	}
 }

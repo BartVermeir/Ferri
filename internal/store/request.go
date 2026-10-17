@@ -333,24 +333,24 @@ func (s *RequestStore) ClaimReminder(requestID string) (bool, error) {
 	return n == 1, nil
 }
 
-// Complete marks an upload request as completed.
-func (s *RequestStore) Complete(requestID string) error {
-	_, err := s.db.Exec(`
+// Complete marks an open upload request as completed; false when it was not
+// open (already completed, expired or deleted).
+func (s *RequestStore) Complete(requestID string) (bool, error) {
+	return execChanged(s.db.Exec(`
 		UPDATE upload_requests
 		SET status = 'completed', completed_at = unixepoch()
-		WHERE id = ?`, requestID,
-	)
-	return err
+		WHERE id = ? AND status = 'open'`, requestID,
+	))
 }
 
-// SetExpired marks an upload request as expired.
-func (s *RequestStore) SetExpired(requestID string) error {
-	_, err := s.db.Exec(`
+// SetExpired marks an open upload request as expired; false when it was not
+// open.
+func (s *RequestStore) SetExpired(requestID string) (bool, error) {
+	return execChanged(s.db.Exec(`
 		UPDATE upload_requests
 		SET status = 'expired', expired_at = unixepoch()
-		WHERE id = ?`, requestID,
-	)
-	return err
+		WHERE id = ? AND status = 'open'`, requestID,
+	))
 }
 
 // SoftDelete marks an upload request as deleted (files physically removed).
@@ -397,7 +397,8 @@ func (s *RequestStore) GetExpired() ([]UploadRequest, error) {
 }
 
 // GetForCleanup returns upload requests whose files still need physical
-// deletion: deleted ones, and expired or completed ones past the grace period.
+// deletion: deleted ones with a file not deleted yet, and expired or completed
+// ones past the grace period, also without any file left.
 func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, requester_name, requester_email,
@@ -412,10 +413,13 @@ func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 		              AND COALESCE(expired_at, expires_at) < (unixepoch() - ? * 3600)
 		           )
 		      )
-		  AND EXISTS (
-		        SELECT 1 FROM upload_request_files
-		        WHERE upload_request_files.upload_request_id = upload_requests.id
-		          AND upload_request_files.status != 'deleted'
+		  AND (
+		        status != 'deleted'
+		        OR EXISTS (
+		              SELECT 1 FROM upload_request_files
+		              WHERE upload_request_files.upload_request_id = upload_requests.id
+		                AND upload_request_files.status != 'deleted'
+		           )
 		      )`,
 		graceHours,
 	)
@@ -427,17 +431,19 @@ func (s *RequestStore) GetForCleanup(graceHours int) ([]UploadRequest, error) {
 }
 
 // ValidateForTUS checks that an upload request token is valid for TUS upload.
-func (s *RequestStore) ValidateForTUS(uploadToken string) (string, bool, error) {
+// It returns the request's ID and password hash (NULL = no password).
+func (s *RequestStore) ValidateForTUS(uploadToken string) (string, sql.NullString, bool, error) {
 	var id string
+	var passwordHash sql.NullString
 	err := s.db.QueryRow(`
-		SELECT id FROM upload_requests
+		SELECT id, password_hash FROM upload_requests
 		WHERE upload_token = ? AND status = 'open' AND expires_at > unixepoch()`,
 		uploadToken,
-	).Scan(&id)
+	).Scan(&id, &passwordHash)
 	if err == sql.ErrNoRows {
-		return "", false, nil
+		return "", sql.NullString{}, false, nil
 	}
-	return id, true, err
+	return id, passwordHash, true, err
 }
 
 // GetFiles returns files for an upload request.

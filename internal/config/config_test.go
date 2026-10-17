@@ -202,3 +202,41 @@ func TestRemoteLoginAllows(t *testing.T) {
 		}
 	}
 }
+
+func TestWarnings(t *testing.T) {
+	_, allow, _ := net.ParseCIDR("192.0.2.0/24")
+	_, gw, _ := net.ParseCIDR("198.51.100.1/32")
+	_, wide, _ := net.ParseCIDR("10.0.0.0/8")
+	good := func() *Config {
+		c := validConfig()
+		c.Server.SecureCookies = true
+		c.IPAllowlist = []*net.IPNet{allow}
+		c.TrustedProxies = []*net.IPNet{gw}
+		return c
+	}
+	if w := good().Warnings(); len(w) != 0 {
+		t.Fatalf("a sound config warns: %v", w)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"http base_url":      func(c *Config) { c.Server.BaseURL = "http://send.example.com" },
+		"trailing slash":     func(c *Config) { c.Server.BaseURL += "/" },
+		"no secure cookies":  func(c *Config) { c.Server.SecureCookies = false },
+		"smtp without tls":   func(c *Config) { c.SMTP.TLS = "none" },
+		"empty allowlist":    func(c *Config) { c.IPAllowlist = nil },
+		"wide trusted proxy": func(c *Config) { c.TrustedProxies = []*net.IPNet{wide} },
+	} {
+		c := good()
+		mutate(c)
+		if w := c.Warnings(); len(w) != 1 {
+			t.Errorf("%s: warnings %v, want one", name, w)
+		}
+	}
+}
+
+func TestValidateExpiryOptionHours(t *testing.T) {
+	c := validConfig()
+	c.ExpiryOptions = []ExpiryOption{{Label: "never", Hours: 0}}
+	if err := c.validate(); err == nil || !strings.Contains(err.Error(), "expiry_options") {
+		t.Fatalf("hours 0 accepted: %v", err)
+	}
+}

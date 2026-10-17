@@ -257,8 +257,9 @@ func TxFunc(db *sql.DB, fn func(tx *sql.Tx) error) error {
 	if err != nil {
 		return err
 	}
+	// Also on a panic in fn: the connection goes back to the pool.
+	defer tx.Rollback()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

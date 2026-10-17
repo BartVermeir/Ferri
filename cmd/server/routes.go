@@ -16,6 +16,10 @@ import (
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
+// maxRequestBody caps the body of every request outside /tus; the largest
+// legitimate one is a /send with its file list (handler's maxSendBytes).
+const maxRequestBody = 4 << 20
+
 // newRouter wires every route with its middleware. router_test.go tests this
 // wiring.
 func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, storageMgr *storage.Manager, tusHandler http.Handler, scheduler *jobs.Scheduler) http.Handler {
@@ -25,6 +29,7 @@ func newRouter(cfg *config.Config, database *sql.DB, stores *store.Stores, stora
 	r.Use(chimiddleware.RequestID)
 	r.Use(middleware.Recovery())
 	r.Use(middleware.SecurityHeaders(cfg.Server.SecureCookies))
+	r.Use(middleware.BodyLimit(maxRequestBody))
 	r.Use(middleware.InjectSettings(stores.Settings))
 
 	// Brute-force limiter for credential submissions: 10 attempts per minute,

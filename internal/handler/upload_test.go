@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -484,8 +485,8 @@ func TestUploadComplete_WaitsForLastFileToSettle(t *testing.T) {
 	}
 }
 
-// A row that never settles (an abandoned attempt) must not hang the request:
-// after the timeout the request completes and the mail lists what is complete.
+// The wait for the hook is bounded. A request whose only file is still not
+// complete after it stays open, without a mail: there is nothing received yet.
 func TestUploadComplete_GivesUpAfterTimeout(t *testing.T) {
 	old := requestFilesSettleTimeout
 	requestFilesSettleTimeout = 150 * time.Millisecond
@@ -505,11 +506,11 @@ func TestUploadComplete_GivesUpAfterTimeout(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
-	if open, _ := stores.Requests.GetByUploadToken(tok); open != nil {
-		t.Fatal("request should be completed after the timeout")
+	if open, _ := stores.Requests.GetByUploadToken(tok); open == nil {
+		t.Fatal("request completed without a complete file")
 	}
-	if m := receivedMail(t, stores); strings.Contains(m.BodyText, "last.mov") {
-		t.Fatalf("unfinished file listed in the mail: %q", m.BodyText)
+	if items, _ := stores.Mail.FetchPending(10); len(items) != 0 {
+		t.Fatalf("got %d mails, want none", len(items))
 	}
 }
 
@@ -559,7 +560,7 @@ func TestViewToken_CannotUploadOrComplete(t *testing.T) {
 	if rr.Code != http.StatusNotFound {
 		t.Errorf("POST /complete with the view token: status = %d, want 404", rr.Code)
 	}
-	if _, ok, err := stores.Requests.ValidateForTUS(viewTok); err != nil || ok {
+	if _, _, ok, err := stores.Requests.ValidateForTUS(viewTok); err != nil || ok {
 		t.Errorf("TUS accepted the view token (ok=%v, err=%v)", ok, err)
 	}
 	if open, _ := stores.Requests.GetByUploadToken(uploadTok); open == nil {
@@ -657,4 +658,63 @@ func TestUploadPage_CarriesLimits(t *testing.T) {
 			t.Errorf("upload page lacks %s", want)
 		}
 	}
+}
+
+// The right password also gives /tus the cookie, and so does every view of
+// the unlocked upload page (a browser unlocked before /tus needed it).
+func TestUploadPassword_CookieForTUS(t *testing.T) {
+	stores := newTestStores(t)
+	mgr, root := newTestManager(t)
+	hash, err := bcrypt.GenerateFromPassword([]byte("s3cret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, _, _ := mustCreateUploadRequestWithFile(t, stores, root, string(hash))
+	r := newUploadRouter(newTestConfig(), stores, mgr)
+
+	byPath := func(cs []*http.Cookie) map[string]*http.Cookie {
+		m := map[string]*http.Cookie{}
+		for _, c := range cs {
+			m[c.Path] = c
+		}
+		return m
+	}
+	got := byPath(postPassword(r, "/ul/"+tok, "s3cret").Result().Cookies())
+	ul, tus := got["/ul/"+tok], got["/tus"]
+	if ul == nil || tus == nil {
+		t.Fatalf("cookies after the password: %v, want one for /ul/%s and one for /tus", got, tok)
+	}
+	if tus.Value != ul.Value || !tus.HttpOnly {
+		t.Errorf("/tus cookie = %+v, want the /ul value and HttpOnly", tus)
+	}
+
+	page := httptest.NewRequest(http.MethodGet, "/ul/"+tok, nil)
+	page.AddCookie(&http.Cookie{Name: ul.Name, Value: ul.Value})
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, page)
+	if c := byPath(rr.Result().Cookies())["/tus"]; c == nil || c.Value != ul.Value {
+		t.Errorf("upload page did not set the /tus cookie: %v", rr.Result().Cookies())
+	}
+}
+
+// Simultaneous /complete POSTs complete the request once and mail once.
+func TestUploadComplete_ConcurrentMailsOnce(t *testing.T) {
+	stores := newTestStores(t)
+	mgr, root := newTestManager(t)
+	if err := stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	tok, _, _ := mustCreateUploadRequestWithFile(t, stores, root, "")
+	r := newUploadRouter(newTestConfig(), stores, mgr)
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/ul/"+tok+"/complete", nil))
+		}()
+	}
+	wg.Wait()
+	receivedMail(t, stores)
 }

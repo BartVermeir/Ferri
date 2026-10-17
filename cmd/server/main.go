@@ -62,6 +62,9 @@ func main() {
 	for _, k := range cfg.UnknownKeys {
 		slog.Warn("config.yaml: unknown key, ignored — check for a typo", "key", k)
 	}
+	for _, w := range cfg.Warnings() {
+		slog.Warn("config: " + w)
+	}
 	if overlap := cfg.ProxiesInAllowlist(); len(overlap) > 0 {
 		slog.Warn("trusted_proxies overlap ip_allowlist: a request forwarded without X-Real-IP would be treated as internal — remove the proxy IP from ip_allowlist",
 			"proxies", overlap)

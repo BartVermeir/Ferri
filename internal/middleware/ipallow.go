@@ -45,7 +45,7 @@ func logBlocked(ip string, r *http.Request) {
 		slog.Warn("ip allowlist: could not parse client IP", "raw", ip)
 		return
 	}
-	slog.Warn("ip allowlist: blocked", "ip", ip, "path", r.URL.Path)
+	slog.Warn("ip allowlist: blocked", "ip", ip, "route", firstSegment(r.URL.Path))
 }
 
 // forwardedClient picks the visitor from an X-Forwarded-For chain: the

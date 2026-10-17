@@ -436,3 +436,15 @@ func TestSendCreate_EmptyTitleGetsFileName(t *testing.T) {
 		t.Fatalf("title = %q", title)
 	}
 }
+
+// A password longer than bcrypt takes is a clear 400, not a 500.
+func TestSendCreate_PasswordTooLong(t *testing.T) {
+	stores := newTestStores(t)
+	code, msg := postSendMultipart(t, stores, func(w *multipart.Writer) {
+		w.WriteField("files", `[{"name":"a.pdf","size":1}]`)
+		w.WriteField("password", strings.Repeat("p", maxPasswordBytes+1))
+	})
+	if code != http.StatusBadRequest || msg != msgPasswordTooLong {
+		t.Fatalf("status = %d, error = %q; want 400 and the length message", code, msg)
+	}
+}

@@ -168,6 +168,28 @@ func TestLogin_OnlyAllowedDomainsAndLimit(t *testing.T) {
 	if toks := signInLinks(t, stores, "alice@example.com"); len(toks) != loginLinksPerAddress {
 		t.Fatalf("sign-in mails = %d, want %d", len(toks), loginLinksPerAddress)
 	}
+
+	// A +tag is the same address and the same limit.
+	if rr := loginDo(r, "POST", "/login", url.Values{"email": {"alice+x@example.com"}}); rr.Code != http.StatusOK {
+		t.Fatalf("+tag: %d", rr.Code)
+	}
+	if toks := signInLinks(t, stores, "alice@example.com"); len(toks) != loginLinksPerAddress {
+		t.Fatalf("after a +tag request: sign-in mails = %d, want %d", len(toks), loginLinksPerAddress)
+	}
+	if toks := signInLinks(t, stores, "alice+x@example.com"); len(toks) != 0 {
+		t.Fatalf("mail to the +tag address: %d", len(toks))
+	}
+}
+
+func TestWithoutPlusTag(t *testing.T) {
+	for in, want := range map[string]string{
+		"ann+x@example.com": "ann@example.com", "ann@example.com": "ann@example.com",
+		"a+b+c@example.com": "a@example.com", "ann@ex+ample.com": "ann@ex+ample.com", "plain": "plain",
+	} {
+		if got := withoutPlusTag(in); got != want {
+			t.Errorf("withoutPlusTag(%q) = %q, want %q", in, got, want)
+		}
+	}
 }
 
 // A signed-in colleague sends and requests as the signed-in address,

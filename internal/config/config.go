@@ -248,6 +248,34 @@ func (c *Config) ProxiesInAllowlist() []string {
 	return out
 }
 
+// Warnings returns settings that work but weaken security or break links,
+// for the startup log.
+func (c *Config) Warnings() []string {
+	var w []string
+	https := strings.HasPrefix(c.Server.BaseURL, "https://")
+	if !https {
+		w = append(w, "server.base_url does not start with https://: the links in mails carry their tokens unencrypted")
+	}
+	if strings.HasSuffix(c.Server.BaseURL, "/") {
+		w = append(w, "server.base_url ends with /: links get a double slash")
+	}
+	if https && !c.Server.SecureCookies {
+		w = append(w, "server.secure_cookies is false while base_url is https: cookies would also be sent over http")
+	}
+	if strings.EqualFold(c.SMTP.TLS, "none") {
+		w = append(w, "smtp.tls is none: mail and the SMTP password travel unencrypted")
+	}
+	if len(c.IPAllowlist) == 0 {
+		w = append(w, "ip_allowlist is empty: every internal page answers 403")
+	}
+	for _, p := range c.TrustedProxies {
+		if ones, bits := p.Mask.Size(); bits-ones > 8 {
+			w = append(w, "trusted_proxies "+p.String()+" is a wide range: any client in it can choose the IP Ferri sees")
+		}
+	}
+	return w
+}
+
 func (c *Config) validate() error {
 	if c.Server.BaseURL == "" {
 		return fmt.Errorf("server.base_url is required")
@@ -286,6 +314,11 @@ func (c *Config) validate() error {
 	}
 	if c.Jobs.ExpiryIntervalMinutes <= 0 {
 		c.Jobs.ExpiryIntervalMinutes = d.Jobs.ExpiryIntervalMinutes
+	}
+	for _, opt := range c.ExpiryOptions {
+		if opt.Hours <= 0 {
+			return fmt.Errorf("expiry_options: %q has hours %d, must be more than 0", opt.Label, opt.Hours)
+		}
 	}
 	if c.Jobs.CleanupIntervalHours <= 0 {
 		c.Jobs.CleanupIntervalHours = d.Jobs.CleanupIntervalHours

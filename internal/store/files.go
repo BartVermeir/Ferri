@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 type FilesStore struct {
@@ -130,4 +131,20 @@ func (s *FilesStore) MarkPurged(table FileTable, fileID string) error {
 	}
 	_, err := s.db.Exec(query, fileID)
 	return err
+}
+
+// ActiveUploadBytes is the total size of the files still uploading (transfer
+// and request) with a chunk, or their creation, within idle.
+func (s *FilesStore) ActiveUploadBytes(idle time.Duration) (int64, error) {
+	var n int64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(size_bytes), 0) FROM (
+			SELECT size_bytes FROM files
+			WHERE status = 'uploading' AND COALESCE(tus_last_activity_at, created_at) > unixepoch() - ?1
+			UNION ALL
+			SELECT size_bytes FROM upload_request_files
+			WHERE status = 'uploading' AND COALESCE(tus_last_activity_at, created_at) > unixepoch() - ?1
+		)`, int64(idle.Seconds()),
+	).Scan(&n)
+	return n, err
 }

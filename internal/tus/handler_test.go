@@ -6,6 +6,7 @@ package tus
 // and produce the metadata the completion hooks rely on.
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -21,11 +22,18 @@ import (
 	"github.com/BartVermeir/Ferri/internal/activity"
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/db"
+	"github.com/BartVermeir/Ferri/internal/passcookie"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
 )
 
 func newTestHandler(t *testing.T) (*Handler, *config.Config, *store.Stores) {
+	t.Helper()
+	h, cfg, stores, _ := newTestHandlerDB(t)
+	return h, cfg, stores
+}
+
+func newTestHandlerDB(t *testing.T) (*Handler, *config.Config, *store.Stores, *sql.DB) {
 	t.Helper()
 
 	cfg := config.Defaults()
@@ -52,7 +60,7 @@ func newTestHandler(t *testing.T) (*Handler, *config.Config, *store.Stores) {
 	if err != nil {
 		t.Fatalf("new tus handler: %v", err)
 	}
-	return h, cfg, stores
+	return h, cfg, stores, d
 }
 
 func mustCreatePendingTransfer(t *testing.T, stores *store.Stores) string {
@@ -449,5 +457,123 @@ func TestTUSPatch_RegisteredWhileRunning(t *testing.T) {
 	}
 	if u.Files != 1 || u.End.IsZero() {
 		t.Fatalf("upload stats = %+v, want 1 file with its last activity", u)
+	}
+}
+
+// A request with a password accepts an upload only with the password cookie
+// the upload page sets for /tus.
+func TestPreUploadCreate_RequestPasswordNeedsCookie(t *testing.T) {
+	h, cfg, stores := newTestHandler(t)
+	hash := "$2a$10$abcdefghijklmnopqrstuuvwxyzABCDEFGHIJKLMNOPQRSTUVWXY"
+	_, uploadToken, err := stores.Requests.Create(store.CreateRequestInput{
+		Title:          "Protected",
+		RequesterEmail: "alice@example.com",
+		PasswordHash:   hash,
+		ExpiresAt:      time.Now().Add(24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	try := func(cookie string) (tusd.HTTPResponse, error) {
+		hdr := http.Header{}
+		if cookie != "" {
+			hdr.Set("Cookie", passcookie.UploadName(uploadToken)+"="+cookie)
+		}
+		resp, _, err := h.preUploadCreate(tusd.HookEvent{
+			Upload:      tusd.FileInfo{Size: 10, MetaData: tusd.MetaData{"upload_request_token": uploadToken, "filename": "a.pdf"}},
+			HTTPRequest: tusd.HTTPRequest{Header: hdr},
+		})
+		return resp, err
+	}
+
+	for name, cookie := range map[string]string{
+		"no cookie":         "",
+		"garbage":           "1.x",
+		"another link":      passcookie.Value(cfg, "ul", "otherToken", hash, time.Now()),
+		"the download type": passcookie.Value(cfg, "dl", uploadToken, hash, time.Now()),
+	} {
+		if resp, err := try(cookie); err == nil || resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s: status %d, err %v; want 403", name, resp.StatusCode, err)
+		}
+	}
+	if _, err := try(passcookie.Value(cfg, "ul", uploadToken, hash, time.Now())); err != nil {
+		t.Errorf("valid cookie rejected: %v", err)
+	}
+}
+
+// Uploads still running count for the free space check; one idle for over an
+// hour does not.
+func TestPreUploadCreate_RunningUploadsCountForFreeSpace(t *testing.T) {
+	h, _, stores, d := newTestHandlerDB(t)
+	transferID := mustCreatePendingTransfer(t, stores)
+	if err := stores.Transfers.CreateFileRow("running", transferID, "big.mov", "p/running", 1<<60); err != nil {
+		t.Fatal(err)
+	}
+	create := func() (tusd.HTTPResponse, error) {
+		resp, _, err := h.preUploadCreate(tusd.HookEvent{Upload: tusd.FileInfo{
+			Size: 10, MetaData: tusd.MetaData{"transfer_id": transferID, "filename": "a.bin"},
+		}})
+		return resp, err
+	}
+	if resp, err := create(); err == nil || resp.StatusCode != http.StatusInsufficientStorage {
+		t.Fatalf("with a running upload of 1 EiB: status %d, err %v; want 507", resp.StatusCode, err)
+	}
+	if _, err := d.Exec(`UPDATE files SET tus_last_activity_at = unixepoch() - 7200, created_at = unixepoch() - 7200 WHERE id = 'running'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := create(); err != nil {
+		t.Fatalf("with that upload idle for 2 hours: %v", err)
+	}
+}
+
+// Data in a create request is not written, and a POST with a method override
+// is handled (and registered) as the PATCH it stands for.
+func TestTUS_DataOnlyThroughRegisteredPatch(t *testing.T) {
+	h, _, stores := newTestHandler(t)
+	transferID := mustCreatePendingTransfer(t, stores)
+	b64 := func(v string) string { return base64.StdEncoding.EncodeToString([]byte(v)) }
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("0123456789"))
+	req.Header.Set("Tus-Resumable", "1.0.0")
+	req.Header.Set("Upload-Length", "10")
+	req.Header.Set("Upload-Metadata", "transfer_id "+b64(transferID)+",filename "+b64("a.bin"))
+	req.Header.Set("Content-Type", "application/offset+octet-stream")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: status %d, body %q", rec.Code, rec.Body.String())
+	}
+	if off := rec.Header().Get("Upload-Offset"); off != "" && off != "0" {
+		t.Fatalf("create with data wrote %s bytes", off)
+	}
+	id := path.Base(rec.Header().Get("Location"))
+
+	var during []activity.Running
+	body := &peekBody{Reader: strings.NewReader("0123456789"), peek: func() {
+		during = activity.Default.Snapshot().Running
+	}}
+	req = httptest.NewRequest(http.MethodPost, "/"+id, body)
+	req.Header.Set("Tus-Resumable", "1.0.0")
+	req.Header.Set("X-HTTP-Method-Override", "PATCH")
+	req.Header.Set("Upload-Offset", "0")
+	req.Header.Set("Content-Type", "application/offset+octet-stream")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Upload-Offset") != "10" {
+		t.Fatalf("override patch: status %d, offset %q", rec.Code, rec.Header().Get("Upload-Offset"))
+	}
+	if len(during) != 1 || during[0].UploadID != id {
+		t.Fatalf("override patch not registered while running: %+v", during)
+	}
+
+	req = httptest.NewRequest(http.MethodHead, "/"+id, nil)
+	req.Header.Set("Tus-Resumable", "1.0.0")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Upload-Offset") != "10" {
+		t.Fatalf("head: status %d, offset %q", rec.Code, rec.Header().Get("Upload-Offset"))
+	}
+	if m := rec.Header().Get("Upload-Metadata"); m != "" {
+		t.Fatalf("head returns the metadata: %q", m)
 	}
 }

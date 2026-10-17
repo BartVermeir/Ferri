@@ -3,8 +3,12 @@ name: CI
 on:
   push:
     branches: ["**"]
+    tags: ["v*"]
   pull_request:
     branches: ["**"]
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -33,9 +37,10 @@ jobs:
       - run: go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
       - run: govulncheck ./...
 
-  # Checks that the Docker image builds.
+  # Checks that the Docker image builds, the way scripts/deploy.sh builds it:
+  # from the committed content (git archive), not the working tree.
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: docker build --build-arg VERSION=ci -t ferri:ci .
+      - run: git archive --format=tar HEAD | docker build --build-arg VERSION=ci -t ferri:ci -

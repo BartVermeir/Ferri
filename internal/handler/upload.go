@@ -30,12 +30,11 @@ import (
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
 	appMiddleware "github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/passcookie"
 	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
 )
-
-const uploadPasswordCookie = "ferri_ul_auth"
 
 // ── Upload page ───────────────────────────────────────────────────────────────
 
@@ -66,6 +65,8 @@ func UploadPage(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 				renderUploadPasswordPage(w, tok, settings, "")
 				return
 			}
+			c, _ := r.Cookie(passcookie.UploadName(tok))
+			setUploadTUSCookie(w, cfg, tok, c.Value)
 		}
 
 		renderUploadPage(w, cfg, tok, req, settings)
@@ -103,7 +104,8 @@ func UploadPassword(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			return
 		}
 
-		setUploadPasswordCookie(w, cfg, tok, req.PasswordHash.String)
+		value := setUploadPasswordCookie(w, cfg, tok, req.PasswordHash.String)
+		setUploadTUSCookie(w, cfg, tok, value)
 		http.Redirect(w, r, "/ul/"+tok, http.StatusSeeOther)
 	}
 }
@@ -146,16 +148,28 @@ func RequestFilesPassword(cfg *config.Config, stores *store.Stores) http.Handler
 }
 
 // setUploadPasswordCookie unlocks every /ul/:token/* route (upload page, file
-// listing, single file, ZIP) for the browser session.
-func setUploadPasswordCookie(w http.ResponseWriter, cfg *config.Config, tok, bcryptHash string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     uploadPasswordCookie + "_" + tok,
-		Value:    passwordCookieValue(cfg, "ul", tok, bcryptHash, time.Now()),
-		Path:     "/ul/" + tok,
+// listing, single file, ZIP) for the browser session. It returns the value.
+func setUploadPasswordCookie(w http.ResponseWriter, cfg *config.Config, tok, bcryptHash string) string {
+	value := passcookie.Value(cfg, "ul", tok, bcryptHash, time.Now())
+	http.SetCookie(w, uploadCookie(cfg, tok, value, "/ul/"+tok))
+	return value
+}
+
+// setUploadTUSCookie sends the upload page's password cookie along with the
+// uploads to /tus, where the hook checks it before a file is created.
+func setUploadTUSCookie(w http.ResponseWriter, cfg *config.Config, tok, value string) {
+	http.SetCookie(w, uploadCookie(cfg, tok, value, "/tus"))
+}
+
+func uploadCookie(cfg *config.Config, tok, value, path string) *http.Cookie {
+	return &http.Cookie{
+		Name:     passcookie.UploadName(tok),
+		Value:    value,
+		Path:     path,
 		HttpOnly: true,
 		Secure:   cfg.Server.SecureCookies,
 		SameSite: http.SameSiteStrictMode,
-	})
+	}
 }
 
 // ── Upload complete ───────────────────────────────────────────────────────────
@@ -193,14 +207,27 @@ func UploadComplete(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		if len(files) == 0 {
+		completeFiles := 0
+		for _, f := range files {
+			if f.Status == "complete" {
+				completeFiles++
+			}
+		}
+		if completeFiles == 0 {
 			renderUploadPage(w, cfg, tok, req, settings)
 			return
 		}
 
-		if err := stores.Requests.Complete(req.ID); err != nil {
+		// Only the request that goes from open to completed here mails;
+		// a second, simultaneous POST sees it done.
+		changed, err := stores.Requests.Complete(req.ID)
+		if err != nil {
 			slog.Error("upload complete: mark completed", "request_id", req.ID, "error", err)
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		if !changed {
+			renderUploadComplete(w, req, settings)
 			return
 		}
 
@@ -282,14 +309,14 @@ func waitForRequestFiles(ctx context.Context, requests *store.RequestStore, requ
 
 // ── Password cookie ───────────────────────────────────────────────────────────
 
-// uploadPasswordValid checks the signed password cookie (passcookie.go) for
-// this link and the request's current password.
+// uploadPasswordValid checks the signed password cookie (package passcookie)
+// for this link and the request's current password.
 func uploadPasswordValid(cfg *config.Config, r *http.Request, tok, bcryptHash string) bool {
-	cookie, err := r.Cookie(uploadPasswordCookie + "_" + tok)
+	cookie, err := r.Cookie(passcookie.UploadName(tok))
 	if err != nil {
 		return false
 	}
-	return passwordCookieValid(cfg, "ul", tok, bcryptHash, cookie.Value, time.Now())
+	return passcookie.Valid(cfg, "ul", tok, bcryptHash, cookie.Value, time.Now())
 }
 
 // ── Mail body builders ────────────────────────────────────────────────────────
@@ -419,6 +446,7 @@ func RequestDownloadPage(cfg *config.Config, stores *store.Stores) http.HandlerF
 // RequestDownloadFile handles GET /ul/:token/file/:fileID — stream uploaded file.
 func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		singleRange(r)
 		tok := chi.URLParam(r, "token")
 		fileID := chi.URLParam(r, "fileID")
 
@@ -455,6 +483,7 @@ func RequestDownloadFile(cfg *config.Config, stores *store.Stores, mgr *storage.
 			Offset: rangeStart(r), Total: target.SizeBytes,
 		})
 		defer act.Done()
+		setFileHeaders(w)
 		ra := newReadAhead(f)
 		defer ra.Close() // runs before f.Close: waits for reads still running
 		http.ServeContent(act.Writer(w), r, target.OriginalName, time.Time{}, ra)

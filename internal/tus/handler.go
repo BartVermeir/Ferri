@@ -39,6 +39,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	tusd "github.com/tus/tusd/v2/pkg/handler"
 	"github.com/tus/tusd/v2/pkg/memorylocker"
@@ -47,6 +48,7 @@ import (
 	"github.com/BartVermeir/Ferri/internal/config"
 	"github.com/BartVermeir/Ferri/internal/mail"
 	"github.com/BartVermeir/Ferri/internal/middleware"
+	"github.com/BartVermeir/Ferri/internal/passcookie"
 	"github.com/BartVermeir/Ferri/internal/relpath"
 	"github.com/BartVermeir/Ferri/internal/storage"
 	"github.com/BartVermeir/Ferri/internal/store"
@@ -127,6 +129,16 @@ func NewHandler(cfg *config.Config, stores *store.Stores, mgr *storage.Manager) 
 // admin dashboard shows it; after a successful PATCH, records activity on the
 // file row.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Data only arrives through a PATCH that is registered here: an override
+	// header becomes the method, and a create request's body is not read
+	// (without its Content-Type tusd ignores it; the client then PATCHes).
+	if m := r.Header.Get("X-HTTP-Method-Override"); r.Method == http.MethodPost && m != "" {
+		r.Method = strings.ToUpper(m)
+		r.Header.Del("X-HTTP-Method-Override")
+	}
+	if r.Method == http.MethodPost && r.Header.Get("Content-Type") == "application/offset+octet-stream" {
+		r.Header.Del("Content-Type")
+	}
 	if r.Method == http.MethodPatch {
 		offset, _ := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
 		act := activity.Default.Start(activity.Info{
@@ -138,7 +150,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer act.Done()
 		r.Body = act.Body(r.Body)
 	}
-	rw := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
+	// A HEAD answers the offset; the upload's metadata is Ferri's own.
+	rw := &responseRecorder{ResponseWriter: w, status: http.StatusOK, dropMeta: r.Method == http.MethodHead}
 	h.handler.ServeHTTP(rw, r)
 
 	if r.Method == http.MethodPatch && rw.status >= 200 && rw.status < 300 {
@@ -156,7 +169,7 @@ func (h *Handler) preUploadCreate(hook tusd.HookEvent) (tusd.HTTPResponse, tusd.
 		return h.preCreateTransferFile(transferID, meta, size, hook.HTTPRequest.Header.Get("User-Agent"))
 	}
 	if reqToken, ok := meta["upload_request_token"]; ok {
-		return h.preCreateRequestFile(reqToken, meta, size)
+		return h.preCreateRequestFile(reqToken, meta, size, hook.HTTPRequest.Header)
 	}
 
 	return rejectWith(http.StatusBadRequest,
@@ -232,18 +245,27 @@ func (h *Handler) preCreateTransferFile(
 	return tusd.HTTPResponse{}, tusd.FileInfoChanges{MetaData: changes}, nil
 }
 
+// preCreateRequestFile checks the upload token and, for a request with a
+// password, the password cookie the upload page set for /tus.
 func (h *Handler) preCreateRequestFile(
 	uploadToken string,
 	meta tusd.MetaData,
 	uploadLength int64,
+	header http.Header,
 ) (tusd.HTTPResponse, tusd.FileInfoChanges, error) {
-	requestID, valid, err := h.stores.Requests.ValidateForTUS(uploadToken)
+	requestID, passwordHash, valid, err := h.stores.Requests.ValidateForTUS(uploadToken)
 	if err != nil {
 		slog.Error("tus: validate request token", "error", err)
 		return rejectWith(http.StatusInternalServerError, "internal error")
 	}
 	if !valid {
 		return rejectWith(http.StatusForbidden, "upload request not found or expired")
+	}
+	if passwordHash.Valid {
+		c, err := (&http.Request{Header: header}).Cookie(passcookie.UploadName(uploadToken))
+		if err != nil || !passcookie.Valid(h.cfg, "ul", uploadToken, passwordHash.String, c.Value, time.Now()) {
+			return rejectWith(http.StatusForbidden, "This upload link needs its password. Reload the page and enter it again.")
+		}
 	}
 
 	if uploadLength > h.cfg.Limits.MaxUploadBytes {
@@ -296,18 +318,28 @@ func maxTransferFileRows(expected sql.NullInt64, maxFilesPerTransfer int) int {
 	return 2 * n
 }
 
+// activeUploadIdle: an upload without a chunk for this long no longer counts
+// as running for the free space check.
+const activeUploadIdle = time.Hour
+
 // freeSpaceShort reports whether an upload would leave less than
-// limits.min_free_bytes free on storage. When the backend cannot report its
-// free space the upload goes ahead (logged).
+// limits.min_free_bytes free on storage, counting the full size of the
+// uploads still running (what they wrote already counts twice). When the
+// backend cannot report its free space the upload goes ahead (logged).
 func (h *Handler) freeSpaceShort(uploadLength int64) bool {
 	free, err := h.mgr.FreeSpace()
 	if err != nil {
 		slog.Warn("tus: cannot read free space on storage, allowing upload", "error", err)
 		return false
 	}
-	if free < uint64(uploadLength)+uint64(h.cfg.Limits.MinFreeBytes) {
+	running, err := h.stores.Files.ActiveUploadBytes(activeUploadIdle)
+	if err != nil || running < 0 {
+		slog.Error("tus: sum running uploads", "error", err)
+		running = 0
+	}
+	if free < uint64(uploadLength)+uint64(running)+uint64(h.cfg.Limits.MinFreeBytes) {
 		slog.Warn("tus: not enough free space on storage", "free_bytes", free,
-			"upload_bytes", uploadLength, "min_free_bytes", h.cfg.Limits.MinFreeBytes)
+			"upload_bytes", uploadLength, "running_bytes", running, "min_free_bytes", h.cfg.Limits.MinFreeBytes)
 		return true
 	}
 	return false
@@ -537,11 +569,15 @@ func truncate(s string, n int) string {
 // responseRecorder captures the status code set by tusd for the post-PATCH hook.
 type responseRecorder struct {
 	http.ResponseWriter
-	status int
+	status   int
+	dropMeta bool // remove Upload-Metadata from the response (HEAD)
 }
 
 func (r *responseRecorder) WriteHeader(status int) {
 	r.status = status
+	if r.dropMeta {
+		r.Header().Del("Upload-Metadata")
+	}
 	r.ResponseWriter.WriteHeader(status)
 }
 

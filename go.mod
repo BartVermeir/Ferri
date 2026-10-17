@@ -3,7 +3,7 @@ module github.com/BartVermeir/Ferri
 go 1.26.0
 
 // Keep equal to the Go version of the Dockerfile base image.
-toolchain go1.26.8
+toolchain go1.26.9
 
 require (
 	github.com/go-chi/chi/v5 v5.3.2

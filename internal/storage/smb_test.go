@@ -25,6 +25,25 @@ func TestIsConnectionError_ServerEndedSession(t *testing.T) {
 	if !isConnectionError(errors.New("write tcp: connection reset by peer")) {
 		t.Error("a reset connection is no longer treated as one")
 	}
+	if !isConnectionError(&os.PathError{Op: "open", Path: "x.info", Err: &smb2.TransportError{Err: errors.New("EOF")}}) {
+		t.Error("a transport error is not treated as a lost connection")
+	}
+}
+
+// The path is part of the error text; a missing file whose name contains a
+// connection keyword must not count as a lost connection.
+func TestIsConnectionError_IgnoresPath(t *testing.T) {
+	notFound := &smb2.ResponseError{Code: 0xC0000034} // OBJECT_NAME_NOT_FOUND
+	for _, name := range []string{"connection", "x-closed", "eof", "timeout", "reset", "broken", "refused"} {
+		err := &os.PathError{Op: "open", Path: "ferri/" + name + ".info", Err: notFound}
+		if isConnectionError(err) {
+			t.Errorf("missing file %q treated as a lost connection", name)
+		}
+		plain := &os.PathError{Op: "open", Path: "ferri/" + name + ".info", Err: errors.New("file does not exist")}
+		if isConnectionError(plain) {
+			t.Errorf("error on path %q treated as a lost connection", name)
+		}
+	}
 }
 
 // With no share (an earlier reconnect failed), withShare must try to connect

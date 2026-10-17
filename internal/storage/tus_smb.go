@@ -150,7 +150,7 @@ const writeBufSize = stripeBlock
 // writeDepth is how many blocks are written to the share at once. go-smb2
 // waits for each write's answer before sending the next one. The blocks are
 // striped over smbConnections connections, 4 in flight on each. Memory:
-// writeDepth blocks of 1MB per running upload chunk.
+// writeDepth blocks of 1MB per running upload chunk, maxWriteBuffers in all.
 const writeDepth = 4 * smbConnections
 
 // storageKeyTracked in the .info file marks an upload whose offset is kept in
@@ -278,19 +278,31 @@ func (u *smbUpload) WriteChunk(ctx context.Context, offset int64, src io.Reader)
 	return n, err
 }
 
+// maxWriteBuffers bounds the write buffers of all running uploads together
+// (writeBufSize each). An upload that finds none free waits for its own or
+// another upload's; past the bound uploads write fewer blocks at once.
+const maxWriteBuffers = 256
+
+// writeBuffers holds one token per write buffer in use.
+var writeBuffers = make(chan struct{}, maxWriteBuffers)
+
 // parallelWrite copies src to w from off on, in blocks of blockSize with up
 // to depth writes running at once. It returns the bytes written without a
 // gap: all blocks up to the first failed one. A read error from src ends the
 // copy after writing what was read (tusd reports a broken body as io.EOF).
+// Every buffer takes a token from writeBuffers until the copy ends.
 func parallelWrite(w io.WriterAt, off int64, src io.Reader, blockSize, depth int) (int64, error) {
 	type result struct {
 		size int
 		err  error
 	}
 	free := make(chan []byte, depth)
-	for i := 0; i < depth; i++ {
-		free <- make([]byte, blockSize)
-	}
+	held := 0
+	defer func() {
+		for i := 0; i < held; i++ {
+			<-writeBuffers
+		}
+	}()
 	var (
 		wg      sync.WaitGroup
 		failed  atomic.Bool
@@ -299,7 +311,21 @@ func parallelWrite(w io.WriterAt, off int64, src io.Reader, blockSize, depth int
 		pos     int64
 	)
 	for !failed.Load() {
-		buf := <-free
+		var buf []byte
+		select {
+		case buf = <-free:
+		default:
+			if held < depth {
+				select {
+				case buf = <-free:
+				case writeBuffers <- struct{}{}:
+					held++
+					buf = make([]byte, blockSize)
+				}
+			} else {
+				buf = <-free
+			}
+		}
 		m, err := readBlock(src, buf)
 		if m > 0 {
 			r := &result{size: m}

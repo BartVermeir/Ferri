@@ -60,14 +60,14 @@ func TestRecordDownload_OneNotRecentPerWindow(t *testing.T) {
 	if err := db.QueryRow(`SELECT download_count FROM recipients WHERE id = ?`, recipientID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != n+1 {
-		t.Fatalf("download_count = %d, want %d: every download still counts", count, n+1)
+	if count != 2 {
+		t.Fatalf("download_count = %d, want 2: a burst of the same file counts once, two hours later again", count)
 	}
 }
 
 // A ZIP records all its files in one transaction: the first ZIP within the
-// window is not recent (one mail), each file counts once, and a second ZIP
-// right after is recent.
+// window is not recent (one mail), each file counts once. A second ZIP right
+// after adds nothing; one after repeatWindow counts again but is recent.
 func TestRecordDownloads_ZIPOneTransaction(t *testing.T) {
 	stores := newRaceTestStores(t)
 	res, err := stores.Transfers.Create(CreateTransferInput{
@@ -87,11 +87,17 @@ func TestRecordDownloads_ZIPOneTransaction(t *testing.T) {
 	if recent || len(ids) != len(files) {
 		t.Fatalf("first ZIP: recent = %v, %d event ids, want false and %d", recent, len(ids), len(files))
 	}
+	if ids, _, _ = stores.Downloads.RecordDownloads(recipientID, files, "", "", time.Hour); len(ids) != 0 {
+		t.Fatalf("ZIP repeated at once: %d new events, want 0", len(ids))
+	}
+	db := stores.Downloads.db
+	if _, err := db.Exec(`UPDATE download_events SET downloaded_at = unixepoch() - 900`); err != nil {
+		t.Fatal(err)
+	}
 	if _, recent, _ = stores.Downloads.RecordDownloads(recipientID, files, "", "", time.Hour); !recent {
 		t.Fatal("second ZIP within the window is not recent, want no second mail")
 	}
 
-	db := stores.Downloads.db
 	var count, events int
 	if err := db.QueryRow(`SELECT download_count FROM recipients WHERE id = ?`, recipientID).Scan(&count); err != nil {
 		t.Fatal(err)

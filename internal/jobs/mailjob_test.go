@@ -132,3 +132,40 @@ func TestMailJob_OneConnectionPerRun(t *testing.T) {
 		t.Fatal("the refused mail is not queued for a retry")
 	}
 }
+
+// An SMTP server that cannot be reached ends the run after one attempt: the
+// other mails get no failed attempt and go out with the next run.
+func TestMailJob_UnreachableServerStopsTheRun(t *testing.T) {
+	f := newPurgeFixture(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(strings.Split(ln.Addr().String(), ":")[1])
+	ln.Close() // nothing listens there now: connection refused
+	f.s.cfg.SMTP.Host = "127.0.0.1"
+	f.s.cfg.SMTP.Port = port
+	f.s.cfg.SMTP.TLS = "none"
+	if err := f.stores.Settings.Save("mail.from_address", "ferri@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		if err := f.stores.Mail.Enqueue(nil, store.MailAbout{}, "r"+strconv.Itoa(i)+"@example.com", "Hello", "<p>hi</p>", "hi"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.s.runMailJob()
+	var tried, untried int
+	f.d.QueryRow(`SELECT COUNT(*) FROM mail_queue WHERE attempts = 1`).Scan(&tried)
+	f.d.QueryRow(`SELECT COUNT(*) FROM mail_queue WHERE attempts = 0`).Scan(&untried)
+	if tried != 1 || untried != 4 {
+		t.Fatalf("attempts: %d mails tried, %d untouched; want 1 and 4", tried, untried)
+	}
+
+	smtp := newFakeSMTP(t)
+	f.s.cfg.SMTP.Port, _ = strconv.Atoi(strings.Split(smtp.ln.Addr().String(), ":")[1])
+	f.s.runMailJob()
+	if _, msgs := smtp.counts(); msgs != 4 {
+		t.Fatalf("next run with the server back: %d delivered, want the 4 untried ones", msgs)
+	}
+}

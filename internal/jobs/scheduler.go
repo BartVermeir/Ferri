@@ -1,9 +1,11 @@
 package jobs
 
 import (
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -63,16 +65,24 @@ func (s *Scheduler) Stop() {
 	s.wg.Wait()
 }
 
-// runLoop runs fn every interval, and also when kick receives (a nil kick
-// never does).
+// firstRunDelay: every job also runs once this long after Start, so a
+// restart does not push a run back by a full interval.
+const firstRunDelay = time.Minute
+
+// runLoop runs fn once firstRunDelay after the start, then every interval,
+// and also when kick receives (a nil kick never does).
 func (s *Scheduler) runLoop(name string, interval time.Duration, kick <-chan struct{}, fn func()) {
 	defer s.wg.Done()
+	first := time.NewTimer(firstRunDelay)
+	defer first.Stop()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-s.stop:
 			return
+		case <-first.C:
+			runJob(name, fn)
 		case <-ticker.C:
 			runJob(name, fn)
 		case <-kick:
@@ -124,8 +134,7 @@ func (s *Scheduler) runMailJob() {
 			slog.Error("mail job: fetch pending", "error", err)
 			break
 		}
-		s.sendBatch(sender, items)
-		if len(items) < mailBatchSize {
+		if !s.sendBatch(sender, items) || len(items) < mailBatchSize {
 			break
 		}
 	}
@@ -139,13 +148,28 @@ func (s *Scheduler) runMailJob() {
 	}
 }
 
-func (s *Scheduler) sendBatch(sender *mail.Sender, items []store.MailItem) {
+// addressPattern matches an email address in an error text.
+var addressPattern = regexp.MustCompile(`[^\s<>"'(),;:]+@[^\s<>"'(),;:]+`)
+
+// withoutAddresses replaces the email addresses in s (an SMTP server's
+// answer often names the recipient), so the app log holds none.
+func withoutAddresses(s string) string {
+	return addressPattern.ReplaceAllString(s, "<address>")
+}
+
+// sendBatch sends items and returns false when the SMTP server could not be
+// reached: the run stops there, and the mails not tried stay 'sending', which
+// the next FetchPending returns again, without a failed attempt.
+func (s *Scheduler) sendBatch(sender *mail.Sender, items []store.MailItem) bool {
 	for _, item := range items {
 		if err := sender.Send(item); err != nil {
 			slog.Warn("mail job: send failed",
-				"id", item.ID, "attempt", item.Attempts+1, "error", err)
+				"id", item.ID, "attempt", item.Attempts+1, "error", withoutAddresses(err.Error()))
 			if err := s.stores.Mail.MarkFailed(item.ID, err.Error()); err != nil {
 				slog.Error("mail job: mark failed", "id", item.ID, "error", err)
+			}
+			if errors.Is(err, mail.ErrConnect) {
+				return false
 			}
 		} else {
 			slog.Info("mail sent", "id", item.ID)
@@ -154,6 +178,7 @@ func (s *Scheduler) sendBatch(sender *mail.Sender, items []store.MailItem) {
 			}
 		}
 	}
+	return true
 }
 
 // ── Expiry job ────────────────────────────────────────────────────────────────
@@ -169,8 +194,10 @@ func (s *Scheduler) runExpiryJob() {
 	}
 
 	for _, t := range transfers {
-		if err := s.stores.Transfers.SetExpired(t.ID); err != nil {
+		if changed, err := s.stores.Transfers.SetExpired(t.ID); err != nil {
 			slog.Error("expiry job: set expired", "transfer", t.ID, "error", err)
+			continue
+		} else if !changed {
 			continue
 		}
 
@@ -193,7 +220,7 @@ func (s *Scheduler) runExpiryJob() {
 	}
 
 	for _, r := range requests {
-		if err := s.stores.Requests.SetExpired(r.ID); err != nil {
+		if _, err := s.stores.Requests.SetExpired(r.ID); err != nil {
 			slog.Error("expiry job: set request expired", "request", r.ID, "error", err)
 		}
 	}
@@ -408,6 +435,9 @@ func (s *Scheduler) purgeDeleted() {
 	}
 	if t > 0 || r > 0 {
 		slog.Info("cleanup job: purged deleted items from the database", "transfers", t, "requests", r)
+		if err := s.stores.CheckpointWAL(); err != nil {
+			slog.Warn("cleanup job: checkpoint database log", "error", err)
+		}
 	}
 	if _, err := s.stores.Logins.DeleteExpired(); err != nil {
 		slog.Error("cleanup job: delete expired sign-in links", "error", err)

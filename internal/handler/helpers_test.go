@@ -41,10 +41,12 @@ func TestValidateBranding(t *testing.T) {
 }
 
 func TestIsValidEmail(t *testing.T) {
-	// isValidEmail only checks for one '@' with a non-empty local part and a
-	// dotted domain, so addresses like "a@@b.com" pass.
+	// isValidEmail checks for exactly one '@' with a non-empty local part and
+	// a dotted domain, without characters that separate or quote addresses.
 	ok := []string{"a@b.co", "first.last@sub.example.com", "x+tag@example.org"}
-	bad := []string{"", "no-at", "@example.com", "user@", "user@localhost", "a@b"}
+	bad := []string{"", "no-at", "@example.com", "user@", "user@localhost", "a@b", "a@@b.com",
+		"a@example.com@evil.test", "a@example.com,b@evil.test", "a@example.com;b@evil.test",
+		"<a@example.com>", `"a"@example.com`, "a(x)@example.com"}
 	for _, e := range ok {
 		if !isValidEmail(e) {
 			t.Errorf("isValidEmail(%q) = false, want true", e)

@@ -321,15 +321,23 @@ func TestDownloadFile_RangeFromZeroCounts(t *testing.T) {
 }
 
 // Downloading the same file again within the hour is recorded (the expiry
-// summary lists every download) but mails the sender only once.
+// summary lists every download) but mails the sender only once. Repeats
+// within minutes are one download.
 func TestDownloadFile_RepeatWithinHourMailsOnce(t *testing.T) {
 	f := newDLFixture(t)
 	path := "/dl/" + f.tok + "/file/" + f.fileID
 	for i := 0; i < 5; i++ {
 		f.get(path, "")
 	}
-	if events, mails := f.counts(); events != 5 || mails != 1 {
-		t.Fatalf("5 full downloads: events = %d, mails = %d, want 5 and 1", events, mails)
+	if events, mails := f.counts(); events != 1 || mails != 1 {
+		t.Fatalf("5 full downloads at once: events = %d, mails = %d, want 1 and 1", events, mails)
+	}
+	if _, err := f.d.Exec(`UPDATE download_events SET downloaded_at = unixepoch() - 900`); err != nil {
+		t.Fatal(err)
+	}
+	f.get(path, "")
+	if events, mails := f.counts(); events != 2 || mails != 1 {
+		t.Fatalf("download 15 minutes later: events = %d, mails = %d, want 2 and 1", events, mails)
 	}
 
 	// Once the last download is older than the window, the next one mails again.
@@ -350,8 +358,8 @@ func TestDownloadZIP_RepeatWithinHourMailsOnce(t *testing.T) {
 			t.Fatalf("zip: status = %d", rr.Code)
 		}
 	}
-	if events, mails := f.counts(); events != 3 || mails != 1 {
-		t.Fatalf("3 ZIP downloads of 1 file: events = %d, mails = %d, want 3 and 1", events, mails)
+	if events, mails := f.counts(); events != 1 || mails != 1 {
+		t.Fatalf("3 ZIP downloads of 1 file at once: events = %d, mails = %d, want 1 and 1", events, mails)
 	}
 }
 
@@ -440,5 +448,35 @@ func TestDownloadNotify_OneMailPerTransferPerHour(t *testing.T) {
 	get("/dl/" + tok2 + "/file/" + ids2[0])
 	if n := mails(); n != 3 {
 		t.Fatalf("after a download from a second transfer: %d mails, want 3", n)
+	}
+}
+
+// A Range that starts at byte 0 in another spelling, or asks for several
+// ranges, is a whole download and counted as one.
+func TestDownloadFile_RangeSpellingsCount(t *testing.T) {
+	for _, rng := range []string{"bytes=00-", "bytes= 0-", "bytes=1-1,0-"} {
+		f := newDLFixture(t)
+		rr := f.get("/dl/"+f.tok+"/file/"+f.fileID, rng)
+		if rr.Code != http.StatusOK && rr.Code != http.StatusPartialContent {
+			t.Fatalf("%s: status = %d", rng, rr.Code)
+		}
+		if events, _ := f.counts(); events != 1 {
+			t.Errorf("%s: events = %d, want 1", rng, events)
+		}
+	}
+}
+
+// A served file is plain bytes: never a script or page of this site.
+func TestDownloadFile_PlainBytes(t *testing.T) {
+	f := newDLFixture(t)
+	rr := f.get("/dl/"+f.tok+"/file/"+f.fileID, "")
+	if ct := rr.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	if csp := rr.Header().Get("Content-Security-Policy"); csp != fileContentSecurityPolicy {
+		t.Errorf("Content-Security-Policy = %q", csp)
+	}
+	if !strings.HasPrefix(rr.Header().Get("Content-Disposition"), "attachment") {
+		t.Errorf("Content-Disposition = %q", rr.Header().Get("Content-Disposition"))
 	}
 }

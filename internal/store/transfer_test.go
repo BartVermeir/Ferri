@@ -7,6 +7,7 @@ package store
 // calls TryActivate after every file completion.
 
 import (
+	"database/sql"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -246,5 +247,51 @@ func TestAddRecipients_SkipsExistingAndKeepsMaximum(t *testing.T) {
 	}
 	if ok, _ := stores.Transfers.ClaimRecipientNotify(added[0].ID); ok {
 		t.Fatal("second claim succeeded")
+	}
+}
+
+// A transfer past its expiry does not go live, and expiring changes only a
+// pending or active transfer.
+func TestTryActivate_NotAfterExpiry(t *testing.T) {
+	stores := newRaceTestStores(t)
+	id := newExpectedTransfer(t, stores, 1)
+	completeFile(t, stores, id, "f1")
+	if _, err := stores.Transfers.db.Exec(`UPDATE transfers SET expires_at = unixepoch() - 1 WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	if mustTryActivate(t, stores, id) {
+		t.Fatal("activated after expiry")
+	}
+	if changed, err := stores.Transfers.SetExpired(id); err != nil || !changed {
+		t.Fatalf("SetExpired on pending = %v, %v; want true", changed, err)
+	}
+	if changed, _ := stores.Transfers.SetExpired(id); changed {
+		t.Error("SetExpired changed an expired transfer again")
+	}
+	if err := stores.Transfers.SoftDelete(id); err != nil {
+		t.Fatal(err)
+	}
+	if changed, _ := stores.Transfers.SetExpired(id); changed {
+		t.Error("SetExpired brought a deleted transfer back")
+	}
+}
+
+// A panic inside a transaction gives the connection back: the next query
+// does not hang.
+func TestTxFunc_PanicReleasesConnection(t *testing.T) {
+	stores := newRaceTestStores(t)
+	func() {
+		defer func() { _ = recover() }()
+		_ = txFunc(stores.Transfers.db, func(tx *sql.Tx) error { panic("boom") })
+	}()
+	done := make(chan error, 1)
+	go func() { done <- stores.Transfers.db.QueryRow(`SELECT 1`).Scan(new(int)) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("query hangs after a panic in a transaction")
 	}
 }

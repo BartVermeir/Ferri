@@ -101,6 +101,10 @@ func RequestCreate(cfg *config.Config, stores *store.Stores) http.HandlerFunc {
 		// ── Password hashing ──────────────────────────────────────────────────
 
 		var passwordHash string
+		if len(password) > maxPasswordBytes {
+			renderHomePage(w, r, cfg, "request", msgPasswordTooLong)
+			return
+		}
 		if password != "" {
 			hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 			if err != nil {

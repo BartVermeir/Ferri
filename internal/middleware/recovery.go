@@ -23,7 +23,7 @@ func Recovery() func(http.Handler) http.Handler {
 						"panic", rec,
 						"stack", string(debug.Stack()),
 						"method", r.Method,
-						"path", r.URL.Path,
+						"route", firstSegment(r.URL.Path),
 					)
 					http.Error(w, "Internal server error", http.StatusInternalServerError)
 				}

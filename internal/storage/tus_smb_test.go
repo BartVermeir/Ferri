@@ -186,3 +186,46 @@ func TestResumeOffset(t *testing.T) {
 		}
 	}
 }
+
+// Uploads running together never hold more buffers than the shared bound,
+// and all of them finish.
+func TestParallelWrite_SharedBufferBound(t *testing.T) {
+	old := writeBuffers
+	writeBuffers = make(chan struct{}, 3)
+	t.Cleanup(func() { writeBuffers = old })
+
+	var peak atomic.Int32
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				if n := int32(len(writeBuffers)); n > peak.Load() {
+					peak.Store(n)
+				}
+			}
+		}
+	}()
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			data := patterned(20 * testBlock)
+			f := &memFile{}
+			if n, err := parallelWrite(f, 0, bytes.NewReader(data), testBlock, 4); err != nil || n != int64(len(data)) || !bytes.Equal(f.data, data) {
+				t.Errorf("n = %d, err = %v, content equal = %v", n, err, bytes.Equal(f.data, data))
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+	if p := peak.Load(); p > 3 {
+		t.Fatalf("%d buffers in use at once, bound is 3", p)
+	}
+	if n := len(writeBuffers); n != 0 {
+		t.Fatalf("%d buffers not given back", n)
+	}
+}

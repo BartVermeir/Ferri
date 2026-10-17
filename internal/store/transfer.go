@@ -260,7 +260,8 @@ func (s *TransferStore) GetFileByID(fileID string) (*File, error) {
 	return &f, nil
 }
 
-// TryActivate atomically sets the transfer to 'active' once its files are in.
+// TryActivate atomically sets the transfer to 'active' once its files are in,
+// before its expiry.
 // Returns true if this call caused the activation. Race-safe: only one
 // goroutine wins.
 //
@@ -276,6 +277,7 @@ func (s *TransferStore) TryActivate(transferID string) (bool, error) {
 		       activated_at = unixepoch()
 		WHERE  id     = ?
 		AND    status = 'pending'
+		AND    expires_at > unixepoch()
 		AND    CASE
 		         WHEN expected_files IS NOT NULL THEN
 		           (SELECT COUNT(*) FROM files
@@ -335,20 +337,23 @@ func (s *TransferStore) GetExpired() ([]Transfer, error) {
 	return scanTransfers(rows)
 }
 
-// SetExpired marks a transfer as expired.
-func (s *TransferStore) SetExpired(transferID string) error {
-	_, err := s.db.Exec(`
+// SetExpired marks a pending or active transfer as expired; false when it was
+// neither (already expired or deleted).
+func (s *TransferStore) SetExpired(transferID string) (bool, error) {
+	return execChanged(s.db.Exec(`
 		UPDATE transfers
 		SET status = 'expired', expired_at = unixepoch()
-		WHERE id = ?`, transferID,
-	)
-	return err
+		WHERE id = ? AND status IN ('pending', 'active')`, transferID,
+	))
 }
 
 // GetForCleanup returns transfers whose files still need physical deletion:
 //   - admin-deleted transfers: always immediate
 //   - expired transfers: uses COALESCE(expired_at, expires_at) to respect grace period
-//     whether they expired via the job (expired_at set) or by time (expires_at past)
+//     whether they expired via the job (expired_at set) or by time (expires_at past),
+//     also without any file left (they become deleted and leave the database)
+//
+// A deleted transfer only comes back while it still has a file not deleted.
 func (s *TransferStore) GetForCleanup(graceHours int) ([]Transfer, error) {
 	rows, err := s.db.Query(`
 		SELECT id, title, message, sender_name, sender_email,
@@ -362,10 +367,13 @@ func (s *TransferStore) GetForCleanup(graceHours int) ([]Transfer, error) {
 		              AND COALESCE(expired_at, expires_at) < (unixepoch() - ? * 3600)
 		           )
 		      )
-		  AND EXISTS (
-		        SELECT 1 FROM files
-		        WHERE files.transfer_id = transfers.id
-		          AND files.status != 'deleted'
+		  AND (
+		        status != 'deleted'
+		        OR EXISTS (
+		              SELECT 1 FROM files
+		              WHERE files.transfer_id = transfers.id
+		                AND files.status != 'deleted'
+		           )
 		      )`,
 		graceHours,
 	)
@@ -916,8 +924,9 @@ func txFunc(db *sql.DB, fn func(tx *sql.Tx) error) error {
 	if err != nil {
 		return err
 	}
+	// Also on a panic in fn: the connection goes back to the pool.
+	defer tx.Rollback()
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
 		return err
 	}
 	return tx.Commit()

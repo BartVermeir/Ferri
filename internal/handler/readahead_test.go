@@ -234,3 +234,32 @@ func TestOpenStored_TUSPathFirst(t *testing.T) {
 		t.Fatalf("no tus_upload_id: read %q, want storage_path", got)
 	}
 }
+
+// A small Range on a large file reads at most two blocks from storage; a
+// whole download still reaches the full read-ahead depth.
+func TestReadAhead_SmallRangeReadsLittle(t *testing.T) {
+	data := testData(20 * fileReadAheadSize)
+	src := &countingSeeker{Reader: bytes.NewReader(data)}
+	req := httptest.NewRequest(http.MethodGet, "/f", nil)
+	req.Header.Set("Range", "bytes=5000000-5000000")
+	rr := httptest.NewRecorder()
+	ra := newReadAhead(src)
+	http.ServeContent(rr, req, "f.bin", time.Time{}, ra)
+	ra.Close()
+	if rr.Code != http.StatusPartialContent || !bytes.Equal(rr.Body.Bytes(), data[5000000:5000001]) {
+		t.Fatalf("status %d, body %v", rr.Code, rr.Body.Bytes())
+	}
+	if n := src.reads.Load(); n > 2 {
+		t.Fatalf("1-byte range took %d storage reads, want at most 2", n)
+	}
+
+	src = &countingSeeker{Reader: bytes.NewReader(data)}
+	ra = newReadAhead(src)
+	if _, err := io.Copy(io.Discard, ra); err != nil {
+		t.Fatal(err)
+	}
+	ra.Close()
+	if m := src.maxFlight.Load(); m < fileReadAheadDepth/2 {
+		t.Fatalf("whole download reached only %d reads in flight", m)
+	}
+}
