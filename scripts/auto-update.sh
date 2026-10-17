@@ -6,6 +6,8 @@
 # A file NO_AUTO_UPDATE in the deploy directory pauses it. The script writes
 # that file itself when a new version was not healthy and got rolled back,
 # so the same version is not tried again; delete it once that is fixed.
+# Connections still open after deploy.sh's WAIT_MAX do not stop it: it
+# restarts anyway (FORCE_AFTER_WAIT=1), so a release always goes live.
 # Exit codes are those of scripts/deploy.sh; 0 also when nothing was to do.
 
 set -euo pipefail
@@ -39,7 +41,7 @@ main() {
 
 	echo "==> Update $running → $latest"
 	rc=0
-	"$repo_dir/scripts/deploy.sh" "$latest" || rc=$?
+	FORCE_AFTER_WAIT=1 "$repo_dir/scripts/deploy.sh" "$latest" || rc=$?
 	case $rc in
 	4)
 		printf '%s: %s was not healthy, rolled back to %s.\nSee: journalctl -u ferri-auto-update\n' \
@@ -51,7 +53,6 @@ main() {
 			"$(date '+%Y-%m-%d %H:%M')" "$latest" "$running" >"$pause"
 		echo "Automatic updates paused: $pause" >&2
 		;;
-	3) echo "Still busy, nothing changed. Next scheduled run tries again." >&2 ;;
 	esac
 	exit $rc
 }

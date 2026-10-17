@@ -15,8 +15,8 @@
 #
 # If the new version does not become healthy, the previous one is put back.
 # Exit codes: 0 deployed, 1 error (nothing changed), 3 still busy after
-# WAIT_MAX (nothing changed), 4 new version unhealthy and rolled back,
-# 5 rollback unhealthy too: Ferri is down.
+# WAIT_MAX (nothing changed; never with FORCE_AFTER_WAIT=1), 4 new version
+# unhealthy and rolled back, 5 rollback unhealthy too: Ferri is down.
 
 set -euo pipefail
 
@@ -53,6 +53,7 @@ main() {
 		echo "ERROR: tag $VERSION is not on origin/main. Nothing changed." >&2
 		exit 1
 	fi
+	ci_check
 	git -c advice.detachedHead=false checkout --quiet "refs/tags/$VERSION"
 
 	PREV="$(running_version "$LIVE_COMPOSE")"
@@ -85,6 +86,42 @@ main() {
 	rollback
 }
 
+# ci_check stops the deploy unless every CI check on GitHub passed for the
+# tag's commit (GitHub's public API, no token needed for a public repo).
+# SKIP_CI_CHECK=1 skips it, for when GitHub's API cannot be reached.
+ci_check() {
+	[[ "${SKIP_CI_CHECK:-}" == 1 ]] && { echo "==> CI check skipped (SKIP_CI_CHECK=1)"; return; }
+	command -v curl >/dev/null || {
+		echo "ERROR: curl not found; install it or run with SKIP_CI_CHECK=1. Nothing changed." >&2
+		exit 1
+	}
+	local repo sha json total finished ok
+	repo="$(git remote get-url origin | sed -E 's#^.*github\.com[:/]+##; s#\.git$##; s#/+$##')"
+	sha="$(git rev-parse "refs/tags/$VERSION^{commit}")"
+	if ! json="$(curl -fsS --max-time 30 -H 'Accept: application/vnd.github+json' \
+		"https://api.github.com/repos/$repo/commits/$sha/check-runs?per_page=100")"; then
+		echo "ERROR: could not ask GitHub for the CI result of $VERSION. Nothing changed." >&2
+		echo "  Try again later, or run with SKIP_CI_CHECK=1." >&2
+		exit 1
+	fi
+	total=$(grep -oE '"status": *"[a-z_]+"' <<<"$json" | wc -l || true)
+	finished=$(grep -oE '"status": *"completed"' <<<"$json" | wc -l || true)
+	ok=$(grep -oE '"conclusion": *"(success|skipped|neutral)"' <<<"$json" | wc -l || true)
+	if [[ $((total)) -eq 0 ]]; then
+		echo "ERROR: no CI run found for $VERSION ($sha). Nothing changed." >&2
+		exit 1
+	fi
+	if [[ $((finished)) -lt $((total)) ]]; then
+		echo "ERROR: CI is still running for $VERSION. Nothing changed; try again in a few minutes." >&2
+		exit 1
+	fi
+	if [[ $((ok)) -lt $((total)) ]]; then
+		echo "ERROR: CI failed for $VERSION (see GitHub, Actions). Nothing changed." >&2
+		exit 1
+	fi
+	echo "==> CI passed for $VERSION ($((total)) checks)"
+}
+
 # latest_tag is the highest vX.Y.Z tag, by version number. Other tag names
 # (v1.2.0-rc1, v2) are never a release.
 latest_tag() {
@@ -106,8 +143,10 @@ pin() {
 # reverse proxy to the app is open at two checks in a row (30 s apart). A
 # proxy that keeps idle connections open (upstream keepalive) holds the
 # count up until it closes them.
-# WAIT_MAX caps the wait in minutes (default 180), FORCE=1 skips it,
-# APP_ADDR is where the proxy reaches the app (default 127.0.0.1:8080).
+# WAIT_MAX caps the wait in minutes (default 180); past it the script stops
+# (exit 3), or with FORCE_AFTER_WAIT=1 restarts anyway (the automatic update
+# does that). FORCE=1 skips the wait. APP_ADDR is where the proxy reaches the
+# app (default 127.0.0.1:8080).
 wait_for_quiet() {
 	[[ "${FORCE:-}" == 1 ]] && return
 	command -v ss >/dev/null || {
@@ -128,6 +167,11 @@ wait_for_quiet() {
 		fi
 		waited=$((SECONDS - started))
 		if [[ $waited -ge $((wait_max * 60)) ]]; then
+			if [[ "${FORCE_AFTER_WAIT:-}" == 1 ]]; then
+				echo "==> Still $n connection(s) after $wait_max minutes: restarting anyway (FORCE_AFTER_WAIT=1)."
+				echo "    Running uploads resume; a running download breaks off."
+				return
+			fi
 			echo "Still busy after $wait_max minutes. Nothing was changed; the new image ferri:$VERSION is built." >&2
 			echo "Run again later, with a larger WAIT_MAX, or with FORCE=1." >&2
 			exit 3

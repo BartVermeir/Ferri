@@ -44,12 +44,10 @@ func (s *DownloadStore) RecordDownload(recipientID, fileID, originalName, ip, ua
 }
 
 // RecordDownloads is RecordDownload for several files at once (a ZIP), in one
-// transaction: recent is decided before any of these events. A file this
-// recipient already downloaded within repeatWindow gets no new event and does
-// not count again in download_count, so a burst of repeats adds no rows. One
-// commit for all files, so a ZIP of thousands of files starts without
-// thousands of commits first. The user agent is stored up to maxUserAgent
-// bytes.
+// transaction: recent is decided before any of these events, and every file
+// counts once in download_count. One commit for all files, so a ZIP of
+// thousands of files starts without thousands of commits first. The user
+// agent is stored up to maxUserAgent bytes.
 func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFile, ip, ua string, window time.Duration) (eventIDs []string, recent bool, err error) {
 	if len(files) == 0 {
 		return nil, false, nil
@@ -57,13 +55,21 @@ func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFi
 	if len(ua) > maxUserAgent {
 		ua = ua[:maxUserAgent]
 	}
+	eventIDs = make([]string, len(files))
+	for i := range files {
+		eventIDs[i] = token.Generate()
+	}
 
 	err = txFunc(s.db, func(tx *sql.Tx) error {
-		var seen map[string]bool
-		recent, seen, err = recentDownloads(tx, recipientID, window)
-		if err != nil {
+		var n int
+		if err := tx.QueryRow(`
+			SELECT COUNT(*) FROM download_events
+			WHERE recipient_id = ? AND downloaded_at > unixepoch() - ?`,
+			recipientID, int64(window.Seconds()),
+		).Scan(&n); err != nil {
 			return err
 		}
+		recent = n > 0
 
 		stmt, err := tx.Prepare(`
 			INSERT INTO download_events (id, recipient_id, file_id, original_name, ip_address, user_agent)
@@ -72,29 +78,19 @@ func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFi
 			return err
 		}
 		defer stmt.Close()
-		for _, f := range files {
-			key := downloadKey(f.ID, f.OriginalName)
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
+		for i, f := range files {
 			// file_id is a nullable FK: an empty ID is stored as NULL.
 			var fileIDVal interface{}
 			if f.ID != "" {
 				fileIDVal = f.ID
 			}
-			id := token.Generate()
 			if _, err := stmt.Exec(
-				id, recipientID, fileIDVal, f.OriginalName,
+				eventIDs[i], recipientID, fileIDVal, f.OriginalName,
 				sql.NullString{String: ip, Valid: ip != ""},
 				sql.NullString{String: ua, Valid: ua != ""},
 			); err != nil {
 				return err
 			}
-			eventIDs = append(eventIDs, id)
-		}
-		if len(eventIDs) == 0 {
-			return nil
 		}
 
 		_, err = tx.Exec(`
@@ -102,7 +98,7 @@ func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFi
 			SET download_count      = download_count + ?,
 			    first_download_at   = COALESCE(first_download_at, unixepoch())
 			WHERE id = ?`,
-			len(eventIDs), recipientID,
+			len(files), recipientID,
 		)
 		return err
 	})
@@ -114,50 +110,6 @@ func (s *DownloadStore) RecordDownloads(recipientID string, files []DownloadedFi
 
 // maxUserAgent is the most bytes of a user agent stored with a download.
 const maxUserAgent = 256
-
-// repeatWindow: the same recipient downloading the same file again within
-// this time is not a new download.
-const repeatWindow = 10 * time.Minute
-
-// downloadKey identifies a downloaded file: its ID, or its name when the file
-// row is gone (file_id NULL).
-func downloadKey(fileID, name string) string {
-	if fileID != "" {
-		return "id:" + fileID
-	}
-	return "name:" + name
-}
-
-// recentDownloads reports whether the recipient downloaded anything within
-// window, and which files (by downloadKey) within repeatWindow.
-func recentDownloads(tx *sql.Tx, recipientID string, window time.Duration) (bool, map[string]bool, error) {
-	span := max(window, repeatWindow)
-	rows, err := tx.Query(`
-		SELECT COALESCE(file_id, ''), original_name, unixepoch() - downloaded_at FROM download_events
-		WHERE recipient_id = ? AND downloaded_at > unixepoch() - ?`,
-		recipientID, int64(span.Seconds()),
-	)
-	if err != nil {
-		return false, nil, err
-	}
-	defer rows.Close()
-	recent := false
-	seen := map[string]bool{}
-	for rows.Next() {
-		var fileID, name string
-		var age int64
-		if err := rows.Scan(&fileID, &name, &age); err != nil {
-			return false, nil, err
-		}
-		if age < int64(window.Seconds()) {
-			recent = true
-		}
-		if age < int64(repeatWindow.Seconds()) {
-			seen[downloadKey(fileID, name)] = true
-		}
-	}
-	return recent, seen, rows.Err()
-}
 
 // RecipientHistory is one recipient's download events for a transfer, as
 // returned by GetHistoryForTransfer for the expiry summary mail. Event names

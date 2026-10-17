@@ -321,23 +321,15 @@ func TestDownloadFile_RangeFromZeroCounts(t *testing.T) {
 }
 
 // Downloading the same file again within the hour is recorded (the expiry
-// summary lists every download) but mails the sender only once. Repeats
-// within minutes are one download.
+// summary lists every download) but mails the sender only once.
 func TestDownloadFile_RepeatWithinHourMailsOnce(t *testing.T) {
 	f := newDLFixture(t)
 	path := "/dl/" + f.tok + "/file/" + f.fileID
 	for i := 0; i < 5; i++ {
 		f.get(path, "")
 	}
-	if events, mails := f.counts(); events != 1 || mails != 1 {
-		t.Fatalf("5 full downloads at once: events = %d, mails = %d, want 1 and 1", events, mails)
-	}
-	if _, err := f.d.Exec(`UPDATE download_events SET downloaded_at = unixepoch() - 900`); err != nil {
-		t.Fatal(err)
-	}
-	f.get(path, "")
-	if events, mails := f.counts(); events != 2 || mails != 1 {
-		t.Fatalf("download 15 minutes later: events = %d, mails = %d, want 2 and 1", events, mails)
+	if events, mails := f.counts(); events != 5 || mails != 1 {
+		t.Fatalf("5 full downloads: events = %d, mails = %d, want 5 and 1", events, mails)
 	}
 
 	// Once the last download is older than the window, the next one mails again.
@@ -358,8 +350,8 @@ func TestDownloadZIP_RepeatWithinHourMailsOnce(t *testing.T) {
 			t.Fatalf("zip: status = %d", rr.Code)
 		}
 	}
-	if events, mails := f.counts(); events != 1 || mails != 1 {
-		t.Fatalf("3 ZIP downloads of 1 file at once: events = %d, mails = %d, want 1 and 1", events, mails)
+	if events, mails := f.counts(); events != 3 || mails != 1 {
+		t.Fatalf("3 ZIP downloads of 1 file: events = %d, mails = %d, want 3 and 1", events, mails)
 	}
 }
 

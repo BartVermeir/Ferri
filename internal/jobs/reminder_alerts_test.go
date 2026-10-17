@@ -114,6 +114,65 @@ func TestRequestReminder_OnlyDueRequestsOnce(t *testing.T) {
 	}
 }
 
+// Requests of one requester due together (one "Number of links" batch) go
+// in one mail with every link; another requester gets their own.
+func TestRequestReminder_BundlesPerRequester(t *testing.T) {
+	s, stores, d := newJobTestEnv(t, nil)
+	mk := func(title, email string) string {
+		t.Helper()
+		id, tok, err := stores.Requests.Create(store.CreateRequestInput{
+			Title: title, RequesterName: "Alice", RequesterEmail: email, ExpiresAt: time.Now().Add(12 * time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		exec(t, d, `UPDATE upload_requests SET created_at = ? WHERE id = ?`, time.Now().Add(-6*24*time.Hour).Unix(), id)
+		return tok
+	}
+	toks := []string{mk("Batch #10", "alice@example.com"), mk("Batch #2", "Alice@example.com"), mk("Batch #1", "alice@example.com")}
+	mk("Other", "bob@example.com")
+
+	s.sendRequestReminders()
+	s.sendRequestReminders()
+
+	items, _ := stores.Mail.FetchPending(10)
+	if len(items) != 2 {
+		t.Fatalf("%d reminder mails, want 2 (one combined, one single)", len(items))
+	}
+	var bundle store.MailItem
+	for _, m := range items {
+		if m.Subject == "Nothing uploaded yet: 3 upload requests" {
+			bundle = m
+		} else if m.Subject != `Nothing uploaded yet: "Other"` {
+			t.Errorf("unexpected reminder %q", m.Subject)
+		}
+	}
+	if bundle.ID == "" {
+		t.Fatal("no combined reminder")
+	}
+	for _, body := range []string{bundle.BodyHTML, bundle.BodyText} {
+		for _, tok := range toks {
+			if !strings.Contains(body, "/ul/"+tok) {
+				t.Errorf("combined reminder misses the link of %s", tok)
+			}
+		}
+		manage := strings.Count(body, "/manage/")
+		if body == bundle.BodyHTML {
+			manage = strings.Count(body, `href="http://example.com/manage/`)
+		}
+		if manage != 3 {
+			t.Errorf("combined reminder has %d manage links, want 3", manage)
+		}
+		i1, i2, i10 := strings.Index(body, "Batch #1&"), strings.Index(body, "Batch #2"), strings.Index(body, "Batch #10")
+		if body == bundle.BodyText {
+			i1 = strings.Index(body, "Batch #1\"")
+		}
+		if !(i1 >= 0 && i1 < i2 && i2 < i10) {
+			t.Errorf("requests not in order #1, #2, #10")
+		}
+	}
+}
+
 // ── Alerts ────────────────────────────────────────────────────────────────────
 
 func TestAlerts_NothingWithoutRecipients(t *testing.T) {
